@@ -1,0 +1,15 @@
+{
+  "name": "@freshair129/msp-storage",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MSP SQLite connection and migration ownership.",
+  "exports": {
+    "./*": "./src/db/*.mjs"
+  },
+  "files": [
+    "src"
+  ],
+  "dependencies": {
+    "better-sqlite3": "^11.10.0"
+  }
+}

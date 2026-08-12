@@ -1,0 +1,20 @@
+{
+  "name": "@freshair129/msp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable MSP JSON-RPC stdio server.",
+  "bin": {
+    "msp-server": "./bin/msp-server.mjs",
+    "msp-runtime": "./bin/msp-server.mjs"
+  },
+  "exports": {
+    ".": "./src/server.mjs"
+  },
+  "dependencies": {
+    "@freshair129/msp-contracts": "0.1.0",
+    "@freshair129/msp-core": "0.1.0",
+    "@freshair129/msp-retrieval": "0.1.0",
+    "@freshair129/msp-storage": "0.1.0"
+  }
+}

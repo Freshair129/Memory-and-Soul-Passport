@@ -1,0 +1,17 @@
+{
+  "name": "@freshair129/msp-contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MSP contract guards, reference vocabulary, and machine-readable tool schemas.",
+  "exports": {
+    "./*": "./src/contracts/*.mjs",
+    "./api-009": "./schemas/API-009.tools.json"
+  },
+  "files": [
+    "src",
+    "schemas"
+  ],
+  "dependencies": {
+    "@freshair129/msp-core": "0.1.0"
+  }
+}

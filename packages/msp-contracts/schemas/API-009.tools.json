@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Freshair129/msp/blob/main/packages/msp-contracts/schemas/API-009.tools.json",
+  "title": "API-009 Persistent Memory MSP tools",
+  "contract": {
+    "doc_id": "API-009-PERSISTENT-MEMORY-CONTRACT",
+    "version": "0.1.1+draft",
+    "source": "docs/API-009-Persistent-Memory-Contract.md"
+  },
+  "$defs": {
+    "vaultScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vault_id", "vault_type"],
+      "properties": {
+        "vault_id": { "type": "string", "minLength": 1 },
+        "vault_type": { "enum": ["shared", "workspace_private", "global_private"] }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "msp_memory_upsert",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["vault", "category", "key", "body_json"],
+        "properties": {
+          "vault": { "$ref": "#/$defs/vaultScope" },
+          "category": { "type": "string", "minLength": 1 },
+          "key": { "type": "string", "minLength": 1 },
+          "body_json": { "type": "object" },
+          "epistemic_state": { "enum": ["hypothesis", "confirmed", "contested", "deprecated"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "valid_from": { "type": ["string", "null"], "format": "date-time" },
+          "valid_to": { "type": ["string", "null"], "format": "date-time" }
+        }
+      }
+    },
+    {
+      "name": "msp_memory_get",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["vault_id", "category", "key"],
+        "properties": {
+          "vault_id": { "type": "string", "minLength": 1 },
+          "category": { "type": "string", "minLength": 1 },
+          "key": { "type": "string", "minLength": 1 },
+          "as_of_valid_at": { "type": ["string", "null"], "format": "date-time" },
+          "as_of_recorded_at": { "type": ["string", "null"], "format": "date-time" }
+        }
+      }
+    },
+    {
+      "name": "msp_memory_list",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["vault_id"],
+        "properties": {
+          "vault_id": { "type": "string", "minLength": 1 },
+          "category": { "type": ["string", "null"] },
+          "lifecycle_state": { "type": ["string", "null"], "enum": ["active", "decayed", "archived", "forgotten", null] },
+          "page_size": { "type": "integer", "minimum": 1 },
+          "page_token": { "type": ["string", "null"] }
+        }
+      }
+    },
+    {
+      "name": "msp_memory_history",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entity_id"],
+        "properties": {
+          "entity_id": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    {
+      "name": "msp_memory_forget",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entity_id", "reason"],
+        "properties": {
+          "entity_id": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    {
+      "name": "msp_memory_search",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["vault_id", "query"],
+        "properties": {
+          "vault_id": { "type": "string", "minLength": 1 },
+          "query": { "type": "string", "minLength": 1 },
+          "mode": { "enum": ["hybrid", "fts", "vector"] },
+          "limit": { "type": "integer", "minimum": 1 }
+        }
+      }
+    },
+    {
+      "name": "msp_memory_decay_tick",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["vault_id"],
+        "properties": {
+          "vault_id": { "type": "string", "minLength": 1 },
+          "dry_run": { "type": "boolean" }
+        }
+      }
+    },
+    {
+      "name": "msp_memory_links_list",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entity_id"],
+        "properties": {
+          "entity_id": { "type": "string", "minLength": 1 },
+          "direction": { "enum": ["outgoing", "incoming", "both"] }
+        }
+      }
+    },
+    {
+      "name": "msp_memory_links_create",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from_entity_id", "to_entity_id", "link_type"],
+        "properties": {
+          "from_entity_id": { "type": "string", "minLength": 1 },
+          "to_entity_id": { "type": "string", "minLength": 1 },
+          "link_type": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  ]
+}
