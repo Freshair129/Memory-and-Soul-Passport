@@ -1,7 +1,7 @@
 ---
-version: "0.1.1b"
-created_at: "2026-08-12T08:14:50+07:00,ATHER"
-last_update: "2026-08-12T08:33:00+07:00,ATHER"
+version: "0.1.2b"
+created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
+last_update: "2026-08-12T08:37:19+07:00,ATHER"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -70,5 +70,6 @@ Revert the single dependency/re-export change and reinstall GoVibe dependencies.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
-| 0.1.1b | 2026-08-12 | beta | Added exact consumer diff, verified commands/results, and cleanup evidence. | pending | ATHER |
-| 0.1.0b | 2026-08-12 | beta | Initial local consumer cutover and rollback procedure. | pending | ATHER |
+| 0.1.2b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
+| 0.1.1b | 2026-08-12 | beta | Added exact consumer diff, verified commands/results, and cleanup evidence. | 394a176 | ATHER |
+| 0.1.0b | 2026-08-12 | beta | Initial local consumer cutover and rollback procedure. | 394a176 | ATHER |

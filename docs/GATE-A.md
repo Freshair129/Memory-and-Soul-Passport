@@ -1,7 +1,7 @@
 ---
-version: "0.1.0b"
-created_at: "2026-08-12T08:33:00+07:00,ATHER"
-last_update: "2026-08-12T08:33:00+07:00,ATHER"
+version: "0.1.1b"
+created_at: "2026-08-12T08:33:00+07:00,ATHER,394a176"
+last_update: "2026-08-12T08:37:19+07:00,ATHER"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -46,4 +46,5 @@ All seven root migration files matched the SHA-256 of the corresponding GoVibe s
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
-| 0.1.0b | 2026-08-12 | beta | Initial evidence-backed Gate A report. | pending | ATHER |
+| 0.1.1b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
+| 0.1.0b | 2026-08-12 | beta | Initial evidence-backed Gate A report. | 394a176 | ATHER |
