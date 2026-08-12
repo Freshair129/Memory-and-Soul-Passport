@@ -1,7 +1,7 @@
 ---
-version: "0.1.1b"
+version: "0.1.2b"
 created_at: "2026-08-12T08:33:00+07:00,ATHER,394a176"
-last_update: "2026-08-12T08:37:19+07:00,ATHER"
+last_update: "2026-08-12T08:39:26+07:00,ATHER"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -42,9 +42,17 @@ The packed tarball was installed with `npm install --ignore-scripts` into an iso
 
 All seven root migration files matched the SHA-256 of the corresponding GoVibe source migration immediately after copy. Runtime migration tests also passed checksum-drift, downgrade, ordering, and idempotency checks.
 
+## Delivery
+
+- Repository: `https://github.com/Freshair129/msp`
+- Review branch: `agent/extract-msp-runtime`
+- Draft review: `https://github.com/Freshair129/msp/pull/1`
+- The remote branch head was verified equal to the local head after push.
+
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.2b | 2026-08-12 | beta | Added repository, branch, and draft-review delivery evidence. | 04f48f6 | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
 | 0.1.0b | 2026-08-12 | beta | Initial evidence-backed Gate A report. | 394a176 | ATHER |

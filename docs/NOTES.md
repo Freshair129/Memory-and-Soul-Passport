@@ -1,7 +1,7 @@
 ---
-version: "0.1.2b"
+version: "0.1.3b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-08-12T08:37:19+07:00,ATHER"
+last_update: "2026-08-12T08:39:26+07:00,ATHER"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -73,14 +73,15 @@ API-009 defines `MemoryEntityHistoryEntry` as the complete `MemoryEntity` plus `
 
 The source runtime always constructs the optional bge-m3 client. Calls degrade to FTS when Ollama is unavailable, and callers opt into vector participation through search `mode`, but there is no distinct `MSP_VECTOR_ENABLED` feature flag. Adding one during extraction would change behavior, so this remains a recorded separation gap rather than an extraction-time fix.
 
-### GitHub repository slug currently redirects
+### GitHub repository slug redirect was resolved during publish
 
-Before publish, `gh repo view Freshair129/msp` resolved to `Freshair129/cognitive_system`, indicating a GitHub rename redirect rather than a confirmed standalone MSP repository. Publishing must create or resolve the exact `Freshair129/msp` identity without overwriting `cognitive_system`.
+Before publish, `gh repo view Freshair129/msp` resolved to `Freshair129/cognitive_system`, indicating a GitHub rename redirect. The exact `Freshair129/msp` repository was then created without changing or overwriting `cognitive_system`; `main` and `agent/extract-msp-runtime` were pushed and draft PR #1 was opened for review.
 
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.3b | 2026-08-12 | beta | Recorded successful exact-slug repository creation and draft review publication. | 04f48f6 | ATHER |
 | 0.1.2b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Added source gaps, publish identity risk, and preserved test-runner mapping. | 394a176 | ATHER |
 | 0.1.0b | 2026-08-12 | beta | Initial inventory, mapping, invariants, and baseline evidence. | 394a176 | ATHER |
