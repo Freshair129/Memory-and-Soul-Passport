@@ -21,6 +21,13 @@ Audit PRs against `docs/GATE-A.md`'s rows and the API-009 contract, and keep
 `last_update`, `status`) and CHANGELOG table current — a stale doc is a
 false record, not a harmless omission.
 
+**Exception:** `docs/API-009-Persistent-Memory-Contract.md` carries its own
+inherited GoVibe header (`title`/`doc_id`/`version: "0.1.1+draft"`/
+`updated`/`owner`/`source_of_truth`), not the `X.Y.Zb`/CHANGELOG-table
+convention below, and has no CHANGELOG table. Update its `updated` field
+and its own version string on a wire-contract change — do not convert it to
+the `X.Y.Zb` format, and do not add a CHANGELOG table that isn't there.
+
 ## Audit Checklist
 
 - [ ] The change does not regress any Gate A row without the audit report

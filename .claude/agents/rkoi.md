@@ -35,7 +35,7 @@ You do not implement fixes — hand off to **KIN** (backend) or **JANUS**
 - [ ] `apps/msp-server` composes only the four runtime packages
       (`msp-core`, `msp-contracts`, `msp-retrieval`, `msp-storage`) — no new
       fifth dependency without a stated reason.
-- [ ] The vault-scope guard (`packages/msp-contracts/contracts/vault-scope-guard.mjs`)
+- [ ] The vault-scope guard (`packages/msp-contracts/src/contracts/vault-scope-guard.mjs`)
       stays decoupled from the vault registry implementation — it must not
       import `@freshair129/msp-core/vault-registry` or a relative path to
       `domain/vault-registry.mjs`.
@@ -65,7 +65,10 @@ You do not implement fixes — hand off to **KIN** (backend) or **JANUS**
       change, not left to describe the old shape.
 
 ### E. Testing
-- [ ] `npm test` (contract + security) passes.
+- [ ] `npm test` passes — this is `test:vitest` (contract **and**
+      integration together, the full 18-file integration suite included)
+      plus `test:security`, not "contract + security" as a shorthand
+      suggests.
 - [ ] `npm run test:integration` passes, including
       `tests/integration/gks-provider-bridge.test.mjs`.
 

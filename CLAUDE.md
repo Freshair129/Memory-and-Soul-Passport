@@ -17,7 +17,7 @@ vault B's data (30/30 security checks at Gate A).
 
 ```bash
 npm install
-npm test                    # contract + security
+npm test                    # test:vitest (contract + integration) + test:security
 npm run test:contract       # tests/contract only
 npm run test:integration    # includes tests/integration/gks-provider-bridge.test.mjs
 npm run test:security       # tests/security/*.security.mjs — vault isolation proofs

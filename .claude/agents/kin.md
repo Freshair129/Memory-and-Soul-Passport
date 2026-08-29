@@ -50,7 +50,8 @@ for review before anything merges.
   (`D:\gks`), not only a mock.
 
 ### 4. Before handing off
-- `npm test` passes (contract + security).
+- `npm test` passes — `test:vitest` (contract + full integration suite)
+  plus `test:security`, not "contract + security" alone.
 - `npm run test:integration` passes.
 - `dependency-boundaries.test.mjs` still passes.
 
