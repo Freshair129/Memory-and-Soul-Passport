@@ -1,0 +1,12 @@
+{
+  "name": "@freshair129/msp-core",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MSP domain logic.",
+  "exports": {
+    "./*": "./src/domain/*.mjs"
+  },
+  "files": [
+    "src"
+  ]
+}

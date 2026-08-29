@@ -1,0 +1,15 @@
+{
+  "name": "@freshair129/msp-retrieval",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MSP FTS/vector retrieval and fusion.",
+  "exports": {
+    "./*": "./src/retrieval/*.mjs"
+  },
+  "files": [
+    "src"
+  ],
+  "dependencies": {
+    "@freshair129/msp-core": "0.1.0"
+  }
+}
