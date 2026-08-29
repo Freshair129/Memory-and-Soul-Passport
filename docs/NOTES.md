@@ -1,7 +1,7 @@
 ---
-version: "0.1.3b"
+version: "0.1.4b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-08-12T08:39:26+07:00,ATHER"
+last_update: "2026-08-30T01:58:00+07:00,KIN"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -77,10 +77,38 @@ The source runtime always constructs the optional bge-m3 client. Calls degrade t
 
 Before publish, `gh repo view Freshair129/msp` resolved to `Freshair129/cognitive_system`, indicating a GitHub rename redirect. The exact `Freshair129/msp` repository was then created without changing or overwriting `cognitive_system`; `main` and `agent/extract-msp-runtime` were pushed and draft PR #1 was opened for review.
 
+## Known gaps from the 2026-08-30 QA audit (design changes required, not test-only fixes)
+
+The 2026-08-30 QA (GHOST) audit surfaced five findings. Three were closed the same day as test-only work (commit `3767738`: the GKS-bridge unconfigured case, a real `msp_memory_forget` attack case, an `msp_memory_links_list` proof, and the `msp_memory_upsert` attacker direction). The remaining two cannot be closed by adding tests, because the behavior they describe is what the current wire contract actually specifies — closing them changes the contract. They are recorded here so they stay visible until a design decision addresses them.
+
+### Context tools perform no caller-ownership check
+
+`msp_context_diff`, `msp_context_audit`, and `msp_context_replay` resolve any `context_id` by primary key and answer with that context's data regardless of who asks. The `actor` string on the request is journaled, never authorized against the stored context's `workspace_id`/`agent_id`.
+
+Evidence:
+
+- `apps/msp-server/src/transport/handlers/context-handlers.mjs:149` (`msp_context_diff`) — resolves `base_context_id`/`target_context_id` via `selectContext.get(...)` and returns `changed_refs` for any caller; with `include_payload: true` it returns both contexts' full `refs_json` payloads.
+- `apps/msp-server/src/transport/handlers/context-handlers.mjs:191` (`msp_context_audit`) — returns journal findings and the hash-validity verdict for any `context_id`.
+- `apps/msp-server/src/transport/handlers/context-handlers.mjs:247` (`msp_context_replay`) — replays any stored context by id.
+
+A caller holding (or enumerating) another workspace's `context_id` can therefore read that workspace's resolved-context refs and journal trail. Contexts are keyed by `contextRef(randomUUID())` (`context-handlers.mjs:77`), so ids are unguessable in practice — the gap is the absence of an ownership rule, not a live enumeration path. Fixing it requires deciding what ownership means for these three tools' wire shapes (they carry `actor` but API-006/API-009 define no ownership semantics for it), which is a contract change, not a test.
+
+### Evidence refs accept arbitrary un-namespaced strings
+
+`msp_memory_promote` requires `evidence_refs` to be a non-empty array and rejects `gks:`-prefixed entries, but accepts any other string — `"trust me"` is valid evidence on the wire. The same applies to `source_memory_ref`, and to `msp_knowledge_promote`'s `provenance_ref`.
+
+Evidence:
+
+- `apps/msp-server/src/transport/handlers/lifecycle-handlers.mjs:204-214` — the only validation on `evidence_refs`/`source_memory_ref` is non-emptiness plus `requireNoGksRefs` (which rejects only the `gks:` namespace; see `packages/msp-contracts/src/contracts/namespace-guard.mjs:42`). No `msp:` namespace requirement, no check that a ref resolves to any stored record.
+- `apps/msp-server/src/transport/handlers/lifecycle-handlers.mjs:56` — `msp_knowledge_promote`'s `provenance_ref` gets the same gks-only screening.
+
+Promotion receipts can therefore be minted whose evidence chain points at nothing. Requiring namespaced (`msp:`-resolvable) evidence refs would reject requests today's contract documents as valid, so this too is a design decision, recorded rather than patched.
+
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.4b | 2026-08-30 | beta | Recorded QA-audit known gaps (context-tool caller ownership, evidence-ref namespacing) alongside the same audit's test-only closures. | 3767738 | KIN |
 | 0.1.3b | 2026-08-12 | beta | Recorded successful exact-slug repository creation and draft review publication. | 04f48f6 | ATHER |
 | 0.1.2b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Added source gaps, publish identity risk, and preserved test-runner mapping. | 394a176 | ATHER |
