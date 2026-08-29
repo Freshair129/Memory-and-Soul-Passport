@@ -7,6 +7,10 @@ extracted from GoVibe, wire protocol and storage schema unchanged. See
 `README.md`, `docs/GATE-A.md` (the extraction's verification bar), and
 `docs/API-009-Persistent-Memory-Contract.md`.
 
+Remote: `origin` → https://github.com/Freshair129/Memory-and-Soul-Passport
+(renamed from `msp`; the URL, not the local folder name, changed). Local
+path in cross-repo references is `D:\msp`.
+
 **Call direction:** `Zuri / GoVibe -> MSP -> GKS`. MSP is the sole caller of
 GKS (`D:\gks`); GoVibe and Zuri never call GKS directly. **Vault isolation is
 the whole product** — every read/write/search/link/decay/promotion path is
