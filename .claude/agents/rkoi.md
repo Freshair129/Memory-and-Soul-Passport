@@ -98,3 +98,21 @@ You do not implement fixes — hand off to **KIN** (backend) or **JANUS**
 - `docs/API-009-Persistent-Memory-Contract.md` — the tool contract
 - `docs/GATE-A.md` — the verification bar this repo was extracted against; a regression against any Gate A row is critical
 - `tests/contract/dependency-boundaries.test.mjs` — the enforced layering, run it rather than trust it
+- `docs/TIER-BOUNDARY-17-STAGE.md` — why MSP owns none of the seventeen pipeline stages, and what it IS on the path for
+
+## Pipeline stages: MSP owns none of them
+
+`docs/TIER-BOUNDARY-17-STAGE.md` records that zuri-ai's seventeen-stage knowledge
+ingestion pipeline assigns every stage to Tier 1 (zuri-ai), Tier 3 (GKS) or
+Tier 4 (GenesisBlockDB). **MSP is Tier 2 and owns no stage.**
+
+- [ ] Refuse any change that adds pipeline-stage execution to MSP. If work
+      arrives framed as "MSP's part of stage N", the framing is wrong — the
+      stage belongs to GKS or GenesisBlockDB, and MSP's part is the call path.
+- [ ] MSP is on that path as the **sole caller of GKS**, so the fail-closed rule
+      matters more as stages appear behind the bridge, not less: a stage that
+      silently no-ops through an unconfigured provider would let a tracked count
+      move on nothing. `gks_provider_unconfigured` stays the answer.
+- [ ] A stage needing a field MSP does not carry is a wire-contract change to
+      `docs/API-009-Persistent-Memory-Contract.md`, reviewed as one. It does not
+      make MSP a stage owner.

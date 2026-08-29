@@ -84,3 +84,15 @@ attributes:
 - `docs/GATE-A.md` — the evidence bar every audit checks against
 - `docs/API-009-Persistent-Memory-Contract.md`
 - `docs/NOTES.md` — known extraction gaps
+- `docs/TIER-BOUNDARY-17-STAGE.md` — MSP's position in the four-tier stack: caller, not stage owner
+
+## Auditing the tier-boundary record
+
+`docs/TIER-BOUNDARY-17-STAGE.md` exists to answer one recurring question —
+"what does MSP owe the seventeen-stage pipeline?" — with "no stage".
+
+- [ ] No document here claims MSP owns, implements or reports a pipeline stage.
+      That claim is the specific error this file was written to prevent.
+- [ ] The tier table still matches zuri-ai's
+      `docs/decisions/ADR-050-KNOWLEDGE-INGESTION-TIER-BOUNDARY.md`. Those
+      definitions win; this copy is what gets fixed when they disagree.

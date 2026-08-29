@@ -69,3 +69,15 @@ the one you're delegating to before assuming its scope.
 - **`docs/GATE-A.md` is the baseline, not a historical record.** A change
   that would make any of its rows false again is a regression, whether or
   not a test currently catches it.
+
+## The seventeen-stage pipeline: MSP owns no stage
+
+zuri-ai's ADR-050 assigns all seventeen knowledge-ingestion stages to Tier 1
+(zuri-ai), Tier 3 (GKS) or Tier 4 (GenesisBlockDB). **MSP is Tier 2 — session
+control, thread-id authority and memory policy — and owns none of them.**
+
+MSP is on the path as the sole caller of GKS, which is why the fail-closed rule
+above matters more as stages appear behind that bridge: a stage that silently
+no-ops through an unconfigured provider would let a tracked count move on
+nothing. Work framed as "MSP's part of stage N" is misfiled — see
+`docs/TIER-BOUNDARY-17-STAGE.md`.
