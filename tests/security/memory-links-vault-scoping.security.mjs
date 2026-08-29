@@ -114,3 +114,73 @@ test("AC-01 control case: a same-vault link is still accepted (the guard is not 
     cleanup();
   }
 });
+
+test("msp_memory_links_list is vault-scoped through its entity_id -- vault B's same-(category, key) twin entities expose none of vault A's links", async () => {
+  // memory-handlers.mjs's msp_memory_links_list carries a code-comment
+  // argument instead of a test: "entity_id already uniquely, non-forgeably
+  // determines its vault (computeEntityId folds vault_id into the hash),
+  // and every link row was itself vault-checked at create time". This test
+  // turns that argument into an executable proof: give vault B entities
+  // with the SAME (category, key) names as vault A's linked entities --
+  // the strongest identifier collision a vault-B caller can construct on
+  // the wire -- and show that listing through them yields nothing of
+  // vault A's, precisely because the same names in a different vault mint
+  // different entity_ids.
+  const { dbPath, cleanup } = tempDbPath();
+  const call = spawnRuntime(dbPath);
+  try {
+    const vaultA = await provisionVault(call, "workspace-links-list-a");
+    const vaultB = await provisionVault(call, "workspace-links-list-b");
+    const entityA1 = await upsert(call, vaultA, "link-twin-1");
+    const entityA2 = await upsert(call, vaultA, "link-twin-2");
+    const entityB1 = await upsert(call, vaultB, "link-twin-1");
+    const entityB2 = await upsert(call, vaultB, "link-twin-2");
+
+    // The non-forgeability premise itself, proven on the wire: identical
+    // (category, key) in two vaults never collides on entity_id.
+    assert.notEqual(entityB1, entityA1);
+    assert.notEqual(entityB2, entityA2);
+
+    // A link exists in vault A only.
+    await call("msp_memory_links_create", { from_entity_id: entityA1, to_entity_id: entityA2, link_type: "relates_to" });
+
+    // Vault B's twins see an empty link set, in every direction.
+    for (const direction of ["outgoing", "incoming", "both"]) {
+      const viaB1 = await call("msp_memory_links_list", { entity_id: entityB1, direction });
+      assert.deepStrictEqual(
+        viaB1.links,
+        [],
+        `FAIL-CLOSED VIOLATION: vault A's link leaked through vault B's twin entity (direction=${direction})`,
+      );
+      const viaB2 = await call("msp_memory_links_list", { entity_id: entityB2, direction });
+      assert.deepStrictEqual(viaB2.links, []);
+    }
+
+    // Control case: vault A's own entity does list its link, and every
+    // endpoint it returns is a vault A entity_id -- never vault B's twin.
+    const viaA1 = await call("msp_memory_links_list", { entity_id: entityA1, direction: "both" });
+    assert.deepStrictEqual(viaA1.links, [{ from_entity_id: entityA1, to_entity_id: entityA2, link_type: "relates_to" }]);
+
+    // A forged/unknown entity_id fails closed as not_found rather than
+    // returning an empty-but-plausible listing for a handle that names
+    // nothing.
+    await assert.rejects(
+      call("msp_memory_links_list", { entity_id: "msp:entity/ffffffffffffffffffffffff" }),
+      /no memory entity found/i,
+    );
+
+    // Direct DB proof that the wire behavior rests on vault-scoped rows,
+    // not luck: the only link row is vault A's.
+    call.close();
+    const db = open(dbPath);
+    try {
+      const rows = db.prepare("SELECT vault_id, from_entity_id, to_entity_id FROM links").all();
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].vault_id, vaultA);
+    } finally {
+      db.close();
+    }
+  } finally {
+    cleanup();
+  }
+});

@@ -189,7 +189,7 @@ test("AC-03: the exact-match short-circuit is vault-scoped -- a key that exists 
   }
 });
 
-test("AC-03: msp_memory_get/list/history/forget are likewise vault-scoped -- vault B cannot read or mutate vault A's entity", async () => {
+test("AC-03: msp_memory_get/list/history are likewise vault-scoped -- vault B cannot read vault A's entity", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = await spawnRuntime(dbPath);
   try {
@@ -213,15 +213,80 @@ test("AC-03: msp_memory_get/list/history/forget are likewise vault-scoped -- vau
     const listB = await call("msp_memory_list", { vault_id: vaultB, category: "secret" });
     assert.ok(listB.entities.every((entity) => entity.entity_id !== created.entity.entity_id));
 
-    // msp_memory_history/forget resolve purely from entity_id (API-009 SS4.4/
-    // SS4.5 carry no vault_id at all) -- proving they resolve to vault A's
-    // OWN entity/vault_id, never silently substituting vault B's, is the
+    // msp_memory_history resolves purely from entity_id (API-009 SS4.4
+    // carries no vault_id at all) -- proving it resolves to vault A's OWN
+    // entity/vault_id, never silently substituting vault B's, is the
     // relevant scoping property here (see memory-handlers.mjs's header
-    // comment for why these two tools have no separate caller-vault
-    // parameter to cross-check against).
+    // comment for why this tool has no separate caller-vault parameter to
+    // cross-check against). msp_memory_forget, which shares that wire
+    // shape, has its own dedicated attack case in the next test below.
     const { history } = await call("msp_memory_history", { entity_id: created.entity.entity_id });
     assert.equal(history[0].vault_id, vaultA);
     assert.notEqual(history[0].vault_id, vaultB);
+  } finally {
+    call.close();
+    cleanup();
+  }
+});
+
+test("AC-03: msp_memory_forget re-derives the vault from its entity_id -- a forget issued against vault B's entity never soft-deletes vault A's same-(category, key) row", async () => {
+  const { dbPath, cleanup } = tempDbPath();
+  const call = await spawnRuntime(dbPath);
+  try {
+    const vaultA = await provisionVault(call, "workspace-forget-scope-a");
+    const vaultB = await provisionVault(call, "workspace-forget-scope-b");
+
+    // Same (category, key) pair in BOTH vaults -- the exact collision the
+    // handler's vault re-derivation has to disambiguate. msp_memory_forget's
+    // wire shape (API-009 SS4.5) carries only {entity_id, reason}; the
+    // handler resolves entity_id -> {vault_id, category, key} and then calls
+    // the vault-scoped entity-store.forget(). If that re-derivation ever
+    // resolved by (category, key) instead of by the entity's own vault,
+    // forgetting vault B's row would soft-delete vault A's.
+    const victimA = await call("msp_memory_upsert", {
+      vault: { vault_id: vaultA, vault_type: "workspace_private" },
+      category: "secret",
+      key: "shared-forget-key",
+      body_json: { summary: "vault A's row, must survive vault B's forget" },
+    });
+    const attackerB = await call("msp_memory_upsert", {
+      vault: { vault_id: vaultB, vault_type: "workspace_private" },
+      category: "secret",
+      key: "shared-forget-key",
+      body_json: { summary: "vault B's own row" },
+    });
+
+    // computeEntityId folds vault_id into the hash: the same (category, key)
+    // in two vaults yields two distinct entity_ids, so an entity_id held by
+    // a vault-B caller can only ever name vault B's row.
+    assert.notEqual(attackerB.entity.entity_id, victimA.entity.entity_id);
+
+    const forgotten = await call("msp_memory_forget", {
+      entity_id: attackerB.entity.entity_id,
+      reason: "vault B forgetting its own (category, key) twin",
+    });
+    assert.equal(forgotten.entity.vault_id, vaultB, "forget must act on the entity's OWN vault");
+    assert.equal(forgotten.entity.lifecycle_state, "forgotten");
+
+    // Vault A's same-(category, key) row is untouched: still readable, still
+    // active, still on version 1 with no forget entry in its history.
+    const survivorA = await call("msp_memory_get", { vault_id: vaultA, category: "secret", key: "shared-forget-key" });
+    assert.equal(survivorA.entity.entity_id, victimA.entity.entity_id);
+    assert.notEqual(
+      survivorA.entity.lifecycle_state,
+      "forgotten",
+      "FAIL-CLOSED VIOLATION: forgetting vault B's entity soft-deleted vault A's same-(category, key) row",
+    );
+    assert.equal(survivorA.entity.current_version, victimA.entity.current_version);
+    const { history: historyA } = await call("msp_memory_history", { entity_id: victimA.entity.entity_id });
+    assert.equal(historyA.length, 1, "vault A's history must not have gained a forget row");
+
+    // A forged/unknown entity_id fails closed as not_found -- there is no
+    // (category, key) fallback lookup for it to land on.
+    await assert.rejects(
+      call("msp_memory_forget", { entity_id: "msp:entity/ffffffffffffffffffffffff", reason: "forged id" }),
+      /no memory entity found/i,
+    );
   } finally {
     call.close();
     cleanup();
