@@ -1,7 +1,7 @@
 ---
-version: "0.1.0b"
+version: "0.2.0b"
 created_at: "2026-08-29T14:45:00+07:00,Claude Opus 5,working-tree"
-last_update: "2026-08-29T14:45:00+07:00,Claude Opus 5"
+last_update: "2026-09-07T00:00:00+07:00,Claude Fable 5.1"
 status: "beta"
 attributes:
   domain: "mission-state-protocol"
@@ -52,6 +52,27 @@ If a future stage needs MSP to carry a field it does not carry today, that is a
 wire-contract change to `docs/API-009-Persistent-Memory-Contract.md` and it goes
 through the normal review — it does not make MSP a stage owner.
 
+## What MSP relays for the evidence pull (2026-09-07)
+
+GKS's `ADR-GKS-LEDGER-REPORTING` (accepted 2026-08-31) decided that Tier-3
+stage evidence leaves GKS as a cursor **pull** — GKS never calls outward — and
+that zuri-ai pulls it "through MSP". The relay is
+**`msp_knowledge_evidence_export`** (`apps/msp-server/src/transport/handlers/
+lifecycle-handlers.mjs`): it takes the caller's `scope`, `since_cursor` and
+`limit`, calls GKS's `gks_stage_evidence_export` through the configured
+provider, validates the page it gets back the same way `msp_knowledge_promote`
+validates a promotion receipt (definition and contract ids, ascending cursors,
+the six NFR-020 metrics present and numeric, `records` an array), journals
+the call with counts only, and returns the page rebuilt from the validated
+fields. Three things it deliberately does not do, all of them consequences of
+"MSP owns no stage": it keeps **no cursor** (the puller owns it), it adds
+**no scope** (it relays the caller's envelope; GKS applies it in SQL), and it
+answers **nothing at all** without a provider — `gks_provider_unconfigured`,
+the same fail-closed refusal as promotion. Proven through the real MSP
+process against GKS's reference fixture
+(`tests/integration/gks-provider-bridge.test.mjs`) and against the real GKS
+(GKS's `msp-service-chain` and zuri-ai's `fr110-knowledge-evidence-chain`).
+
 ## Where completion is reported — and it is not MSP reporting it
 
 Stage completion is recorded in zuri-ai, in two places:
@@ -77,4 +98,5 @@ If this file and those disagree, those win.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.0b | 2026-09-07 | beta | Added the one relay MSP carries for the evidence pull, `msp_knowledge_evidence_export` — GKS's `gks_stage_evidence_export` validated and handed back, no cursor, no added scope, fail-closed without a provider — with the provider method and the reference fixture that prove it. MSP still owns no stage. | working-tree | Claude Fable 5.1 |
 | 0.1.0b | 2026-08-29 | beta | Recorded that MSP owns none of the seventeen pipeline stages, and what it is on the call path for — neither of which was written anywhere in this repository before. | working-tree | Claude Opus 5 |

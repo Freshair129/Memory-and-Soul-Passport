@@ -24,6 +24,13 @@ export function createGksProviderFromEnvironment(env = process.env) {
     async promote(candidate) {
       return callGksTool({ command, args, cwd, env }, "gks_knowledge_promote", candidate);
     },
+    // The one read-only tool MSP relays for zuri-ai's evidence pull
+    // (GKS ADR-GKS-LEDGER-REPORTING D2, Option B): zuri-ai -> MSP ->
+    // gks_stage_evidence_export. MSP owns no stage and no cursor; it carries
+    // the caller's scope envelope through and the page back, unchanged.
+    async exportStageEvidence(request) {
+      return callGksTool({ command, args, cwd, env }, "gks_stage_evidence_export", request);
+    },
   };
 }
 
