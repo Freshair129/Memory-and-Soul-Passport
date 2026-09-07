@@ -1,7 +1,7 @@
 ---
-version: "0.1.2b"
+version: "0.1.3b"
 created_at: "2026-08-12T08:33:00+07:00,ATHER,394a176"
-last_update: "2026-08-12T08:39:26+07:00,ATHER"
+last_update: "2026-09-08T00:00:00+07:00,ATHER"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -11,10 +11,11 @@ attributes:
 
 # Gate A verification report
 
-Verified on Windows from `D:\msp` on 2026-08-12. A checkbox is marked only where the cited command exercised the behavior.
+Verified on Windows from the standalone MSP checkout on 2026-08-12. A checkbox is marked only where the cited command exercised the behavior.
 
 | Gate | Result | Evidence |
 |---|---|---|
+| GenesisRAG17 relay scope and role boundary | PASS | `tests/contract/pipeline-relay.test.mjs` proves caller identity replacement, response validation, loopback query restrictions and fail-closed configuration; `tests/security/pipeline-vault-scoping.security.mjs` exercises every scope field, nested envelopes and source/worker separation before downstream access. |
 | MSP server boots standalone with no GoVibe path | PASS | `tests/contract/transport-fixture-parity.test.mjs` spawns `apps/msp-server/bin/msp-server.mjs`; root `npm test` passed. |
 | `msp-client-js` connects from a separate external process | PASS | `npm pack` tarball installed in an isolated temp npm project; smoke output reported `ping:true`. |
 | Memory CRUD (upsert/search/history) | PASS | Packed-client smoke reported `created:true`, `search_hits:1`, `history_versions:1`; API-009 conformance suite passed all nine tools. |
@@ -53,6 +54,7 @@ All seven root migration files matched the SHA-256 of the corresponding GoVibe s
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.3b | 2026-09-08 | beta | Added the GenesisRAG17 authenticated relay boundary evidence and removed the retired local checkout path from the verification record. | working-tree | ATHER |
 | 0.1.2b | 2026-08-12 | beta | Added repository, branch, and draft-review delivery evidence. | 04f48f6 | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
 | 0.1.0b | 2026-08-12 | beta | Initial evidence-backed Gate A report. | 394a176 | ATHER |

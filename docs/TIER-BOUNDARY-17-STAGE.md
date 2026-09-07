@@ -1,7 +1,7 @@
 ---
-version: "0.3.0b"
+version: "0.4.0b"
 created_at: "2026-08-29T14:45:00+07:00,Claude Opus 5,working-tree"
-last_update: "2026-09-07T00:00:00+07:00,Claude Fable 5.1"
+last_update: "2026-09-08T00:00:00+07:00,ATHER"
 status: "beta"
 attributes:
   domain: "mission-state-protocol"
@@ -26,8 +26,8 @@ stages to three tiers, and MSP is in none of them:
 |---|---|---|
 | 1 — Execution | zuri-ai | 1–8 (shipped) |
 | **2 — Memory** | **MSP** | **none** |
-| 3 — Knowledge | GKS (`D:\gks`) | 9–14, and 17 with Tier 4 |
-| 4 — Substrate | GenesisBlockDB | 15–16, and 13 with Tier 3 |
+| 3 — Knowledge | [Genesis Knowledge System](https://github.com/Freshair129/Genesis-Knowledge-System/tree/codex/ki17-integration) | 9–14, and 17 with Tier 4 |
+| 4 — Substrate | [GenesisBlock worker / DB](https://github.com/Freshair129/GenesisBlock/tree/codex/ki17-integration/genesisrag17-worker) | 15–16, and 13 with Tier 3 |
 
 MSP's role in that four-tier stack is agent session control, unified thread id
 authority and memory policy — not pipeline execution. **No stage of the
@@ -37,7 +37,10 @@ seventeen is MSP's to build, report, or be blocked on.**
 
 MSP is the **sole caller of GKS** (`Zuri / GoVibe -> MSP -> GKS`), so every
 Tier 3 stage that GKS eventually executes is reached through a path MSP owns.
-Two consequences, both already true and neither new work:
+For the isolated GenesisRAG17 contract, MSP also relays the worker's
+authenticated receipts and the source's evidence pull, while forwarding
+read-only queries to the explicit Tier 4 loopback. Two consequences, both
+already true and neither new work:
 
 - **The GKS bridge must keep failing closed.** `msp_knowledge_promote` and
   `msp_memory_promote` answer `gks_provider_unconfigured` when no provider is
@@ -51,6 +54,38 @@ Two consequences, both already true and neither new work:
 If a future stage needs MSP to carry a field it does not carry today, that is a
 wire-contract change to `docs/API-009-Persistent-Memory-Contract.md` and it goes
 through the normal review — it does not make MSP a stage owner.
+
+## The GenesisRAG17 relay boundary
+
+The nine `msp_pipeline_*` operations are a Tier 2 transport boundary, not a
+stage assignment:
+
+| Grant | Operations | Destination |
+|---|---|---|
+| source | `submit`, `evidence`, `query` | GKS for submit/evidence; Tier 4 loopback for query |
+| worker | `claim`, `graph_receipt`, `write_receipt`, `gate`, `publication_receipt`, `stage_failure`, `query` | GKS for worker lifecycle/receipts; Tier 4 loopback for query |
+
+The request must use `schemaVersion: "genesisrag17.v1"` and exactly
+`portfolioId`, `tenantId`, `businessId`, `workspaceId`, `agentId`, and
+`visibility` in its scope. `MSP_PIPELINE_PRINCIPALS` grants a credential to
+one role and one exact scope. Caller `actor`, caller credentials and a supplied
+worker identity are never authority. MSP derives the authenticated principal,
+adds `MSP_GKS_PIPELINE_CREDENTIAL` for the GKS hop and strips both the source
+grant list and Tier 4 query token from a GKS child environment.
+
+MSP stores no stage payload, source lineage, canonical decision, worker
+receipt, evidence cursor or verdict. It validates downstream envelopes and
+journals counts only. Source parsing and lineage stay in zuri-ai stages 1–8;
+canonical decisions and quality stay in GKS; physical graph/vector/index
+writes and publication stay in the GenesisBlock worker and its DB. The [full relay contract](GENESISRAG17-RELAY.md)
+and [MSP ADR](ADR-MSP-GENESISRAG17-RELAY.md) define the extension rule: new
+input parsing belongs to zuri-ai, canonical fields belong to GKS, and any new
+wire field requires coordinated contract/schema changes across repositories.
+
+The cross-repository authority is zuri-ai's [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md),
+[stage specification](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-SPEC.md),
+and [stage flow](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-FLOW.md).
+The raw-to-publication acceptance is pinned to [zuri-ai commit `b64b46df`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257).
 
 ## What MSP relays for the evidence pull (2026-09-07)
 
@@ -88,14 +123,16 @@ Stage completion is recorded in zuri-ai, in two places:
 
 MSP has nothing to report there. **If someone asks this repository to update the
 seventeen-stage progress, the answer is that MSP owns no stage** — the question
-belongs to GKS (`D:\gks\docs\TIER-BOUNDARY-17-STAGE.md`) or to zuri-ai itself.
+belongs to GKS or to zuri-ai itself; this MSP record remains a boundary copy,
+not a stage ledger.
 
 ## Source of truth
 
 Authoritative in zuri-ai:
 
-- `docs/decisions/ADR-050-KNOWLEDGE-INGESTION-TIER-BOUNDARY.md`
-- `docs/domains/knowledge/features/FR-109-knowledge-ingestion-stage-catalog.md`
+- [ADR-050 knowledge-ingestion tier boundary](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-050-KNOWLEDGE-INGESTION-TIER-BOUNDARY.md)
+- [FR-109 stage catalog](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/domains/knowledge/features/FR-109-knowledge-ingestion-stage-catalog.md)
+- [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md)
 
 If this file and those disagree, those win.
 
@@ -103,5 +140,6 @@ If this file and those disagree, those win.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.4.0b | 2026-09-08 | beta | Added the complete authenticated GenesisRAG17 relay boundary, source/worker grant split, Tier 4 query route, extension rules and pinned zuri-ai links; removed local checkout paths. | working-tree | ATHER |
 | 0.2.0b | 2026-09-07 | beta | Added the one relay MSP carries for the evidence pull, `msp_knowledge_evidence_export` — GKS's `gks_stage_evidence_export` validated and handed back, no cursor, no added scope, fail-closed without a provider — with the provider method and the reference fixture that prove it. MSP still owns no stage. | working-tree | Claude Fable 5.1 |
 | 0.1.0b | 2026-08-29 | beta | Recorded that MSP owns none of the seventeen pipeline stages, and what it is on the call path for — neither of which was written anywhere in this repository before. | working-tree | Claude Opus 5 |

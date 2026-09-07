@@ -2,8 +2,8 @@
 title: "API Contract: Persistent-Memory MSP Runtime (msp_memory_*)"
 doc_id: "API-009-PERSISTENT-MEMORY-CONTRACT"
 status: "draft"
-version: "0.1.1+draft"
-updated: "2026-08-05"
+version: "0.1.2+draft"
+updated: "2026-09-08"
 owner: "Boss (CEO)"
 source_of_truth: true
 prd_system: "SYSTEM-05::Agent-Team-Management-System"
@@ -19,8 +19,14 @@ related_docs:
 # API Contract: Persistent-Memory MSP Runtime (msp_memory_*)
 
 The isolated GenesisRAG17 pipeline tool family is specified separately in
-[GenesisRAG17 relay](GENESISRAG17-RELAY.md). It adds authenticated scoped
-batch/evidence/receipt/query relays and preserves the frozen memory schemas below.
+[GenesisRAG17 relay](GENESISRAG17-RELAY.md) and decided in
+[ADR-MSP-GENESISRAG17-RELAY](ADR-MSP-GENESISRAG17-RELAY.md). It adds nine
+authenticated, scoped `msp_pipeline_*` relays and preserves the frozen memory
+schemas below. Its machine-readable source is
+[`packages/msp-contracts/schemas/GENESISRAG17.tools.json`](../packages/msp-contracts/schemas/GENESISRAG17.tools.json);
+the relay owns no pipeline stage or payload store. The zuri-ai wire authority
+is the [pinned branch contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md),
+and its cross-repository acceptance is pinned to [commit `b64b46df`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257).
 
 ## 1. Purpose
 
@@ -59,6 +65,17 @@ govibe.memory.select(input)   # Mission Control-facing, records a UI selection, 
 govibe.memory.forget(input)   # delegates to msp_memory_forget
 govibe.memory.decay.run(input) # delegates to msp_memory_decay_tick
 govibe.memory.promote(input)  # reused, not duplicated — see API-006 msp_memory_promote
+
+# Separate authenticated GenesisRAG17 relay surface; see §2.1 below.
+msp_pipeline_submit(input)
+msp_pipeline_evidence(input)
+msp_pipeline_query(input)
+msp_pipeline_claim(input)
+msp_pipeline_graph_receipt(input)
+msp_pipeline_write_receipt(input)
+msp_pipeline_gate(input)
+msp_pipeline_publication_receipt(input)
+msp_pipeline_stage_failure(input)
 ```
 
 Transport: one JSON-RPC 2.0 request object per line, newline-delimited, over
@@ -67,6 +84,19 @@ the child process's stdin/stdout, per
 tool name; `params` is the request body defined per tool below; `result` is
 the response body; `error` follows JSON-RPC 2.0 error object shape with a
 `data.code` field carrying the typed error code from §5.
+
+### 2.1 GenesisRAG17 pointer
+
+The pipeline surface uses `schemaVersion: "genesisrag17.v1"` and the exact
+scope `{portfolioId, tenantId, businessId, workspaceId, agentId, visibility}`.
+Source grants may submit, pull evidence and query. Worker grants may claim,
+send graph/write/publication receipts, request the gate, report worker-stage
+failure and query. `msp_pipeline_query` is a Tier 4 loopback hop; it is not a
+GKS query. Runtime grant configuration, credential replacement, response
+validation, six-metric evidence and extension rules are maintained in
+[`GENESISRAG17-RELAY.md`](GENESISRAG17-RELAY.md), not duplicated in this
+memory contract. A change to either surface does not rename or reshape the
+other.
 
 ## 3. Common Types
 
@@ -368,7 +398,7 @@ independently verified before any real multi-agent use of
 
 ## 7. Compatibility
 
-- Versioning: this contract is `0.1.0+draft`; breaking changes to any request
+- Versioning: this contract is `0.1.2+draft`; breaking changes to any request
   or response shape require a version bump and a Changelog row, following
   `docs/STD-Document-Versioning-Governance.md`.
 - Deprecation: none yet — this is the initial contract. When Phase 5 wires
@@ -397,5 +427,6 @@ independently verified before any real multi-agent use of
 
 | Version | Date | Summary |
 |---|---|---|
+| 0.1.2+draft | 2026-09-08 | Added the GenesisRAG17 relay pointer, nine-tool names, machine-schema source, exact ownership boundary and pinned zuri-ai contract/acceptance links. The existing `msp_memory_*` and legacy `msp_*` shapes remain unchanged. |
 | 0.1.1+draft | 2026-08-05 | Owner-approved corrections against the actual `packages/msp-runtime` implementation. §4.1: corrected the no-op-on-unchanged-content behavior (an unchanged-`source_hash` upsert on a non-`forgotten` entity writes no `entity_history` row and does not increment `current_version`, returning `created: false, changed: false`) and documented the `changed: boolean` response field the code already returns; this was previously misdocumented as writing history and incrementing version on every call. §6: added an explicit amendment note that vault-scope enforcement and the `vault_scope_denied` error are NOT implemented in v1 (the schema lacks `entities.vault_id`, and `promotions.idempotency_key` is globally unique rather than vault-scoped, risking cross-agent Global-Private disclosure); implementation is mandated by blocking work packet WP-14 before any real multi-agent use. |
 | 0.1.0+draft | 2026-08-04 | Initial wire contract for the nine new `msp_memory_*` tools and their `govibe.memory.*` GoVibe-side exposure; documented request/response shapes, the bi-temporal point-read parameters, the soft-delete-only `msp_memory_forget` contract, the hybrid search degradation-reporting contract, and the fail-closed error table. |
