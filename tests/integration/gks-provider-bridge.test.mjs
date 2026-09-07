@@ -142,6 +142,88 @@ it("msp_knowledge_promote fails closed with gks_provider_unconfigured when no pr
   }
 });
 
+// The relay half of GKS's ADR-GKS-LEDGER-REPORTING Option B: zuri-ai -> MSP
+// -> gks_stage_evidence_export. MSP validates the page it hands back the
+// same way it validates a promotion receipt, keeps no cursor, and fails
+// closed without a provider.
+it("msp_knowledge_evidence_export relays a validated, cursor-paged evidence page and keeps no cursor of its own", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "msp-gks-evidence-"));
+  const dbPath = path.join(dir, "msp.sqlite3");
+  const statePath = path.join(dir, "gks-state.json");
+  const instance = runtime(dbPath, statePath);
+  try {
+    await instance.client.submitKnowledgeCandidate(candidate("evidence-1"));
+    await instance.client.submitKnowledgeCandidate(candidate("evidence-2", "b".repeat(64)));
+    const scope = { portfolioId: "portfolio-zuri", tenantId: "tenant-a", businessId: "business-a", workspaceId: "workspace-a", projectId: "project-a", sharing: "private" };
+
+    const page = await instance.call("msp_knowledge_evidence_export", { actor: "zuri-importer", scope, since_cursor: 0, limit: 1 });
+    expect(page.rows).toHaveLength(1);
+    expect(page.rows[0]).toMatchObject({
+      cursor: 1,
+      pipeline_stage_id: "DPS-KI-ENTITY-RESOLVE",
+      pipeline_definition_id: "DPL-KNOWLEDGE-INGEST-V1",
+      execution_contract_id: "EXC-KNOWLEDGE-INGEST-V1",
+      run_id: "run-provider-1",
+      provenance_ref: "msp:proof/provider-1",
+      records: [],
+    });
+    expect(Object.keys(page.rows[0].metrics).sort()).toEqual(["processing_time_ms", "records_failed", "records_in", "records_out", "records_quarantined", "retry_count"]);
+    expect(page.next_cursor).toBe(1);
+
+    // The caller owns the cursor: the second page starts where it says.
+    const second = await instance.call("msp_knowledge_evidence_export", { actor: "zuri-importer", scope, since_cursor: page.next_cursor, limit: 10 });
+    expect(second.rows.map((row) => row.cursor)).toEqual([2]);
+    expect(second.next_cursor).toBe(2);
+    // Re-reading an earlier cursor returns the same rows.
+    expect(await instance.call("msp_knowledge_evidence_export", { actor: "zuri-importer", scope, since_cursor: 0, limit: 1 })).toEqual(page);
+
+    // The relay is journaled as an allow, with counts and never rows.
+    const db = open(dbPath);
+    try {
+      const entries = db.prepare("SELECT tool_name, policy_decision, payload_json FROM journal WHERE tool_name = 'msp_knowledge_evidence_export' ORDER BY rowid").all();
+      expect(entries).toHaveLength(3);
+      expect(entries.every((entry) => entry.policy_decision === "allow")).toBe(true);
+      expect(JSON.parse(entries[0].payload_json)).toMatchObject({ since_cursor: 0, rows: 1, next_cursor: 1, portfolio_id: "portfolio-zuri" });
+    } finally {
+      db.close();
+    }
+  } finally {
+    instance.call.close();
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+it("msp_knowledge_evidence_export refuses a malformed page, a scopeless request, and fails closed without a provider", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "msp-gks-evidence-bad-"));
+  const dbPath = path.join(dir, "msp.sqlite3");
+  const statePath = path.join(dir, "gks-state.json");
+  const scope = { portfolioId: "portfolio-zuri", tenantId: "tenant-a" };
+  const bad = runtime(dbPath, statePath, { GKS_FIXTURE_BAD_PAGE: "1" });
+  try {
+    await expect(bad.call("msp_knowledge_evidence_export", { actor: "zuri-importer", scope })).rejects.toThrow(/gks_provider_invalid_response/);
+    // Request validation happens before the provider is reached.
+    await expect(bad.call("msp_knowledge_evidence_export", { actor: "zuri-importer" })).rejects.toThrow(/scope is required/);
+    await expect(bad.call("msp_knowledge_evidence_export", { actor: "zuri-importer", scope, since_cursor: -1 })).rejects.toThrow(/since_cursor/);
+    await expect(bad.call("msp_knowledge_evidence_export", { actor: "zuri-importer", scope, limit: 501 })).rejects.toThrow(/limit/);
+  } finally {
+    bad.call.close();
+  }
+  const unconfigured = unconfiguredRuntime(path.join(dir, "msp-unconfigured.sqlite3"));
+  try {
+    let thrown;
+    try {
+      await unconfigured.call("msp_knowledge_evidence_export", { actor: "zuri-importer", scope });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown, "an unconfigured bridge must reject, never answer an empty page").toBeDefined();
+    expect(thrown.message).toMatch(/gks_provider_unconfigured/);
+  } finally {
+    unconfigured.call.close();
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+  }
+});
+
 it("msp_memory_promote(target_scope=shared) fails closed with gks_provider_unconfigured when no provider is configured, and persists no promotion row", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "msp-gks-unconfigured-memory-"));
   const dbPath = path.join(dir, "msp.sqlite3");

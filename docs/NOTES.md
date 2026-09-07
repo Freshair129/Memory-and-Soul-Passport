@@ -1,7 +1,7 @@
 ---
-version: "0.1.4b"
+version: "0.1.5b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-08-30T01:58:00+07:00,KIN"
+last_update: "2026-09-07T00:00:00+07:00,Claude Fable 5.1"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -108,6 +108,7 @@ Promotion receipts can therefore be minted whose evidence chain points at nothin
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.5b | 2026-09-07 | beta | Added `msp_knowledge_evidence_export`, the relay of GKS's `gks_stage_evidence_export` for zuri-ai's evidence pull (`docs/TIER-BOUNDARY-17-STAGE.md` 0.2.0b): provider method, validated page, journal, fail-closed without a provider; reference fixture and bridge cases. The two 2026-08-30 QA design gaps above are unchanged. | working-tree | Claude Fable 5.1 |
 | 0.1.4b | 2026-08-30 | beta | Recorded QA-audit known gaps (context-tool caller ownership, evidence-ref namespacing) alongside the same audit's test-only closures. | 3767738 | KIN |
 | 0.1.3b | 2026-08-12 | beta | Recorded successful exact-slug repository creation and draft review publication. | 04f48f6 | ATHER |
 | 0.1.2b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |

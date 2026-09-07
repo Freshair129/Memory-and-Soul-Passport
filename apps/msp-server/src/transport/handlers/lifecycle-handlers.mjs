@@ -1,11 +1,110 @@
 // transport/handlers/lifecycle-handlers: msp_evidence_record,
 // msp_knowledge_promote (fail-closed stub), msp_memory_promote (WP-13
-// Bounded Scope item 6).
+// Bounded Scope item 6), msp_knowledge_evidence_export (the read-only relay
+// of GKS's gks_stage_evidence_export — docs/TIER-BOUNDARY-17-STAGE.md).
 import { proofRef, memoryPromotionRef, knowledgePromotionRef } from "@freshair129/msp-contracts/refs";
 import { rejectCanonicalCandidate, requireNoGksRefs } from "@freshair129/msp-contracts/namespace-guard";
 import { GksProviderInvalidResponseError, GksProviderUnconfiguredError, ValidationError } from "@freshair129/msp-contracts/errors";
 
 const HASH = /^[a-f0-9]{64}$/i;
+
+// zuri-ai's FR-109 / FR-071 identifiers, as GKS's export row carries them.
+// MSP checks the relayed page names exactly these — a provider that answers
+// with another definition is malformed, not a different pipeline.
+const KNOWLEDGE_INGESTION_DEFINITION_ID = "DPL-KNOWLEDGE-INGEST-V1";
+const KNOWLEDGE_INGESTION_CONTRACT_ID = "EXC-KNOWLEDGE-INGEST-V1";
+const PIPELINE_STAGE_ID = /^DPS-KI-[A-Z0-9]+(?:-[A-Z0-9]+)*$/;
+const STAGE_EVIDENCE_METRICS = ["records_in", "records_out", "records_failed", "records_quarantined", "processing_time_ms", "retry_count"];
+const EVIDENCE_EXPORT_MAX_LIMIT = 500;
+const SHARING = new Set(["private", "workspace", "portfolio-shared"]);
+
+function optionalScopeString(value, label) {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value !== "string") throw new ValidationError(`${label} must be a string.`);
+  return value.trim();
+}
+
+// The scope envelope GKS's port contract requires on every call: an explicit
+// portfolioId, no wildcard, no default. MSP relays it as the caller's claim;
+// GKS applies it in SQL.
+function validateEvidenceScope(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new ValidationError("scope is required.");
+  const scope = {
+    portfolioId: requireString(input.portfolioId, "scope.portfolioId"),
+    tenantId: optionalScopeString(input.tenantId, "scope.tenantId"),
+    businessId: optionalScopeString(input.businessId, "scope.businessId"),
+    workspaceId: optionalScopeString(input.workspaceId, "scope.workspaceId"),
+    projectId: optionalScopeString(input.projectId, "scope.projectId"),
+    sharing: input.sharing ?? "private",
+  };
+  if (!SHARING.has(scope.sharing)) throw new ValidationError("scope.sharing is invalid.");
+  return scope;
+}
+
+function validateEvidenceExportRequest(args) {
+  const scope = validateEvidenceScope(args.scope);
+  const sinceCursor = args.since_cursor === undefined || args.since_cursor === null ? 0 : args.since_cursor;
+  if (!Number.isInteger(sinceCursor) || sinceCursor < 0) throw new ValidationError("since_cursor must be a non-negative integer.");
+  const limit = args.limit === undefined || args.limit === null ? 100 : args.limit;
+  if (!Number.isInteger(limit) || limit < 1 || limit > EVIDENCE_EXPORT_MAX_LIMIT) {
+    throw new ValidationError(`limit must be an integer between 1 and ${EVIDENCE_EXPORT_MAX_LIMIT}.`);
+  }
+  return { scope, since_cursor: sinceCursor, limit };
+}
+
+function invalidPage(detail) {
+  return new GksProviderInvalidResponseError(`gks_provider_invalid_response: ${detail}`);
+}
+
+// Every field the relayed page carries is checked and rebuilt — nothing the
+// provider sent that the contract does not name reaches the caller. The
+// same defense-in-depth stance validateGksResult takes for a promotion.
+function validateEvidencePage(page, request) {
+  if (!page || typeof page !== "object" || !Array.isArray(page.rows)) throw invalidPage("evidence page must carry a rows array.");
+  if (!Number.isInteger(page.next_cursor) || page.next_cursor < request.since_cursor) {
+    throw invalidPage("next_cursor must be an integer no lower than since_cursor.");
+  }
+  let previousCursor = request.since_cursor;
+  const rows = page.rows.map((row, index) => {
+    if (!row || typeof row !== "object") throw invalidPage(`rows[${index}] must be an object.`);
+    if (!Number.isInteger(row.cursor) || row.cursor <= previousCursor) throw invalidPage(`rows[${index}].cursor must ascend past since_cursor.`);
+    previousCursor = row.cursor;
+    if (typeof row.pipeline_stage_id !== "string" || !PIPELINE_STAGE_ID.test(row.pipeline_stage_id)) throw invalidPage(`rows[${index}].pipeline_stage_id must be a DPS-KI-* id.`);
+    if (row.pipeline_definition_id !== KNOWLEDGE_INGESTION_DEFINITION_ID) throw invalidPage(`rows[${index}].pipeline_definition_id must be ${KNOWLEDGE_INGESTION_DEFINITION_ID}.`);
+    if (row.execution_contract_id !== KNOWLEDGE_INGESTION_CONTRACT_ID) throw invalidPage(`rows[${index}].execution_contract_id must be ${KNOWLEDGE_INGESTION_CONTRACT_ID}.`);
+    if (row.run_id !== null && (typeof row.run_id !== "string" || !row.run_id.trim())) throw invalidPage(`rows[${index}].run_id must be a string or null.`);
+    if (typeof row.provenance_ref !== "string" || !row.provenance_ref.trim()) throw invalidPage(`rows[${index}].provenance_ref is required.`);
+    if (typeof row.evidence_id !== "string" || !row.evidence_id.startsWith("gks:evidence/")) throw invalidPage(`rows[${index}].evidence_id must be a gks:evidence reference.`);
+    if (!row.evidence || typeof row.evidence !== "object" || Array.isArray(row.evidence)) throw invalidPage(`rows[${index}].evidence must be an object.`);
+    if (!Array.isArray(row.records)) throw invalidPage(`rows[${index}].records must be an array.`);
+    if (!row.metrics || typeof row.metrics !== "object") throw invalidPage(`rows[${index}].metrics must be an object.`);
+    const metrics = {};
+    for (const name of STAGE_EVIDENCE_METRICS) {
+      const value = row.metrics[name];
+      // NFR-020: zero, never absent — an omitted metric is a malformed row.
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw invalidPage(`rows[${index}].metrics.${name} must be a finite non-negative number.`);
+      metrics[name] = value;
+    }
+    if (typeof row.produced_at !== "string" || Number.isNaN(Date.parse(row.produced_at))) throw invalidPage(`rows[${index}].produced_at must be an ISO timestamp.`);
+    if (row.scope && row.scope.portfolioId !== request.scope.portfolioId) throw invalidPage(`rows[${index}].scope names another portfolio than the request.`);
+    return {
+      cursor: row.cursor,
+      evidence_id: row.evidence_id,
+      pipeline_stage_id: row.pipeline_stage_id,
+      pipeline_definition_id: row.pipeline_definition_id,
+      execution_contract_id: row.execution_contract_id,
+      run_id: row.run_id,
+      provenance_ref: row.provenance_ref,
+      scope: row.scope ?? null,
+      evidence: row.evidence,
+      metrics,
+      records: row.records,
+      produced_at: row.produced_at,
+    };
+  });
+  if (rows.length && page.next_cursor < rows[rows.length - 1].cursor) throw invalidPage("next_cursor must not fall behind the last row's cursor.");
+  return { rows, next_cursor: page.next_cursor };
+}
 // Mirrors packages/govibe-core/src/msp-client.mjs's KNOWLEDGE_FIELDS
 // exactly: a proof batch must not smuggle in knowledge-shaped content.
 const KNOWLEDGE_FIELDS = ["atoms", "symbols", "relations", "nodes", "edges", "communities", "processes", "context_snapshots"];
@@ -187,6 +286,31 @@ export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journa
       })();
       journal.append({ actor, toolName: "msp_knowledge_promote", ref: result.promotion_ref, workspaceId: args.workspace_id ?? null, payload: { idempotency_key: args.idempotency_key, knowledge_ref: result.knowledge_ref }, policyDecision: "allow" });
       return result;
+    },
+
+    // The relay of GKS's gks_stage_evidence_export, the one lawful path by
+    // which Tier-3 stage evidence reaches zuri-ai's ledger: zuri-ai calls
+    // this, MSP calls GKS, GKS answers a page, MSP checks its shape and hands
+    // it back. MSP writes nothing, keeps no cursor, and adds no scope —
+    // docs/TIER-BOUNDARY-17-STAGE.md: MSP owns no stage; it is on the path.
+    // Fails closed without a provider, exactly like msp_knowledge_promote.
+    async msp_knowledge_evidence_export(args = {}) {
+      const request = validateEvidenceExportRequest(args);
+      const actor = resolveActor(args);
+      if (!gksProvider) {
+        journal.append({ actor, toolName: "msp_knowledge_evidence_export", ref: null, workspaceId: request.scope.workspaceId || null, payload: { since_cursor: request.since_cursor, denied: true }, policyDecision: "deny", reason: "gks_provider_unconfigured" });
+        throw new GksProviderUnconfiguredError("gks_provider_unconfigured: MSP_GKS_COMMAND is not configured.");
+      }
+      const page = validateEvidencePage(await gksProvider.exportStageEvidence(request), request);
+      journal.append({
+        actor,
+        toolName: "msp_knowledge_evidence_export",
+        ref: null,
+        workspaceId: request.scope.workspaceId || null,
+        payload: { portfolio_id: request.scope.portfolioId, tenant_id: request.scope.tenantId, since_cursor: request.since_cursor, rows: page.rows.length, next_cursor: page.next_cursor },
+        policyDecision: "allow",
+      });
+      return page;
     },
 
     // Request fields as built by promoteMemory in
