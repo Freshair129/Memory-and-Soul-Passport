@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:msp:genesisrag17.v1",
+  "title": "GenesisRAG17 authenticated relay",
+  "contract": {
+    "version": "genesisrag17.v1",
+    "source": "docs/GENESISRAG17-RELAY.md"
+  },
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "portfolioId",
+        "tenantId",
+        "businessId",
+        "workspaceId",
+        "agentId",
+        "visibility"
+      ],
+      "properties": {
+        "portfolioId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tenantId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "businessId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "agentId": {
+          "type": "string"
+        },
+        "visibility": {
+          "const": "private"
+        }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "scope",
+        "credential"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "genesisrag17.v1"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "credential": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "msp_pipeline_submit",
+      "roles": [
+        "source"
+      ],
+      "inputSchema": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/envelope"
+          }
+        ],
+        "required": [
+          "batch"
+        ],
+        "properties": {
+          "batch": {
+            "type": "object",
+            "required": [
+              "schemaVersion",
+              "batchId",
+              "idempotencyKey",
+              "scope",
+              "runId",
+              "stages",
+              "source",
+              "policy",
+              "chunks",
+              "mentions"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_pipeline_evidence",
+      "roles": [
+        "source"
+      ],
+      "inputSchema": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/envelope"
+          }
+        ],
+        "required": [
+          "runId"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "afterCursor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_pipeline_claim",
+      "roles": [
+        "worker"
+      ],
+      "inputSchema": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/envelope"
+          }
+        ],
+        "properties": {
+          "limit": {
+            "const": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_pipeline_graph_receipt",
+      "roles": [
+        "worker"
+      ],
+      "inputSchema": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/envelope"
+          }
+        ],
+        "required": [
+          "receipt"
+        ],
+        "properties": {
+          "receipt": {
+            "type": "object",
+            "required": [
+              "schemaVersion",
+              "scope",
+              "runId",
+              "decisionId",
+              "decisionHash",
+              "stages",
+              "transaction",
+              "readback",
+              "metrics",
+              "startedAt",
+              "finishedAt"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_pipeline_write_receipt",
+      "roles": [
+        "worker"
+      ],
+      "inputSchema": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/envelope"
+          }
+        ],
+        "required": [
+          "receipt"
+        ],
+        "properties": {
+          "receipt": {
+            "type": "object",
+            "required": [
+              "schemaVersion",
+              "scope",
+              "runId",
+              "decisionId",
+              "decisionHash",
+              "stages",
+              "snapshotId",
+              "generation",
+              "model",
+              "transaction",
+              "readback",
+              "laneManifest",
+              "metrics",
+              "benchmark",
+              "graphReceiptHash",
+              "derivedHash",
+              "executionTimes"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_pipeline_gate",
+      "roles": [
+        "worker"
+      ],
+      "inputSchema": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/envelope"
+          }
+        ],
+        "required": [
+          "decisionId",
+          "decisionHash"
+        ],
+        "properties": {
+          "decisionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "decisionHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_pipeline_publication_receipt",
+      "roles": [
+        "worker"
+      ],
+      "inputSchema": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/envelope"
+          }
+        ],
+        "required": [
+          "receipt"
+        ],
+        "properties": {
+          "receipt": {
+            "type": "object",
+            "required": [
+              "schemaVersion",
+              "scope",
+              "runId",
+              "decisionId",
+              "decisionHash",
+              "snapshotId",
+              "generation",
+              "receiptHash",
+              "publishedAt",
+              "pointerHash",
+              "modelRevision",
+              "transactionFrontier",
+              "readback"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_pipeline_query",
+      "roles": [
+        "source",
+        "worker"
+      ],
+      "inputSchema": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/envelope"
+          }
+        ],
+        "required": [
+          "query"
+        ],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000
+          },
+          "topK": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "snapshotId": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_pipeline_stage_failure",
+      "roles": [
+        "worker"
+      ],
+      "inputSchema": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/envelope"
+          }
+        ],
+        "required": [
+          "runId",
+          "decisionId",
+          "decisionHash",
+          "stage",
+          "startedAt",
+          "finishedAt",
+          "metrics",
+          "error"
+        ]
+      }
+    }
+  ]
+}

@@ -18,6 +18,10 @@ related_docs:
 
 # API Contract: Persistent-Memory MSP Runtime (msp_memory_*)
 
+The isolated GenesisRAG17 pipeline tool family is specified separately in
+[GenesisRAG17 relay](GENESISRAG17-RELAY.md). It adds authenticated scoped
+batch/evidence/receipt/query relays and preserves the frozen memory schemas below.
+
 ## 1. Purpose
 
 Define the wire contract for the new `msp_memory_*` tool family exposed by

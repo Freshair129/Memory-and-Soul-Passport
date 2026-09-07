@@ -1,5 +1,5 @@
 ---
-version: "0.2.0b"
+version: "0.3.0b"
 created_at: "2026-08-29T14:45:00+07:00,Claude Opus 5,working-tree"
 last_update: "2026-09-07T00:00:00+07:00,Claude Fable 5.1"
 status: "beta"
@@ -74,6 +74,11 @@ process against GKS's reference fixture
 (GKS's `msp-service-chain` and zuri-ai's `fr110-knowledge-evidence-chain`).
 
 ## Where completion is reported — and it is not MSP reporting it
+
+The approved isolated pipeline adds authenticated batch, decision pull, physical
+receipt, gate, publication receipt and query relays:
+[GenesisRAG17 relay](GENESISRAG17-RELAY.md). GKS evaluates the combined quality
+gate; the Tier4 worker publishes physically. MSP performs neither operation.
 
 Stage completion is recorded in zuri-ai, in two places:
 
