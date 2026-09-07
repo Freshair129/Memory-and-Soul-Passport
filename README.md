@@ -24,6 +24,13 @@ Standalone ESM workspace for the MSP memory/context runtime extracted from GoVib
 - `migrations` — canonical schema ownership
 - `tests` — contract, security, and end-to-end integration proof
 
+The API-010 thread-memory surface is documented in
+`docs/API-010-THREAD-MEMORY-CONTRACT.md`. It adds MSP-owned thread, speaker,
+session, protected-memory and compaction state alongside the existing API-009
+vault memory tools. Its deployment defaults are six recent exchanges and a
+30-minute human-message idle timeout (`MSP_THREAD_RECENT_EXCHANGES` and
+`MSP_THREAD_IDLE_TIMEOUT_MINUTES`).
+
 ## Local verification
 
 ```powershell

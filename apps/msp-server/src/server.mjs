@@ -27,6 +27,7 @@ import { createVectorClient } from "@freshair129/msp-retrieval/vector";
 import { createContextHandlers } from "./transport/handlers/context-handlers.mjs";
 import { createLifecycleHandlers } from "./transport/handlers/lifecycle-handlers.mjs";
 import { createMemoryHandlers } from "./transport/handlers/memory-handlers.mjs";
+import { createThreadHandlers } from "./transport/handlers/thread-handlers.mjs";
 import { createGksProviderFromEnvironment } from "./providers/gks-stdio-provider.mjs";
 import { createVaultHandlers } from "./transport/handlers/vault-handlers.mjs";
 import { createStdioJsonRpcServer } from "./transport/stdio-jsonrpc-server.mjs";
@@ -62,6 +63,16 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const contextHandlers = createContextHandlers({ db, journal });
   const lifecycleHandlers = createLifecycleHandlers({ db, entityStore, vaultRegistry, journal, gksProvider });
   const memoryHandlers = createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore });
+  const parsePositiveEnv = (name, fallback) => {
+    const value = Number(env[name] ?? fallback);
+    return Number.isInteger(value) && value > 0 ? value : fallback;
+  };
+  const threadHandlers = createThreadHandlers({
+    db,
+    journal,
+    idleTimeoutMinutes: parsePositiveEnv("MSP_THREAD_IDLE_TIMEOUT_MINUTES", 30),
+    recentExchangeCount: parsePositiveEnv("MSP_THREAD_RECENT_EXCHANGES", 6),
+  });
 
   const toolRegistry = new ToolRegistry();
   toolRegistry.register("msp_ping", async () => ({ ok: true, timestamp: new Date().toISOString() }));
@@ -69,6 +80,7 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   for (const [name, handler] of Object.entries(contextHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(lifecycleHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(memoryHandlers)) toolRegistry.register(name, handler);
+  for (const [name, handler] of Object.entries(threadHandlers)) toolRegistry.register(name, handler);
 
   const transport = createStdioJsonRpcServer({ toolRegistry, input, output });
 
@@ -77,5 +89,5 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
     db.close();
   }
 
-  return { db, entityStore, journal, vaultRegistry, linksStore, retrievalService, vectorClient, toolRegistry, transport, close };
+  return { db, entityStore, journal, vaultRegistry, linksStore, retrievalService, vectorClient, threadHandlers, toolRegistry, transport, close };
 }

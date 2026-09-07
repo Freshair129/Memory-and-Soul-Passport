@@ -40,7 +40,7 @@ The packed tarball was installed with `npm install --ignore-scripts` into an iso
 
 ## Migration integrity
 
-All seven root migration files matched the SHA-256 of the corresponding GoVibe source migration immediately after copy. Runtime migration tests also passed checksum-drift, downgrade, ordering, and idempotency checks.
+The seven extraction migrations matched the SHA-256 of the corresponding GoVibe source migration immediately after copy. API-010 adds the eighth, MSP-owned thread-memory migration. Runtime migration tests pass checksum-drift, downgrade, ordering, and idempotency checks for the expanded set.
 
 ## Delivery
 
