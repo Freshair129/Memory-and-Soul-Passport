@@ -1,7 +1,7 @@
 ---
-version: "1.3.0b"
+version: "1.4.0b"
 created_at: "2026-09-07T23:00:00+07:00,RWANG,working-tree"
-last_update: "2026-09-08T00:00:00+07:00,ATHER"
+last_update: "2026-09-08T04:00:00+07:00,RWANG"
 status: "beta"
 superseded_by: null
 attributes:
@@ -18,6 +18,14 @@ caller, enforces the six-field scope and role grant, forwards a request to the
 right downstream owner, validates the returned envelope, and journals counts.
 MSP owns **no pipeline stage, content store, execution cursor, canonical
 decision, quality verdict, embedding, graph write, or publication pointer**.
+
+The approved code-audit remediation freezes PASS-only publication for this
+isolated profile. A gate response with `allowPublication: true` and a verdict
+other than `PASS` is an invalid provider response; MSP rejects it rather than
+changing the verdict. `WARN` with `allowPublication: false` remains valid and
+is a non-publishing terminal result in GKS/zuri. A submit acknowledgement may
+carry `decisionId: null` while pending; callers retain their durable batch and
+retry its original identity. MSP neither invents a decision ID nor owns retries.
 
 The cross-repository wire authority is the [zuri-ai GenesisRAG17
 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md),
@@ -264,6 +272,7 @@ with no changes to the frozen API-009 memory surface.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 1.4.0b | 2026-09-08 | beta | Enforce PASS-only publication responses and preserve Pending/null acknowledgement semantics after code audit. | working-tree | RWANG |
 | 1.3.0b | 2026-09-08 | beta | Documented all nine authenticated operations, ownership, exact grants/scope, ordered execution, query loopback, extension rules, code/test paths and pinned zuri-ai acceptance. | working-tree | ATHER |
 | 1.2.0b | 2026-09-07 | beta | Authenticated stage failures terminate honestly; publication receipt is required only for successful completion. | working-tree | RWANG |
 | 1.1.0b | 2026-09-07 | beta | Added graph-only receipt acknowledgement before GKS enrichment and physical embedding/indexing. | working-tree | RWANG |

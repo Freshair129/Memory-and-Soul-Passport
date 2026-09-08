@@ -87,6 +87,7 @@ export function validatePipelineResponse(result, request, suffix) {
     if (suffix === "graph_receipt" && (!/^[a-f0-9]{64}$/.test(result.graphReceiptHash) || !/^[a-f0-9]{64}$/.test(result.derivedHash) || !Array.isArray(result.derived))) invalid();
     if (suffix === "write_receipt" && !/^[a-f0-9]{64}$/.test(result.receiptHash)) invalid();
     if (suffix === "gate" && (!result.verdict || result.verdict.decisionId !== request.decisionId || result.verdict.decisionHash !== request.decisionHash || !["PASS", "WARN", "FAIL"].includes(result.verdict.verdict) || typeof result.verdict.allowPublication !== "boolean")) invalid();
+    if (suffix === "gate" && result.verdict.allowPublication && result.verdict.verdict !== "PASS") invalid();
     if (suffix === "evidence") {
       if (!Array.isArray(result.rows) || result.rows.length > (request.limit ?? 100)) invalid();
       let cursor = request.afterCursor ?? 0;

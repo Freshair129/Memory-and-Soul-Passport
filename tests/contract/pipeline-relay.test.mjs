@@ -12,6 +12,20 @@ const metrics = { records_in: 2, records_out: 1, records_quarantined: 1, error_c
 const row = { ...envelope, cursor: 1, runId: "run", pipelineStageId: "stage-9", executionStepId: "step-9", attemptId: "attempt-9", stageNumber: 9, outcome: "SUCCEEDED", startedAt: "2026-09-07T00:00:00Z", finishedAt: "2026-09-07T00:00:01Z", metrics, details: {} };
 
 describe("genesisrag17 relay contract", () => {
+  it("preserves pending submit acknowledgements and enforces PASS-only publication", () => {
+    const submit = { ...envelope, batch: { batchId: "batch" } };
+    const pending = { ...envelope, batchId: "batch", decisionId: null, status: "PENDING" };
+    expect(validatePipelineResponse(pending, submit, "submit")).toEqual(pending);
+    const request = { ...envelope, decisionId: "decision", decisionHash: "a".repeat(64) };
+    for (const verdict of ["PASS", "WARN", "FAIL"]) {
+      const denied = { ...envelope, verdict: { ...request, verdict, allowPublication: false } };
+      expect(validatePipelineResponse(denied, request, "gate")).toEqual(denied);
+      const allowed = { ...envelope, verdict: { ...denied.verdict, allowPublication: true } };
+      if (verdict === "PASS") expect(validatePipelineResponse(allowed, request, "gate")).toEqual(allowed);
+      else expect(() => validatePipelineResponse(allowed, request, "gate")).toThrow(/invalid_response/);
+    }
+  });
+
   it("replaces caller identity, relays exact batch and journals no payload or credential", async () => {
     const calls = [], journal = [];
     const handlers = createPipelineHandlers({ env, journal: { append: (entry) => journal.push(entry) }, gksProvider: { pipelineCall: async (...args) => { calls.push(args); return { ...envelope, batchId: "batch", decisionId: "decision", status: "READY" }; } } });
