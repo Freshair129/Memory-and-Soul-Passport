@@ -1,7 +1,7 @@
 ---
-version: "1.4.0b"
+version: "1.4.1b"
 created_at: "2026-09-07T23:00:00+07:00,RWANG,working-tree"
-last_update: "2026-09-08T04:00:00+07:00,RWANG"
+last_update: "2026-09-08T20:00:00+07:00,RWANG"
 status: "beta"
 superseded_by: null
 attributes:
@@ -32,8 +32,8 @@ contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/doc
 version `genesisrag17.v1`. The stage explanations are in the [stage
 specification](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-SPEC.md)
 and [stage flow](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-FLOW.md).
-The current isolated execution and publication decision is [ADR-071 —
-GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-071-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
+The current isolated execution and publication decision is [ADR-073 —
+GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
 The machine-readable MSP copy is
 [`packages/msp-contracts/schemas/GENESISRAG17.tools.json`](../packages/msp-contracts/schemas/GENESISRAG17.tools.json),
 and its runtime guard is
@@ -80,7 +80,7 @@ Ownership is therefore:
 
 The authoritative zuri-ai tier assignment remains the [ADR-050 knowledge
 ingestion boundary](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-050-KNOWLEDGE-INGESTION-TIER-BOUNDARY.md).
-The current GenesisRAG17 isolated execution and publication profile is [ADR-071](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-071-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
+The current GenesisRAG17 isolated execution and publication profile is [ADR-073](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
 The MSP-specific decision is [ADR-MSP-GENESISRAG17-RELAY](ADR-MSP-GENESISRAG17-RELAY.md).
 
 ## Authentication and scope
@@ -280,3 +280,7 @@ with no changes to the frozen API-009 memory surface.
 | 1.2.0b | 2026-09-07 | beta | Authenticated stage failures terminate honestly; publication receipt is required only for successful completion. | working-tree | RWANG |
 | 1.1.0b | 2026-09-07 | beta | Added graph-only receipt acknowledgement before GKS enrichment and physical embedding/indexing. | working-tree | RWANG |
 | 1.0.0b | 2026-09-07 | beta | Introduced the authenticated `genesisrag17.v1` relay without changing the frozen memory contract. | working-tree | RWANG |
+
+## Reference version diff — 2026-09-08
+
+"1.4.0b → 1.4.1b: follow zuri's pre-merge ADR-071 → ADR-073 collision repair because published main owns ADR-071 for CRM. Historical revision rows and pinned acceptance reports retain their original identifiers. Protocol and runtime behavior are unchanged.

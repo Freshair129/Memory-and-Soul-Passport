@@ -1,7 +1,7 @@
 ---
-version: "0.2.0b"
+version: "0.2.1b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-08T00:00:00+07:00,ATHER"
+last_update: "2026-09-08T20:00:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp"
@@ -59,7 +59,7 @@ for synthetic credentials and explicit disposable paths. The machine schema is
 [`packages/msp-contracts/schemas/GENESISRAG17.tools.json`](packages/msp-contracts/schemas/GENESISRAG17.tools.json).
 
 The cross-repository wire authority is zuri-ai's [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md).
-The current isolated execution and publication decision is zuri-ai's [ADR-071 — GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-071-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
+The current isolated execution and publication decision is zuri-ai's [ADR-073 — GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
 The raw-to-publication acceptance is pinned to [commit `b64b46df`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257).
 
 ## Compatibility status
@@ -73,3 +73,7 @@ See [docs/NOTES.md](docs/NOTES.md) for extraction evidence and known gaps, and [
 | 0.2.0b | 2026-09-08 | beta | Added the authenticated GenesisRAG17 relay boundary, nine-tool ownership summary, pinned zuri-ai acceptance pointer, ADR and isolated local runbook. | working-tree | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
 | 0.1.0b | 2026-08-12 | beta | Initial standalone workspace documentation. | 394a176 | ATHER |
+
+## Reference version diff — 2026-09-08
+
+"0.2.0b → 0.2.1b: follow zuri's pre-merge ADR-071 → ADR-073 collision repair because published main owns ADR-071 for CRM. Historical revision rows and pinned acceptance reports retain their original identifiers. Protocol and runtime behavior are unchanged.

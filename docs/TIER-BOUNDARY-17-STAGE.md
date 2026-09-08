@@ -1,7 +1,7 @@
 ---
-version: "0.4.0b"
+version: "0.4.1b"
 created_at: "2026-08-29T14:45:00+07:00,Claude Opus 5,working-tree"
-last_update: "2026-09-08T00:00:00+07:00,ATHER"
+last_update: "2026-09-08T20:00:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "mission-state-protocol"
@@ -85,8 +85,8 @@ wire field requires coordinated contract/schema changes across repositories.
 The cross-repository authority is zuri-ai's [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md),
 [stage specification](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-SPEC.md),
 and [stage flow](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-FLOW.md).
-The current isolated execution and publication decision is [ADR-071 —
-GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-071-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
+The current isolated execution and publication decision is [ADR-073 —
+GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
 The raw-to-publication acceptance is pinned to [zuri-ai commit `b64b46df`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257).
 
 ## What MSP relays for the evidence pull (2026-09-07)
@@ -133,7 +133,7 @@ not a stage ledger.
 Authoritative in zuri-ai:
 
 - [ADR-050 knowledge-ingestion tier boundary](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-050-KNOWLEDGE-INGESTION-TIER-BOUNDARY.md)
-- [ADR-071 GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-071-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md)
+- [ADR-073 GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md)
 - [FR-109 stage catalog](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/domains/knowledge/features/FR-109-knowledge-ingestion-stage-catalog.md)
 - [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md)
 
@@ -146,3 +146,7 @@ If this file and those disagree, those win.
 | 0.4.0b | 2026-09-08 | beta | Added the complete authenticated GenesisRAG17 relay boundary, source/worker grant split, Tier 4 query route, extension rules and pinned zuri-ai links; removed local checkout paths. | working-tree | ATHER |
 | 0.2.0b | 2026-09-07 | beta | Added the one relay MSP carries for the evidence pull, `msp_knowledge_evidence_export` — GKS's `gks_stage_evidence_export` validated and handed back, no cursor, no added scope, fail-closed without a provider — with the provider method and the reference fixture that prove it. MSP still owns no stage. | working-tree | Claude Fable 5.1 |
 | 0.1.0b | 2026-08-29 | beta | Recorded that MSP owns none of the seventeen pipeline stages, and what it is on the call path for — neither of which was written anywhere in this repository before. | working-tree | Claude Opus 5 |
+
+## Reference version diff — 2026-09-08
+
+"0.4.0b → 0.4.1b: follow zuri's pre-merge ADR-071 → ADR-073 collision repair because published main owns ADR-071 for CRM. Historical revision rows and pinned acceptance reports retain their original identifiers. Protocol and runtime behavior are unchanged.

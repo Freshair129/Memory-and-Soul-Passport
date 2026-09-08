@@ -1,7 +1,7 @@
 ---
-version: "1.0.0b"
+version: "1.0.1b"
 created_at: "2026-09-08T00:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-08T00:00:00+07:00,ATHER"
+last_update: "2026-09-08T20:00:00+07:00,RWANG"
 status: "beta"
 superseded_by: null
 attributes:
@@ -30,8 +30,8 @@ The wire authority is the [zuri-ai GenesisRAG17
 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md),
 `genesisrag17.v1`. The implementation and acceptance branch is
 [`codex/ki17-integration`](https://github.com/Freshair129/zuri.ai/tree/codex/ki17-integration);
-the current isolated execution and publication decision is [ADR-071 —
-GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-071-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md);
+the current isolated execution and publication decision is [ADR-073 —
+GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md);
 the acceptance proof is pinned to
 [`b64b46df057d3160c659afa3c34628ee86520257`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257).
 
@@ -160,3 +160,7 @@ state, and all four repositories must review a contract change together.
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
 | 1.0.0b | 2026-09-08 | beta | Accepted the MSP-only authenticated relay boundary, nine operations, exact grants/scope, ordered execution, Tier 4 query route and coordinated extension rules. | working-tree | ATHER |
+
+## Reference version diff — 2026-09-08
+
+"1.0.0b → 1.0.1b: follow zuri's pre-merge ADR-071 → ADR-073 collision repair because published main owns ADR-071 for CRM. Historical revision rows and pinned acceptance reports retain their original identifiers. Protocol and runtime behavior are unchanged.
