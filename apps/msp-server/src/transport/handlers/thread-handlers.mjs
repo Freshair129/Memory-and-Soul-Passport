@@ -84,12 +84,15 @@ export function createThreadHandlers({ db, journal, idleTimeoutMinutes = 30, rec
       return store.context({
         threadId: args.thread_id,
         recentExchangeCount: bounded(args.recent_exchange_count, recentExchangeCount, "recent_exchange_count"),
+        currentExchangeId: args.current_exchange_id,
+        requesterPersonId: args.requester_person_id,
         now: args.now,
       });
     },
 
     async msp_session_sweep(args = {}) {
-      return store.sweepIdleSessions({ now: args.now, limit: args.limit ?? 100 });
+      return store.sweepIdleSessions({ now: args.now, limit: args.limit ?? 100, tenantId: args.tenant_id,
+        businessId: args.business_id, channelAccountId: args.channel_account_id, externalRoomRef: args.external_room_ref });
     },
 
     async msp_session_compaction_commit(args = {}) {
@@ -103,12 +106,24 @@ export function createThreadHandlers({ db, journal, idleTimeoutMinutes = 30, rec
         policyRevision: args.policy_revision,
         summarizerVersion: args.summarizer_version,
         invocationState: args.invocation_state,
+        leaseToken: args.lease_token,
         now: args.now,
       });
     },
 
     async msp_session_compaction_retry(args = {}) {
-      return store.retryCompaction({ jobId: args.job_id, error: args.error, now: args.now });
+      return store.retryCompaction({ jobId: args.job_id, error: args.error, leaseToken: args.lease_token, now: args.now });
+    },
+    async msp_session_compaction_claim(args = {}) {
+      return store.claimCompaction({ jobId: args.job_id, workerId: args.worker_id, leaseSeconds: args.lease_seconds, now: args.now });
+    },
+    async msp_thread_delivery_record(args = {}) {
+      return store.recordDelivery({ inboundMessageId: args.inbound_message_id, sourceEventId: args.source_event_id, receiptId: args.receipt_id,
+        outcome: args.outcome, text: args.text, providerRef: args.provider_ref, scope: args.delivery_scope, now: args.now });
+    },
+    async msp_thread_injection_record(args = {}) {
+      return store.recordInjection({ threadId: args.thread_id, exchangeId: args.exchange_id, injectionId: args.injection_id,
+        packetHash: args.packet_hash, policyRevision: args.policy_revision, modelRef: args.model_ref, state: args.state, now: args.now });
     },
   };
 }

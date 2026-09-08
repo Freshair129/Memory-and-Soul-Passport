@@ -93,11 +93,11 @@ describe("db/migrate (AC-03)", () => {
     expect(() => runMigrations(db, migrationsDir)).toThrow(/downgrade|newer than the newest/i);
   });
 
-  it("applies the real packaged migrations (0001-0008, including thread memory state) without error", () => {
+  it("applies the real packaged migrations (0001-0009, including thread memory state) without error", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(8);
+    expect(result.appliedCount).toBe(9);
     const tables = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN " +
@@ -136,7 +136,7 @@ describe("db/migrate (AC-03)", () => {
     runMigrations(db, migrationsDir);
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(0);
-    expect(second.currentVersion).toBe(8);
+    expect(second.currentVersion).toBe(9);
   });
 
   it("WP-16 AC-01: the lifecycle_state CHECK constraint rejects an out-of-enum value", () => {

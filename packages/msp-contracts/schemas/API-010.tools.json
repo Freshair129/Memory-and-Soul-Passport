@@ -4,34 +4,683 @@
   "title": "API-010 Thread Memory MSP tools",
   "contract": {
     "doc_id": "API-010-THREAD-MEMORY-CONTRACT",
-    "version": "0.1.0b",
+    "version": "0.2.0b",
     "source": "docs/API-010-THREAD-MEMORY-CONTRACT.md"
   },
   "$defs": {
-    "string": { "type": "string", "minLength": 1 },
-    "timestamp": { "type": "string", "format": "date-time" },
+    "string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
     "summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["topics", "decisions", "openQuestions", "pendingActions", "corrections", "outcomes", "participants"],
+      "required": [
+        "topics",
+        "decisions",
+        "openQuestions",
+        "pendingActions",
+        "corrections",
+        "outcomes",
+        "participants"
+      ],
       "properties": {
-        "topics": { "type": "array", "items": { "$ref": "#/$defs/string" } },
-        "decisions": { "type": "array", "items": { "$ref": "#/$defs/string" } },
-        "openQuestions": { "type": "array", "items": { "$ref": "#/$defs/string" } },
-        "pendingActions": { "type": "array", "items": { "$ref": "#/$defs/string" } },
-        "corrections": { "type": "array", "items": { "$ref": "#/$defs/string" } },
-        "outcomes": { "type": "array", "items": { "$ref": "#/$defs/string" } },
-        "participants": { "type": "array", "items": { "$ref": "#/$defs/string" } }
+        "topics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/summaryItem"
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/summaryItem"
+          }
+        },
+        "openQuestions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/summaryItem"
+          }
+        },
+        "pendingActions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/summaryItem"
+          }
+        },
+        "corrections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/summaryItem"
+          }
+        },
+        "outcomes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/summaryItem"
+          }
+        },
+        "participants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/summaryItem"
+          }
+        }
+      }
+    },
+    "summaryItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "sourceMessageRefs",
+        "speakerId"
+      ],
+      "properties": {
+        "text": {
+          "$ref": "#/$defs/string"
+        },
+        "sourceMessageRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/string"
+          }
+        },
+        "speakerId": {
+          "$ref": "#/$defs/string"
+        },
+        "verificationState": {
+          "const": "CANDIDATE"
+        }
+      }
+    },
+    "access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grant",
+        "signature"
+      ],
+      "properties": {
+        "grant": {
+          "type": "object",
+          "required": [
+            "tenantId",
+            "principalId",
+            "policyRevision",
+            "operation",
+            "expiresAt",
+            "payloadHash"
+          ],
+          "properties": {
+            "expiresAt": {
+              "type": "number"
+            },
+            "payloadHash": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
       }
     }
   },
   "tools": [
-    { "name": "msp_thread_resolve", "inputSchema": { "type": "object", "additionalProperties": false, "required": ["thread_kind", "channel_type", "channel_account_id", "external_room_ref", "tenant_id"], "properties": { "thread_kind": { "enum": ["DIRECT", "GROUP", "ROOM"] }, "audience_kind": { "enum": ["DIRECT", "GROUP", "ROOM"] }, "channel_type": { "$ref": "#/$defs/string" }, "channel_account_id": { "$ref": "#/$defs/string" }, "external_room_ref": { "$ref": "#/$defs/string" }, "tenant_id": { "$ref": "#/$defs/string" }, "business_id": { "type": ["string", "null"] }, "actor": { "type": "string" }, "now": { "$ref": "#/$defs/timestamp" } } } },
-    { "name": "msp_thread_message_append", "inputSchema": { "type": "object", "additionalProperties": false, "required": ["thread_id", "speaker_id", "speaker_kind", "identity_assurance", "direction", "text"], "properties": { "thread_id": { "$ref": "#/$defs/string" }, "session_id": { "type": ["string", "null"] }, "exchange_id": { "type": "string" }, "source_event_id": { "type": "string" }, "speaker_id": { "$ref": "#/$defs/string" }, "speaker_kind": { "enum": ["HUMAN", "AGENT", "OPERATOR", "UNKNOWN"] }, "person_id": { "type": ["string", "null"] }, "identity_assurance": { "enum": ["VERIFIED", "PENDING", "UNRESOLVED"] }, "direction": { "enum": ["INBOUND", "OUTBOUND"] }, "text": { "$ref": "#/$defs/string" }, "occurred_at": { "$ref": "#/$defs/timestamp" }, "received_at": { "$ref": "#/$defs/timestamp" }, "reply_to_message_id": { "type": "string" }, "delivery_state": { "type": "string" }, "idle_timeout_minutes": { "type": "integer", "minimum": 1 }, "policy_revision": { "type": "string" }, "now": { "$ref": "#/$defs/timestamp" } } } },
-    { "name": "msp_thread_memory_record", "inputSchema": { "type": "object", "additionalProperties": false, "required": ["thread_id", "kind", "asserted_by_speaker_id", "body", "source_message_refs"], "properties": { "thread_id": { "$ref": "#/$defs/string" }, "session_id": { "type": "string" }, "kind": { "enum": ["CONSTRAINT", "INSTRUCTION", "CORRECTION", "PREFERENCE"] }, "asserted_by_speaker_id": { "$ref": "#/$defs/string" }, "subject_person_id": { "type": "string" }, "scope": { "type": "object" }, "body": { "type": "object" }, "source_message_refs": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/string" } }, "supersedes_record_id": { "type": "string" }, "status": { "enum": ["ACTIVE", "REVOKED", "SUPERSEDED"] }, "verification_state": { "enum": ["CANDIDATE", "CONFIRMED", "CONTESTED"] }, "now": { "$ref": "#/$defs/timestamp" } } } },
-    { "name": "msp_thread_context", "inputSchema": { "type": "object", "additionalProperties": false, "required": ["thread_id"], "properties": { "thread_id": { "$ref": "#/$defs/string" }, "recent_exchange_count": { "type": "integer", "minimum": 1 }, "now": { "$ref": "#/$defs/timestamp" } } } },
-    { "name": "msp_session_sweep", "inputSchema": { "type": "object", "additionalProperties": false, "properties": { "now": { "$ref": "#/$defs/timestamp" }, "limit": { "type": "integer", "minimum": 1 } } } },
-    { "name": "msp_session_compaction_commit", "inputSchema": { "type": "object", "additionalProperties": false, "required": ["session_id", "source_start_sequence", "source_end_sequence", "summary", "policy_revision", "summarizer_version", "invocation_state"], "properties": { "session_id": { "$ref": "#/$defs/string" }, "job_id": { "type": "string" }, "source_start_sequence": { "type": "integer", "minimum": 0 }, "source_end_sequence": { "type": "integer", "minimum": 1 }, "summary": { "$ref": "#/$defs/summary" }, "source_digest": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }, "policy_revision": { "$ref": "#/$defs/string" }, "summarizer_version": { "$ref": "#/$defs/string" }, "invocation_state": { "const": "TERMINAL" }, "now": { "$ref": "#/$defs/timestamp" } } } },
-    { "name": "msp_session_compaction_retry", "inputSchema": { "type": "object", "additionalProperties": false, "required": ["job_id", "error"], "properties": { "job_id": { "$ref": "#/$defs/string" }, "error": { "$ref": "#/$defs/string" }, "now": { "$ref": "#/$defs/timestamp" } } } }
+    {
+      "name": "msp_thread_resolve",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "thread_kind",
+          "channel_type",
+          "channel_account_id",
+          "external_room_ref",
+          "tenant_id",
+          "access"
+        ],
+        "properties": {
+          "thread_kind": {
+            "enum": [
+              "DIRECT",
+              "GROUP",
+              "ROOM"
+            ]
+          },
+          "audience_kind": {
+            "enum": [
+              "DIRECT",
+              "GROUP",
+              "ROOM"
+            ]
+          },
+          "channel_type": {
+            "$ref": "#/$defs/string"
+          },
+          "channel_account_id": {
+            "$ref": "#/$defs/string"
+          },
+          "external_room_ref": {
+            "$ref": "#/$defs/string"
+          },
+          "tenant_id": {
+            "$ref": "#/$defs/string"
+          },
+          "business_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor": {
+            "type": "string"
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_thread_message_append",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "thread_id",
+          "speaker_id",
+          "speaker_kind",
+          "identity_assurance",
+          "direction",
+          "text",
+          "access"
+        ],
+        "properties": {
+          "thread_id": {
+            "$ref": "#/$defs/string"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exchange_id": {
+            "type": "string"
+          },
+          "source_event_id": {
+            "type": "string"
+          },
+          "speaker_id": {
+            "$ref": "#/$defs/string"
+          },
+          "speaker_kind": {
+            "enum": [
+              "HUMAN",
+              "AGENT",
+              "OPERATOR",
+              "UNKNOWN"
+            ]
+          },
+          "person_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "identity_assurance": {
+            "enum": [
+              "VERIFIED",
+              "PENDING",
+              "UNRESOLVED"
+            ]
+          },
+          "direction": {
+            "enum": [
+              "INBOUND",
+              "OUTBOUND"
+            ]
+          },
+          "text": {
+            "$ref": "#/$defs/string"
+          },
+          "occurred_at": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "received_at": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "reply_to_message_id": {
+            "type": "string"
+          },
+          "delivery_state": {
+            "type": "string"
+          },
+          "idle_timeout_minutes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "policy_revision": {
+            "type": "string"
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "message_id": {
+            "$ref": "#/$defs/string"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_thread_memory_record",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "thread_id",
+          "kind",
+          "asserted_by_speaker_id",
+          "body",
+          "source_message_refs",
+          "access"
+        ],
+        "properties": {
+          "thread_id": {
+            "$ref": "#/$defs/string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "CONSTRAINT",
+              "INSTRUCTION",
+              "CORRECTION",
+              "PREFERENCE"
+            ]
+          },
+          "asserted_by_speaker_id": {
+            "$ref": "#/$defs/string"
+          },
+          "subject_person_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object"
+          },
+          "body": {
+            "type": "object"
+          },
+          "source_message_refs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/string"
+            }
+          },
+          "supersedes_record_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ACTIVE",
+              "REVOKED",
+              "SUPERSEDED"
+            ]
+          },
+          "verification_state": {
+            "enum": [
+              "CANDIDATE",
+              "CONFIRMED",
+              "CONTESTED"
+            ]
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": [
+          "recordId",
+          "threadId",
+          "assertedBySpeakerId",
+          "sourceMessageRefs",
+          "verificationState"
+        ]
+      }
+    },
+    {
+      "name": "msp_thread_context",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "thread_id",
+          "access"
+        ],
+        "properties": {
+          "thread_id": {
+            "$ref": "#/$defs/string"
+          },
+          "recent_exchange_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "current_exchange_id": {
+            "$ref": "#/$defs/string"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": [
+          "thread",
+          "recentExchanges",
+          "threadSummaries",
+          "protectedRecords",
+          "participants",
+          "coverageGap"
+        ],
+        "properties": {
+          "thread": {
+            "type": "object",
+            "required": [
+              "threadId",
+              "audienceKind"
+            ]
+          },
+          "recentExchanges": {
+            "type": "array"
+          },
+          "threadSummaries": {
+            "type": "array"
+          },
+          "protectedRecords": {
+            "type": "array"
+          },
+          "participants": {
+            "type": "array"
+          },
+          "coverageGap": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_session_sweep",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        },
+        "required": [
+          "access"
+        ]
+      }
+    },
+    {
+      "name": "msp_session_compaction_commit",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "session_id",
+          "source_start_sequence",
+          "source_end_sequence",
+          "summary",
+          "policy_revision",
+          "summarizer_version",
+          "invocation_state",
+          "lease_token",
+          "source_digest",
+          "job_id",
+          "access"
+        ],
+        "properties": {
+          "session_id": {
+            "$ref": "#/$defs/string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "source_start_sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "source_end_sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "summary": {
+            "$ref": "#/$defs/summary"
+          },
+          "source_digest": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$"
+          },
+          "policy_revision": {
+            "$ref": "#/$defs/string"
+          },
+          "summarizer_version": {
+            "$ref": "#/$defs/string"
+          },
+          "invocation_state": {
+            "const": "TERMINAL"
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "lease_token": {
+            "$ref": "#/$defs/string"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_session_compaction_retry",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "job_id",
+          "error",
+          "lease_token",
+          "access"
+        ],
+        "properties": {
+          "job_id": {
+            "$ref": "#/$defs/string"
+          },
+          "error": {
+            "$ref": "#/$defs/string"
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "lease_token": {
+            "$ref": "#/$defs/string"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_session_compaction_claim",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "job_id",
+          "worker_id",
+          "access"
+        ],
+        "properties": {
+          "job_id": {
+            "$ref": "#/$defs/string"
+          },
+          "worker_id": {
+            "$ref": "#/$defs/string"
+          },
+          "lease_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_thread_delivery_record",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_event_id",
+          "receipt_id",
+          "outcome",
+          "text",
+          "access",
+          "inbound_message_id"
+        ],
+        "properties": {
+          "source_event_id": {
+            "$ref": "#/$defs/string"
+          },
+          "receipt_id": {
+            "$ref": "#/$defs/string"
+          },
+          "outcome": {
+            "enum": [
+              "ACCEPTED",
+              "DELIVERED",
+              "FAILED",
+              "UNKNOWN"
+            ]
+          },
+          "text": {
+            "$ref": "#/$defs/string"
+          },
+          "provider_ref": {
+            "$ref": "#/$defs/string"
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          },
+          "inbound_message_id": {
+            "$ref": "#/$defs/string"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_thread_injection_record",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "thread_id",
+          "exchange_id",
+          "injection_id",
+          "packet_hash",
+          "policy_revision",
+          "model_ref",
+          "state",
+          "access"
+        ],
+        "properties": {
+          "thread_id": {
+            "$ref": "#/$defs/string"
+          },
+          "exchange_id": {
+            "$ref": "#/$defs/string"
+          },
+          "injection_id": {
+            "$ref": "#/$defs/string"
+          },
+          "packet_hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "policy_revision": {
+            "$ref": "#/$defs/string"
+          },
+          "model_ref": {
+            "$ref": "#/$defs/string"
+          },
+          "state": {
+            "enum": [
+              "RESOLVED",
+              "SUBMITTED",
+              "COMPLETED",
+              "FAILED",
+              "UNKNOWN"
+            ]
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
+    }
   ]
 }

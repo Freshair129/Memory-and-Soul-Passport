@@ -96,6 +96,7 @@ describe("unified thread, speaker and session memory", () => {
         session_id: sessionId,
         exchange_id: exchangeId,
         source_event_id: `event-out-${index + 1}`,
+        reply_to_message_id: inbound.message.messageId,
         speaker_id: "zuri-agent",
         speaker_kind: "AGENT",
         identity_assurance: "VERIFIED",
@@ -162,12 +163,15 @@ describe("unified thread, speaker and session memory", () => {
     expect(nextWhileCompacting.session.sessionId).not.toBe(sessionId);
     expect(nextWhileCompacting.session.summaryWatermark).toBe(0);
 
+    const claim = await tools.msp_session_compaction_claim({ job_id: sweep.jobs[0].jobId, worker_id: 'test-worker', now: timestamp(41) });
     const compactInput = {
       session_id: sessionId,
       job_id: sweep.jobs[0].jobId,
       source_start_sequence: 1,
       source_end_sequence: 14,
-      summary: summary(),
+      summary: Object.fromEntries(Object.entries(summary()).map(([field, items]) => [field, items.map((text) => ({ text, speakerId: firstInbound.speakerId, sourceMessageRefs: [firstInbound.messageId] }))])),
+      lease_token: claim.leaseToken,
+      source_digest: claim.sourceDigest,
       policy_revision: "line-memory-v1",
       summarizer_version: "zuri-summary-v1",
       now: timestamp(41),

@@ -25,6 +25,7 @@ import { VaultRegistry } from "@freshair129/msp-core/vault-registry";
 import { createRetrievalService } from "@freshair129/msp-retrieval/retrieval-service";
 import { createVectorClient } from "@freshair129/msp-retrieval/vector";
 import { createContextHandlers } from "./transport/handlers/context-handlers.mjs";
+import { guardThreadHandler } from "@freshair129/msp-contracts/thread-access";
 import { createLifecycleHandlers } from "./transport/handlers/lifecycle-handlers.mjs";
 import { createMemoryHandlers } from "./transport/handlers/memory-handlers.mjs";
 import { createThreadHandlers } from "./transport/handlers/thread-handlers.mjs";
@@ -80,7 +81,9 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   for (const [name, handler] of Object.entries(contextHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(lifecycleHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(memoryHandlers)) toolRegistry.register(name, handler);
-  for (const [name, handler] of Object.entries(threadHandlers)) toolRegistry.register(name, handler);
+  for (const [name, handler] of Object.entries(threadHandlers)) {
+    toolRegistry.register(name, guardThreadHandler({ name, handler, db, key: env.MSP_THREAD_SERVICE_KEY }));
+  }
 
   const transport = createStdioJsonRpcServer({ toolRegistry, input, output });
 

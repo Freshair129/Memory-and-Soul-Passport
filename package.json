@@ -15,6 +15,7 @@
     "test:integration": "vitest run tests/integration",
     "test:security": "node --test --test-concurrency=1 tests/security/*.security.mjs",
     "test:all": "npm test",
+    "test:cross-zuri": "vitest run --config vitest.cross.config.mjs",
     "pack:client": "npm pack --workspace @freshair129/msp-client-js --dry-run",
     "start": "node apps/msp-server/bin/msp-server.mjs"
   },
