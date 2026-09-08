@@ -1,7 +1,7 @@
 ---
-version: "0.1.1b"
+version: "0.2.1b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-08-12T08:37:19+07:00,ATHER"
+last_update: "2026-09-08T20:00:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp"
@@ -15,7 +15,7 @@ Standalone ESM workspace for the MSP memory/context runtime extracted from GoVib
 
 ## Workspace
 
-- `apps/msp-server` — runnable NDJSON JSON-RPC stdio process and optional GKS provider bridge
+- `apps/msp-server` — runnable NDJSON JSON-RPC stdio process and optional GKS provider bridge, including the authenticated GenesisRAG17 relay
 - `packages/msp-core` — vault, entity, temporal, lineage, journal, and decay domain logic
 - `packages/msp-contracts` — runtime guards, reference vocabulary, and API-009 machine contract
 - `packages/msp-client-js` — publishable Node client for external consumers
@@ -27,7 +27,7 @@ Standalone ESM workspace for the MSP memory/context runtime extracted from GoVib
 ## Local verification
 
 ```powershell
-npm install
+npm ci
 npm test
 npm run pack:client
 ```
@@ -41,13 +41,39 @@ npm start
 
 The server uses JSON-RPC 2.0 messages separated by newlines on stdin/stdout. It implements `initialize`, `notifications/initialized`, and `tools/call`; tool discovery is intentionally static and there is no `tools/list`.
 
+## GenesisRAG17 relay
+
+MSP is Tier 2 in the isolated `genesisrag17.v1` pipeline. It owns runtime
+grants, exact scope and role checks, authenticated relay transport, downstream
+response validation, count-only journaling, and the explicit Tier 4 query hop.
+It owns no stage, source payload store, cursor, canonical decision, gate
+verdict, graph/vector write, or publication pointer. Source and worker grants
+are separate: source may submit/evidence/query; worker may claim, send physical
+receipts, request the gate, report worker-stage failure, acknowledge downstream
+publication with its receipt, and query.
+
+Read [GENESISRAG17-RELAY](docs/GENESISRAG17-RELAY.md) for the nine operations
+and exact request/response boundary, [ADR-MSP-GENESISRAG17-RELAY](docs/ADR-MSP-GENESISRAG17-RELAY.md)
+for the decision record, and [the isolated local runbook](docs/RUNBOOK-GENESISRAG17-LOCAL.md)
+for synthetic credentials and explicit disposable paths. The machine schema is
+[`packages/msp-contracts/schemas/GENESISRAG17.tools.json`](packages/msp-contracts/schemas/GENESISRAG17.tools.json).
+
+The cross-repository wire authority is zuri-ai's [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md).
+The current isolated execution and publication decision is zuri-ai's [ADR-073 — GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
+The raw-to-publication acceptance is pinned to [commit `b64b46df`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257).
+
 ## Compatibility status
 
-See [docs/NOTES.md](docs/NOTES.md) for extraction evidence and known gaps, and [docs/MIGRATION.md](docs/MIGRATION.md) for consumer cutover. Gate A is not considered passed until the standalone server, external packaged client, all behavior/security suites, and GoVibe compatibility proof are verified.
+See [docs/NOTES.md](docs/NOTES.md) for extraction evidence and known gaps, and [docs/MIGRATION.md](docs/MIGRATION.md) for consumer cutover. Gate A is not considered passed until the standalone server, external packaged client, all behavior/security suites, and GoVibe compatibility proof are verified. The GenesisRAG17 relay has its own contract, scope and cross-repository acceptance evidence; a successful relay response alone is not pipeline completion evidence.
 
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.0b | 2026-09-08 | beta | Added the authenticated GenesisRAG17 relay boundary, nine-tool ownership summary, pinned zuri-ai acceptance pointer, ADR and isolated local runbook. | working-tree | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
 | 0.1.0b | 2026-08-12 | beta | Initial standalone workspace documentation. | 394a176 | ATHER |
+
+## Reference version diff — 2026-09-08
+
+"0.2.0b → 0.2.1b: follow zuri's pre-merge ADR-071 → ADR-073 collision repair because published main owns ADR-071 for CRM. Historical revision rows and pinned acceptance reports retain their original identifiers. Protocol and runtime behavior are unchanged.

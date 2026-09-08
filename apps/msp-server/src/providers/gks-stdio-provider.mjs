@@ -20,7 +20,13 @@ export function createGksProviderFromEnvironment(env = process.env) {
   if (!command) return null;
   const cwd = env.MSP_GKS_CWD?.trim() || undefined;
   const args = parseArgs(env.MSP_GKS_ARGS);
+  const pipelineEnv = { ...env };
+  for (const key of ["MSP_PIPELINE_PRINCIPALS", "MSP_PIPELINE_WORKER_TOKEN", "GENESIS_WORKER_QUERY_TOKEN", "MSP_GKS_PIPELINE_CREDENTIAL"]) delete pipelineEnv[key];
   return {
+    async pipelineCall(suffix, request) {
+      if (!["submit", "claim", "graph_receipt", "write_receipt", "gate", "publication_receipt", "stage_failure", "evidence"].includes(suffix)) throw unavailable("unsupported pipeline operation");
+      return callGksTool({ command, args, cwd, env: pipelineEnv }, `gks_pipeline_${suffix}`, request);
+    },
     async promote(candidate) {
       return callGksTool({ command, args, cwd, env }, "gks_knowledge_promote", candidate);
     },
