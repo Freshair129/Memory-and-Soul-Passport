@@ -32,6 +32,8 @@ contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/doc
 version `genesisrag17.v1`. The stage explanations are in the [stage
 specification](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-SPEC.md)
 and [stage flow](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-FLOW.md).
+The current isolated execution and publication decision is [ADR-071 —
+GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-071-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
 The machine-readable MSP copy is
 [`packages/msp-contracts/schemas/GENESISRAG17.tools.json`](../packages/msp-contracts/schemas/GENESISRAG17.tools.json),
 and its runtime guard is
@@ -76,8 +78,9 @@ Ownership is therefore:
 | GKS / Tier 3 | canonical entity/fact/ontology/temporal/graph decision, stages 9–14, quality dimensions, receipt matching | outward calls, embeddings, physical publication, caller authority |
 | GenesisBlock / Tier 4 | graph/vector/index writes, stages 13/15/16, readback, benchmark, publication pointer, loopback query server | canonical identity, MSP grants, GKS gate decision |
 
-The authoritative zuri-ai boundary record is the [ADR-050 knowledge
+The authoritative zuri-ai tier assignment remains the [ADR-050 knowledge
 ingestion boundary](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-050-KNOWLEDGE-INGESTION-TIER-BOUNDARY.md).
+The current GenesisRAG17 isolated execution and publication profile is [ADR-071](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-071-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
 The MSP-specific decision is [ADR-MSP-GENESISRAG17-RELAY](ADR-MSP-GENESISRAG17-RELAY.md).
 
 ## Authentication and scope

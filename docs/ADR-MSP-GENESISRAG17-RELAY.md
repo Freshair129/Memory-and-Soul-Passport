@@ -30,6 +30,8 @@ The wire authority is the [zuri-ai GenesisRAG17
 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md),
 `genesisrag17.v1`. The implementation and acceptance branch is
 [`codex/ki17-integration`](https://github.com/Freshair129/zuri.ai/tree/codex/ki17-integration);
+the current isolated execution and publication decision is [ADR-071 —
+GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-071-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md);
 the acceptance proof is pinned to
 [`b64b46df057d3160c659afa3c34628ee86520257`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257).
 

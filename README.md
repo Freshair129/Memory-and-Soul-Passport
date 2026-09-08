@@ -59,6 +59,7 @@ for synthetic credentials and explicit disposable paths. The machine schema is
 [`packages/msp-contracts/schemas/GENESISRAG17.tools.json`](packages/msp-contracts/schemas/GENESISRAG17.tools.json).
 
 The cross-repository wire authority is zuri-ai's [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md).
+The current isolated execution and publication decision is zuri-ai's [ADR-071 — GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-071-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
 The raw-to-publication acceptance is pinned to [commit `b64b46df`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257).
 
 ## Compatibility status
