@@ -1,7 +1,7 @@
 ---
-version: "0.4.1b"
+version: "0.4.2b"
 created_at: "2026-08-29T14:45:00+07:00,Claude Opus 5,working-tree"
-last_update: "2026-09-08T20:00:00+07:00,RWANG"
+last_update: "2026-09-11T00:00:00+07:00,Claude Opus 5"
 status: "beta"
 attributes:
   domain: "mission-state-protocol"
@@ -70,8 +70,12 @@ The request must use `schemaVersion: "genesisrag17.v1"` and exactly
 `visibility` in its scope. `MSP_PIPELINE_PRINCIPALS` grants a credential to
 one role and one exact scope. Caller `actor`, caller credentials and a supplied
 worker identity are never authority. MSP derives the authenticated principal,
-adds `MSP_GKS_PIPELINE_CREDENTIAL` for the GKS hop and strips both the source
-grant list and Tier 4 query token from a GKS child environment.
+adds `MSP_GKS_PIPELINE_CREDENTIAL` for the GKS hop. No GKS child process — for
+this hop or for `promote`/stage-evidence export — ever receives a copy of
+MSP's own environment: its environment is built from an explicit allowlist
+(OS basics plus GKS's own `GKS_*` configuration), which excludes the source
+grant list, the Tier 4 query token and everything else MSP's own caller may
+have handed it, by construction.
 
 MSP stores no stage payload, source lineage, canonical decision, worker
 receipt, evidence cursor or verdict. It validates downstream envelopes and
@@ -143,6 +147,7 @@ If this file and those disagree, those win.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.4.2b | 2026-09-11 | beta | Every GKS child spawn now builds its environment from an explicit `GKS_*` + OS-basics allowlist instead of forwarding a copy of MSP's own environment with a fixed credential blocklist applied only to the pipeline relay. Security fix. | working-tree | Claude Opus 5 |
 | 0.4.0b | 2026-09-08 | beta | Added the complete authenticated GenesisRAG17 relay boundary, source/worker grant split, Tier 4 query route, extension rules and pinned zuri-ai links; removed local checkout paths. | working-tree | ATHER |
 | 0.2.0b | 2026-09-07 | beta | Added the one relay MSP carries for the evidence pull, `msp_knowledge_evidence_export` — GKS's `gks_stage_evidence_export` validated and handed back, no cursor, no added scope, fail-closed without a provider — with the provider method and the reference fixture that prove it. MSP still owns no stage. | working-tree | Claude Fable 5.1 |
 | 0.1.0b | 2026-08-29 | beta | Recorded that MSP owns none of the seventeen pipeline stages, and what it is on the call path for — neither of which was written anywhere in this repository before. | working-tree | Claude Opus 5 |
