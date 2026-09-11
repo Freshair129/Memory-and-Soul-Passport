@@ -15,27 +15,70 @@ function parseArgs(value) {
   }
 }
 
+// OS/runtime basics a Node child process needs to start at all, on both
+// Windows and POSIX. None of these carry application secrets, so they are
+// safe to forward unconditionally.
+const OS_BASIC_ENV_KEYS = new Set([
+  "PATH", "Path", "path", "PATHEXT",
+  "SystemRoot", "windir",
+  "TEMP", "TMP", "TMPDIR",
+  "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+]);
+
+// Every GKS child spawn (pipeline relay, promote, stage-evidence export)
+// gets an environment built from this explicit allowlist, never a copy of
+// MSP's own process.env. MSP's own environment arrives from its caller
+// (zuri-ai's web server today passes its ENTIRE environment on to MSP) and
+// can carry production database URLs, chat-platform credentials and model
+// API keys that have no business reaching a GKS child. zuri-ai is fixing its
+// side separately; MSP must not rely on that fix.
+//
+// Besides the OS basics above, only variables in GKS's own configuration
+// namespace are forwarded: anything named `GKS_*`, matching the standalone
+// GKS server's own environment reads (Freshair129/Genesis-Knowledge-System,
+// apps/gks-server/src/server.mjs and packages/gks-contracts/src/resolution.mjs):
+//   GKS_DB_PATH                    - required, GKS's own SQLite path
+//   GKS_DEFAULT_PORTFOLIO_ID       - optional service default
+//   GKS_AUTOMERGE_FLOOR            - optional auto-merge policy floor
+//   GKS_PIPELINE_RELAY_CREDENTIAL  - optional; GKS verifies the relayCredential
+//     carried in the request payload (built by pipeline-handlers.mjs from
+//     MSP_GKS_PIPELINE_CREDENTIAL) against THIS value in its own environment.
+//     MSP_GKS_PIPELINE_CREDENTIAL itself is never forwarded as an env var —
+//     it travels only inside the signed request payload.
+// None of MSP's own secrets (MSP_PIPELINE_PRINCIPALS, MSP_GKS_PIPELINE_CREDENTIAL,
+// MSP_PIPELINE_WORKER_TOKEN, GENESIS_WORKER_QUERY_TOKEN, MSP_DB_PATH, or
+// anything else outside these two groups) is named `GKS_*`, so the prefix
+// rule excludes them by construction — this keeps the credential-stripping
+// behaviour the old pipeline-only `pipelineEnv` blocklist had, and now
+// applies the same rule to every GKS spawn, not just the pipeline relay.
+function buildGksChildEnv(env) {
+  const childEnv = {};
+  for (const key of Object.keys(env)) {
+    if (OS_BASIC_ENV_KEYS.has(key) || key.startsWith("GKS_")) childEnv[key] = env[key];
+  }
+  return childEnv;
+}
+
 export function createGksProviderFromEnvironment(env = process.env) {
   const command = env.MSP_GKS_COMMAND?.trim();
   if (!command) return null;
   const cwd = env.MSP_GKS_CWD?.trim() || undefined;
   const args = parseArgs(env.MSP_GKS_ARGS);
-  const pipelineEnv = { ...env };
-  for (const key of ["MSP_PIPELINE_PRINCIPALS", "MSP_PIPELINE_WORKER_TOKEN", "GENESIS_WORKER_QUERY_TOKEN", "MSP_GKS_PIPELINE_CREDENTIAL"]) delete pipelineEnv[key];
+  const gksChildEnv = buildGksChildEnv(env);
   return {
     async pipelineCall(suffix, request) {
       if (!["submit", "claim", "graph_receipt", "write_receipt", "gate", "publication_receipt", "stage_failure", "evidence"].includes(suffix)) throw unavailable("unsupported pipeline operation");
-      return callGksTool({ command, args, cwd, env: pipelineEnv }, `gks_pipeline_${suffix}`, request);
+      return callGksTool({ command, args, cwd, env: gksChildEnv }, `gks_pipeline_${suffix}`, request);
     },
     async promote(candidate) {
-      return callGksTool({ command, args, cwd, env }, "gks_knowledge_promote", candidate);
+      return callGksTool({ command, args, cwd, env: gksChildEnv }, "gks_knowledge_promote", candidate);
     },
     // The one read-only tool MSP relays for zuri-ai's evidence pull
     // (GKS ADR-GKS-LEDGER-REPORTING D2, Option B): zuri-ai -> MSP ->
     // gks_stage_evidence_export. MSP owns no stage and no cursor; it carries
     // the caller's scope envelope through and the page back, unchanged.
     async exportStageEvidence(request) {
-      return callGksTool({ command, args, cwd, env }, "gks_stage_evidence_export", request);
+      return callGksTool({ command, args, cwd, env: gksChildEnv }, "gks_stage_evidence_export", request);
     },
   };
 }

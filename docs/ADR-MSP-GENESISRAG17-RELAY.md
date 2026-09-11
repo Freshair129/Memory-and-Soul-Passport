@@ -1,7 +1,7 @@
 ---
-version: "1.0.2b"
+version: "1.0.3b"
 created_at: "2026-09-08T00:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-11T00:00:00+07:00,ATHER"
+last_update: "2026-09-11T00:00:00+07:00,KIN"
 status: "beta"
 superseded_by: null
 attributes:
@@ -63,8 +63,12 @@ The source and worker grants are separate runtime credentials. A caller's
 claimed worker role are input data only. MSP derives the authenticated
 principal from `MSP_PIPELINE_PRINCIPALS` and adds the relay credential from
 `MSP_GKS_PIPELINE_CREDENTIAL`. GKS verifies that value against
-`GKS_PIPELINE_RELAY_CREDENTIAL`. Child-process environment construction
-strips the MSP principal list and Tier 4 query token before GKS starts.
+`GKS_PIPELINE_RELAY_CREDENTIAL`. Child-process environment construction is an
+explicit allowlist, not a blocklist: every GKS spawn (pipeline relay,
+`promote`, stage-evidence export) gets only OS basics and GKS's own `GKS_*`
+configuration, never a copy of MSP's own process environment. That excludes
+the MSP principal list and Tier 4 query token by construction, along with
+anything else MSP's own caller may have handed it (`apps/msp-server/src/providers/gks-stdio-provider.mjs`).
 
 ## Scope decision
 
@@ -233,6 +237,7 @@ state, and all four repositories must review a contract change together.
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
 | 1.0.0b | 2026-09-08 | beta | Accepted the MSP-only authenticated relay boundary, nine operations, exact grants/scope, ordered execution, Tier 4 query route and coordinated extension rules. | working-tree | ATHER |
+| 1.0.3b | 2026-09-11 | beta | Child-process environment construction for every GKS spawn (not only the pipeline relay) is now an explicit `GKS_*` + OS-basics allowlist instead of a fixed credential blocklist over a copy of MSP's own process environment. Security fix — MSP no longer relies on its caller (zuri-ai) never handing it production secrets. | working-tree | KIN |
 | 1.0.2b | 2026-09-11 | beta | Accepted the GenesisRAG17 structured-record profile (ADR-075 contract revision 2, Option A) as relay-transparent — no MSP code change; recorded deferred Option B (`qualifiers`) as pass-through pending its own four-repo gate, and confirmed the `ontology_v2` rollout order needs nothing from MSP. One of the four repos' acceptance notes gating ADR-075 Phase 2. | working-tree | ATHER |
 
 ## Reference version diff — 2026-09-08

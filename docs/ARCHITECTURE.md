@@ -1,7 +1,7 @@
 ---
-version: "0.2.0b"
+version: "0.2.1b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-08T00:00:00+07:00,ATHER"
+last_update: "2026-09-11T00:00:00+07:00,KIN"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -86,7 +86,7 @@ The repository-root `migrations/` directory is canonical. `msp-storage` owns the
 - Missing GKS configuration never fabricates canonical success.
 - The server never chooses an implicit database path.
 - GenesisRAG17 requests require `schemaVersion: "genesisrag17.v1"`, exact six-field scope and an explicit source or worker runtime grant.
-- MSP strips pipeline credentials before starting a GKS child process; the Tier 4 worker token is used only for the explicit loopback query.
+- Every GKS child process (pipeline relay, promote, stage-evidence export) gets an environment built from an explicit allowlist — GKS's own `GKS_*` configuration plus OS basics — never a copy of MSP's own process environment, which MSP's caller may hand it in full. The Tier 4 worker token is used only for the explicit loopback query and, like every other MSP-internal credential, is never forwarded to a GKS child.
 - A malformed, foreign-scope, redirected or unconfigured pipeline hop fails closed; MSP never turns it into an empty success.
 
 ## Change risk
@@ -97,6 +97,7 @@ Risk is HIGH because code crosses package and repository boundaries and migratio
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.1b | 2026-09-11 | beta | Every GKS child spawn (pipeline relay, promote, stage-evidence export) now builds its environment from an explicit `GKS_*` + OS-basics allowlist instead of forwarding MSP's own process environment; previously only the pipeline relay path stripped a fixed credential blocklist, and `promote`/`exportStageEvidence` forwarded MSP's full environment unchanged. | working-tree | KIN |
 | 0.2.0b | 2026-09-08 | beta | Documented the GenesisRAG17 Tier 2 relay composition, exact grant boundary, Tier 4 query route and fail-closed invariants. | working-tree | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
 | 0.1.0b | 2026-08-12 | beta | Initial extraction architecture and dependency rules. | 394a176 | ATHER |

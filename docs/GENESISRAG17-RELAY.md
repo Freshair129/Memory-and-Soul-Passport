@@ -1,7 +1,7 @@
 ---
-version: "1.4.1b"
+version: "1.4.2b"
 created_at: "2026-09-07T23:00:00+07:00,RWANG,working-tree"
-last_update: "2026-09-08T20:00:00+07:00,RWANG"
+last_update: "2026-09-11T00:00:00+07:00,KIN"
 status: "beta"
 superseded_by: null
 attributes:
@@ -122,7 +122,11 @@ fields, derives `authenticatedPrincipal` from the matched runtime grant, and
 adds `relayCredential` from `MSP_GKS_PIPELINE_CREDENTIAL` for the GKS hop.
 GKS authenticates that relay credential against its own
 `GKS_PIPELINE_RELAY_CREDENTIAL`. A GKS child process receives neither the MSP
-principal list nor the worker query token.
+principal list nor the worker query token — nor anything else from MSP's own
+process environment. Every GKS spawn builds its environment from an explicit
+allowlist (OS basics plus GKS's own `GKS_*` configuration keys) rather than
+forwarding a copy of MSP's environment, which MSP's own caller may hand it in
+full (`apps/msp-server/src/providers/gks-stdio-provider.mjs`).
 
 The grants are deliberately separate:
 
@@ -275,6 +279,7 @@ with no changes to the frozen API-009 memory surface.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 1.4.2b | 2026-09-11 | beta | A GKS child process's environment is now built from an explicit allowlist (OS basics + `GKS_*` config) for every spawn, not a copy of MSP's own environment with a fixed credential blocklist applied only to the pipeline relay path. Security fix. | working-tree | KIN |
 | 1.4.0b | 2026-09-08 | beta | Enforce PASS-only publication responses and preserve Pending/null acknowledgement semantics after code audit. | working-tree | RWANG |
 | 1.3.0b | 2026-09-08 | beta | Documented all nine authenticated operations, ownership, exact grants/scope, ordered execution, query loopback, extension rules, code/test paths and pinned zuri-ai acceptance. | working-tree | ATHER |
 | 1.2.0b | 2026-09-07 | beta | Authenticated stage failures terminate honestly; publication receipt is required only for successful completion. | working-tree | RWANG |
