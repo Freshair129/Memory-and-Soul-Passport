@@ -15,14 +15,24 @@ function parseArgs(value) {
   }
 }
 
-// OS/runtime basics a Node child process needs to start at all, on both
-// Windows and POSIX. None of these carry application secrets, so they are
-// safe to forward unconditionally.
+// OS/runtime basics a Node child process needs to start and behave normally
+// (paths, temp dirs, home/profile dirs, shell, locale, timezone) on both
+// Windows and POSIX — the same OS set zuri-ai's own MSP spawn allowlist
+// passes. None of these carry application secrets, so they are safe to
+// forward unconditionally.
+//
+// Stored upper-case and matched case-insensitively by whole name (never by
+// prefix): Windows environment names are case-insensitive and arrive in
+// whatever casing the parent used — Node's own process.env says
+// `SystemRoot`/`Path`/`windir`, while zuri-ai's allowlist names them
+// `SYSTEMROOT`/`PATH`/`WINDIR` — so an exact-case match would silently drop
+// them.
 const OS_BASIC_ENV_KEYS = new Set([
-  "PATH", "Path", "path", "PATHEXT",
-  "SystemRoot", "windir",
+  "PATH", "PATHEXT",
+  "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
   "TEMP", "TMP", "TMPDIR",
-  "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+  "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
+  "LANG", "LC_ALL", "TZ",
 ]);
 
 // Every GKS child spawn (pipeline relay, promote, stage-evidence export)
@@ -51,10 +61,10 @@ const OS_BASIC_ENV_KEYS = new Set([
 // rule excludes them by construction — this keeps the credential-stripping
 // behaviour the old pipeline-only `pipelineEnv` blocklist had, and now
 // applies the same rule to every GKS spawn, not just the pipeline relay.
-function buildGksChildEnv(env) {
+export function buildGksChildEnv(env) {
   const childEnv = {};
   for (const key of Object.keys(env)) {
-    if (OS_BASIC_ENV_KEYS.has(key) || key.startsWith("GKS_")) childEnv[key] = env[key];
+    if (OS_BASIC_ENV_KEYS.has(key.toUpperCase()) || key.startsWith("GKS_")) childEnv[key] = env[key];
   }
   return childEnv;
 }

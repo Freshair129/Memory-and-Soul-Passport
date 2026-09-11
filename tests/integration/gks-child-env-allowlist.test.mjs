@@ -10,17 +10,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { createGksProviderFromEnvironment } from "../../apps/msp-server/src/providers/gks-stdio-provider.mjs";
+import { buildGksChildEnv, createGksProviderFromEnvironment } from "../../apps/msp-server/src/providers/gks-stdio-provider.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const providerPath = path.join(here, "fixtures", "env-report-gks-provider.mjs");
 
-// The OS basics a Node child needs to start at all, taken from the real
-// process environment this test itself runs under (so the assertions hold
-// on both Windows and POSIX CI runners).
-const OS_BASIC_KEYS = ["PATH", "Path", "path", "PATHEXT", "SystemRoot", "windir", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"];
+// The OS basics the allowlist forwards (upper-case; matched
+// case-insensitively). Real values are taken from the environment this test
+// itself runs under, in whatever casing that environment uses, so the
+// assertions hold on both Windows and POSIX CI runners.
+const OS_BASIC_NAMES = ["PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "LANG", "LC_ALL", "TZ"];
 const osBasics = {};
-for (const key of OS_BASIC_KEYS) if (process.env[key] !== undefined) osBasics[key] = process.env[key];
+for (const key of Object.keys(process.env)) if (OS_BASIC_NAMES.includes(key.toUpperCase())) osBasics[key] = process.env[key];
+
+// Locale and timezone are often unset (always, on a stock Windows runner), so
+// they get synthetic, harmless values to prove they are forwarded at all.
+const localeAndTz = { LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "Asia/Bangkok" };
+for (const key of Object.keys(osBasics)) if (key.toUpperCase() in localeAndTz) delete osBasics[key];
+Object.assign(osBasics, localeAndTz);
 
 // Decoy application secrets that must never reach a GKS child — exactly the
 // shape zuri-ai's web server hands MSP today.
@@ -53,7 +60,7 @@ const gksConfig = {
   GKS_PIPELINE_RELAY_CREDENTIAL: "allowlist-test-relay-credential",
 };
 
-const REPORT_KEYS = [...Object.keys(decoySecrets), ...Object.keys(mspOwnSecrets), ...Object.keys(gksConfig), "MSP_GKS_COMMAND", "MSP_GKS_ARGS", "MSP_GKS_CWD", ...OS_BASIC_KEYS];
+const REPORT_KEYS = [...Object.keys(decoySecrets), ...Object.keys(mspOwnSecrets), ...Object.keys(gksConfig), "MSP_GKS_COMMAND", "MSP_GKS_ARGS", "MSP_GKS_CWD", ...Object.keys(osBasics)];
 
 function buildFakeMspEnvironment() {
   return {
@@ -102,5 +109,28 @@ describe("GKS child process environment allowlist", () => {
     const env = buildFakeMspEnvironment();
     delete env.MSP_GKS_COMMAND;
     expect(createGksProviderFromEnvironment(env)).toBeNull();
+  });
+
+  // Checked on the builder directly, not through a spawned child: on Windows
+  // libuv re-adds a handful of required variables (SYSTEMROOT, SYSTEMDRIVE,
+  // WINDIR, PATH, TEMP, ...) from the parent's real environment to any child
+  // environment that lacks them, so a spawned child cannot show that one of
+  // those was dropped.
+  it("matches OS basics case-insensitively by whole name, as either casing a caller may use", () => {
+    const input = {
+      // Node's own Windows casing.
+      Path: "C:\\bin", SystemRoot: "C:\\Windows", windir: "C:\\Windows", SystemDrive: "C:", ComSpec: "C:\\Windows\\system32\\cmd.exe",
+      // zuri-ai's allowlist casing.
+      SYSTEMROOT: "C:\\Windows", WINDIR: "C:\\Windows", COMSPEC: "C:\\Windows\\system32\\cmd.exe",
+      APPDATA: "C:\\Users\\u\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "Asia/Bangkok",
+      GKS_DB_PATH: "C:\\allowlist-test\\gks.sqlite",
+      // Names that merely start with or contain an OS basic are not OS basics.
+      PATH_SECRET: "decoy", TZ_API_KEY: "decoy", HOME_TOKEN: "decoy", MY_APPDATA: "decoy",
+      ...decoySecrets,
+      ...mspOwnSecrets,
+    };
+    const { PATH_SECRET, TZ_API_KEY, HOME_TOKEN, MY_APPDATA, ...expected } = input;
+    for (const key of [...Object.keys(decoySecrets), ...Object.keys(mspOwnSecrets)]) delete expected[key];
+    expect(buildGksChildEnv(input)).toEqual(expected);
   });
 });
