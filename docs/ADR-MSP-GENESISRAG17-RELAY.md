@@ -1,7 +1,7 @@
 ---
-version: "1.0.1b"
+version: "1.0.2b"
 created_at: "2026-09-08T00:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-08T20:00:00+07:00,RWANG"
+last_update: "2026-09-11T00:00:00+07:00,ATHER"
 status: "beta"
 superseded_by: null
 attributes:
@@ -137,6 +137,79 @@ the zuri-ai contract, GKS contract, MSP machine schema and the relevant
 security/acceptance proof. An unknown field is not an extension mechanism;
 `actor`, `details` and alternate credentials cannot be used as a backdoor.
 
+## Accepted extension — structured-record profile, contract revision 2 (2026-09-11)
+
+zuri-ai's ADR-075 proposes a GenesisRAG17 structured-record profile for the
+SmartGift catalog (a new `ontology_v2` predicate/type vocabulary — `PRICED_AT`,
+`HAS_COMPONENT`, `IN_CATEGORY` and the `PACKAGE`/`CATEGORY`/`PRICE_TIER` entity
+types — plus a per-record claim/descriptive chunk rendering). The four-repo
+review on 2026-09-11 (contract revision 2, owner decisions O-1..O-3) found
+**MSP needs no code change**. This section records that finding as the MSP
+acceptance note required by the Phase 2 gate.
+
+Per the [Extension decision](#extension-decision) above, "Canonical entities,
+facts, ontology, temporal decisions, graph enrichment and quality dimensions
+belong in GKS" — the ontology change is exactly that class of change, and MSP's
+role stays a pass-through: it validates the outer envelope (schema version,
+scope, role/grant) and forwards the request body opaquely. Re-verified at
+`origin/main` (15b4565) on 2026-09-11:
+
+- `validatePipelineRequest` (`packages/msp-contracts/src/contracts/pipeline.mjs:66-76`)
+  checks only envelope-level fields per operation — `schemaVersion`, `scope`,
+  `batchId`/`idempotencyKey`, receipt `scope`, `decisionId`/`decisionHash`
+  shape, cursor/limit bounds, query length — and never inspects the shape of a
+  batch's nested facts, chunks or mentions. A new predicate, entity type or
+  claim-chunk rendering rule changes none of these checks.
+- `packages/msp-contracts/schemas/GENESISRAG17.tools.json` has no nested
+  `additionalProperties` or enum constraint on batch/chunk/mention content: the
+  only `additionalProperties: false` in the file is the `scope` `$def` (line 12,
+  the six-field `{ portfolioId, tenantId, businessId, workspaceId, agentId,
+  visibility }` shape), and the only string-length limit anywhere in the schema
+  is `msp_pipeline_query.query`'s `maxLength: 16000` (line 305). Neither
+  constrains a fact's subject/predicate/object or a chunk's text.
+- `git grep -n -E "semanticType|predicate|ontologyVersion|qualifiers"` over the
+  repo returns zero matches — MSP's contracts, schema and handlers name none of
+  the vocabulary this profile introduces or the deferred `qualifiers` field, so
+  there is nothing in MSP that a new ontology version or field could collide
+  with.
+- `apps/msp-server/src/transport/handlers/pipeline-handlers.mjs:28` forwards the
+  request body opaquely: `{ ...payload, relayCredential: ..., authenticatedPrincipal:
+  ... }` (`payload` itself is `args` with only `credential`, `actor`,
+  `authenticatedPrincipal` and `relayCredential` stripped, line 13). A batch's
+  `facts[]` contents — whatever predicates, endpoint types or claim-chunk shape
+  Tier 1/Tier 3 agree on — pass through this spread unexamined.
+
+**Option A** (a tier-qualified price as a distinct `PRICED_AT` fact/entity,
+O-1) is relay-transparent by the evidence above: it needs no MSP change.
+**Option B** (an optional `qualifiers` field on facts/edges, O-2) is deferred by
+the owner, not rejected — if it is proposed later, the same four points apply
+today (`validatePipelineRequest` does not inspect fact/edge internals, the
+schema has no nested constraint that would reject an added field, and the
+opaque spread in `pipeline-handlers.mjs:28` would forward it as-is), so it too
+would pass through unchanged. It still needs its own four-repo gate when
+proposed, because it changes the frozen decision shape zuri-ai's contract doc
+pins and every `decisionHash` input — a change MSP cannot see or validate from
+its boundary, which is exactly why the gate is a four-repo one and not an
+MSP-only sign-off.
+
+The `ontology_v2` rollout order (C-3: worker accepts both versions, then GKS
+accepts both and starts producing `ontology_v2`, then zuri-ai starts sending
+parser-2 batches) needs nothing from MSP at any step — MSP has no version
+literal, no ontology table and no stage ownership to update (see "The
+seventeen-stage pipeline: MSP owns no stage" in `CLAUDE.md`); it relays
+whichever `ontologyVersion` the stored decision already carries.
+
+Recommended for implementation, not required by this note: a structured-batch
+relay case in `tests/contract/pipeline-relay.test.mjs` that submits a batch
+carrying `ontology_v2` predicates/types end-to-end through the relay and
+asserts the response is returned unmodified, proving relay transparency in the
+test suite rather than by code inspection alone (C-8 already lists this as
+MSP's optional local case).
+
+This acceptance is one of the four notes (zuri-ai Tier 1, MSP Tier 2, GKS
+Tier 3, GenesisBlock worker Tier 4) the ADR-075 Phase 2 gate requires before
+implementation may start.
+
 ## Consequences
 
 This decision keeps the boundary auditable and prevents a relay success from
@@ -160,6 +233,7 @@ state, and all four repositories must review a contract change together.
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
 | 1.0.0b | 2026-09-08 | beta | Accepted the MSP-only authenticated relay boundary, nine operations, exact grants/scope, ordered execution, Tier 4 query route and coordinated extension rules. | working-tree | ATHER |
+| 1.0.2b | 2026-09-11 | beta | Accepted the GenesisRAG17 structured-record profile (ADR-075 contract revision 2, Option A) as relay-transparent — no MSP code change; recorded deferred Option B (`qualifiers`) as pass-through pending its own four-repo gate, and confirmed the `ontology_v2` rollout order needs nothing from MSP. One of the four repos' acceptance notes gating ADR-075 Phase 2. | working-tree | ATHER |
 
 ## Reference version diff — 2026-09-08
 
