@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createPipelineHandlers } from "../../apps/msp-server/src/transport/handlers/pipeline-handlers.mjs";
-import { validatePipelineResponse, parsePrincipals, PIPELINE_VERSION } from "@freshair129/msp-contracts/pipeline";
+import { validatePipelineRequest, validatePipelineResponse, parsePrincipals, PIPELINE_VERSION } from "@freshair129/msp-contracts/pipeline";
 
 const scope = { portfolioId: "p", tenantId: "t", businessId: "b", workspaceId: "", agentId: "", visibility: "private" };
 const envelope = { schemaVersion: PIPELINE_VERSION, scope };
@@ -76,5 +76,97 @@ describe("genesisrag17 relay contract", () => {
     expect(() => parsePrincipals("{bad")).toThrow(/config/);
     const grant = { credential: "same", principalId: "p", role: "source", scope };
     expect(() => parsePrincipals(JSON.stringify([grant, { ...grant, role: "worker" }]))).toThrow(/ambiguous/);
+  });
+
+  // ADR-MSP-GENESISRAG17-RELAY "Accepted extension — structured-record profile, contract
+  // revision 2" (2026-09-11): the ontology_v2 vocabulary (Product/PACKAGE/CATEGORY/PRICE_TIER
+  // semanticTypes, HAS_COMPONENT/PRICED_AT/IN_CATEGORY predicates) is relay-transparent —
+  // MSP validates only the outer envelope and forwards batch/decision/receipt content opaquely.
+  // These cases prove that in the suite rather than by code inspection alone (C-8).
+
+  it("relays a structured submit batch (ontology_v2 chunks + mentions) to GKS byte-for-byte, apart from the documented credential/principal substitution", async () => {
+    const calls = [], journal = [];
+    const handlers = createPipelineHandlers({ env, journal: { append: (entry) => journal.push(entry) }, gksProvider: { pipelineCall: async (...args) => { calls.push(args); return { ...envelope, batchId: "batch-sg", decisionId: null, status: "PENDING" }; } } });
+    const structuredBatch = {
+      ...envelope,
+      batchId: "batch-sg",
+      idempotencyKey: "stable-key-sg",
+      source: {
+        chunks: [
+          { chunkId: "chunk-1", text: JSON.stringify({ subject: "PM-NB", predicate: "IN_CATEGORY", object: "CATEGORY-X", catalogVersionDate: "2026-09-01" }) },
+          { chunkId: "chunk-2", text: JSON.stringify({ subject: "PM-BOTTLE-LED", predicate: "PRICED_AT", object: "PM-BOTTLE-LED:qty100:20000" }) },
+          { chunkId: "chunk-3", text: JSON.stringify({ subject: "PM-BOTTLE-LED", predicate: "HAS_COMPONENT", object: "COMPONENT-LED-1" }) },
+        ],
+        mentions: [
+          { mentionId: "mention-1", semanticType: "Product", text: "PM-NB" },
+          { mentionId: "mention-2", semanticType: "PACKAGE", text: "PM-BOTTLE-LED" },
+          { mentionId: "mention-3", semanticType: "CATEGORY", text: "CATEGORY-X" },
+          { mentionId: "mention-4", semanticType: "PRICE_TIER", text: "PM-BOTTLE-LED:qty100:20000" },
+        ],
+        ontologyVersion: "ontology_v2",
+      },
+    };
+    const request = { ...envelope, credential: "source-test", actor: "forged", relayCredential: "forged", authenticatedPrincipal: { principalId: "forged" }, batch: structuredBatch };
+    await handlers.msp_pipeline_submit(request);
+    expect(calls[0][0]).toBe("submit");
+    expect(calls[0][1]).toEqual({ ...envelope, batch: structuredBatch, relayCredential: "relay-test", authenticatedPrincipal: { principalId: "source", role: "source", scope } });
+    expect(JSON.stringify(journal)).not.toMatch(/PM-NB|CATEGORY-X|HAS_COMPONENT|PRICE_TIER|source-test|relay-test|forged/);
+  });
+
+  it("relays an ontology_v2 claim decision — new predicates and a PRICE_TIER entity — unchanged", async () => {
+    const decisionHash = "b".repeat(64);
+    const decision = {
+      schemaVersion: PIPELINE_VERSION, scope, decisionId: "decision-sg-1", decisionHash, ontologyVersion: "ontology_v2",
+      entities: [
+        { entityId: "PM-NB", semanticType: "Product" },
+        { entityId: "PM-BOTTLE-LED", semanticType: "PACKAGE" },
+        { entityId: "CATEGORY-X", semanticType: "CATEGORY" },
+        { entityId: "PM-BOTTLE-LED:qty100:20000", semanticType: "PRICE_TIER" },
+      ],
+      facts: [
+        { subject: "PM-NB", predicate: "IN_CATEGORY", object: "CATEGORY-X", catalogVersionDate: "2026-09-01" },
+        { subject: "PM-BOTTLE-LED", predicate: "PRICED_AT", object: "PM-BOTTLE-LED:qty100:20000" },
+        { subject: "PM-BOTTLE-LED", predicate: "HAS_COMPONENT", object: "COMPONENT-LED-1" },
+      ],
+    };
+    const claimResult = { ...envelope, decisions: [decision] };
+    const handlers = createPipelineHandlers({ env, gksProvider: { pipelineCall: async () => claimResult } });
+    const response = await handlers.msp_pipeline_claim({ ...envelope, credential: "worker-test", limit: 1 });
+    expect(response).toEqual(claimResult);
+    expect(response.decisions[0].facts).toEqual(decision.facts);
+    expect(response.decisions[0].entities.map((e) => e.semanticType)).toEqual(["Product", "PACKAGE", "CATEGORY", "PRICE_TIER"]);
+  });
+
+  it("relays an ontology_v2 write_receipt request unchanged through the same receipt validation as revision 1", async () => {
+    const receipt = { ...envelope, decisionId: "decision-sg-1", derived: [
+      { subject: "PM-NB", predicate: "IN_CATEGORY", object: "CATEGORY-X" },
+      { subject: "PM-BOTTLE-LED", predicate: "PRICED_AT", object: "PM-BOTTLE-LED:qty100:20000" },
+    ] };
+    const receiptHash = "c".repeat(64);
+    const writeReceiptResult = { ...envelope, accepted: true, receiptHash };
+    const handlers = createPipelineHandlers({ env, gksProvider: { pipelineCall: async (suffix, payload) => { expect(suffix).toBe("write_receipt"); expect(payload.receipt).toEqual(receipt); return writeReceiptResult; } } });
+    const response = await handlers.msp_pipeline_write_receipt({ ...envelope, credential: "worker-test", receipt });
+    expect(response).toEqual(writeReceiptResult);
+  });
+
+  it("adds no nested validation for the structured-record profile — new semanticTypes/predicates and the deferred qualifiers field pass validatePipelineRequest/Response unexamined", () => {
+    const structuredBatch = {
+      ...envelope, batchId: "batch-sg-2", idempotencyKey: "stable-key-sg-2",
+      source: {
+        chunks: [{ chunkId: "chunk-1", text: JSON.stringify({ subject: "PM-NB", predicate: "IN_CATEGORY", object: "CATEGORY-X", catalogVersionDate: "2026-09-01" }) }],
+        mentions: [{ mentionId: "mention-1", semanticType: "PRICE_TIER", text: "PM-BOTTLE-LED:qty100:20000", qualifiers: { minQty: 100 } }],
+        ontologyVersion: "ontology_v2",
+      },
+    };
+    expect(() => validatePipelineRequest({ ...envelope, credential: "source-test", batch: structuredBatch }, "submit")).not.toThrow();
+
+    const decisionHash = "d".repeat(64);
+    const claimRequest = { ...envelope, credential: "worker-test", limit: 1 };
+    const claimResponse = { ...envelope, decisions: [{
+      schemaVersion: PIPELINE_VERSION, scope, decisionId: "decision-sg-2", decisionHash, ontologyVersion: "ontology_v2",
+      facts: [{ subject: "PM-BOTTLE-LED", predicate: "HAS_COMPONENT", object: "COMPONENT-LED-1", qualifiers: { unit: "each" } }],
+    }] };
+    expect(() => validatePipelineResponse(claimResponse, claimRequest, "claim")).not.toThrow();
+    expect(validatePipelineResponse(claimResponse, claimRequest, "claim")).toEqual(claimResponse);
   });
 });
