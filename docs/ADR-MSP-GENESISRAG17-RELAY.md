@@ -1,7 +1,7 @@
 ---
-version: "1.0.2b"
+version: "1.0.3b"
 created_at: "2026-09-08T00:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-11T00:00:00+07:00,ATHER"
+last_update: "2026-09-11T00:00:00+07:00,CLAUDE"
 status: "beta"
 superseded_by: null
 attributes:
@@ -234,6 +234,7 @@ state, and all four repositories must review a contract change together.
 |---|---|---|---|---|---|
 | 1.0.0b | 2026-09-08 | beta | Accepted the MSP-only authenticated relay boundary, nine operations, exact grants/scope, ordered execution, Tier 4 query route and coordinated extension rules. | working-tree | ATHER |
 | 1.0.2b | 2026-09-11 | beta | Accepted the GenesisRAG17 structured-record profile (ADR-075 contract revision 2, Option A) as relay-transparent — no MSP code change; recorded deferred Option B (`qualifiers`) as pass-through pending its own four-repo gate, and confirmed the `ontology_v2` rollout order needs nothing from MSP. One of the four repos' acceptance notes gating ADR-075 Phase 2. | working-tree | ATHER |
+| 1.0.3b | 2026-09-11 | beta | Added the recommended structured-batch relay case to `tests/contract/pipeline-relay.test.mjs`: byte-for-byte submit relay of `ontology_v2` chunks/mentions, unchanged claim/write_receipt relay of `PRICED_AT`/`HAS_COMPONENT`/`IN_CATEGORY` facts and a `PRICE_TIER` entity, and a direct proof that `validatePipelineRequest`/`validatePipelineResponse` add no nested validation for the profile (including the deferred `qualifiers` field). Fulfils the C-8 recommendation from the 1.0.2b acceptance note; no code change. | test/structured-batch-relay | CLAUDE |
 
 ## Reference version diff — 2026-09-08
 
