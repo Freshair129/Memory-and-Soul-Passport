@@ -6,5 +6,5 @@ export {
   MspConfigurationError,
   MspUnavailableError,
 } from "./msp-client.mjs";
-export { createMspStdioCaller } from "./msp-stdio-transport.mjs";
+export { buildMspChildEnv, createMspStdioCaller, MSP_OS_ENV_NAMES, MSP_RUNTIME_ENV_NAMES } from "./msp-stdio-transport.mjs";
 export { buildBoundedGraphQuery, RuntimeAuthorityError } from "./authority-enforcement.mjs";
