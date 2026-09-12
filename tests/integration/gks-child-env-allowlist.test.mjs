@@ -116,21 +116,37 @@ describe("GKS child process environment allowlist", () => {
   // WINDIR, PATH, TEMP, ...) from the parent's real environment to any child
   // environment that lacks them, so a spawned child cannot show that one of
   // those was dropped.
-  it("matches OS basics case-insensitively by whole name, as either casing a caller may use", () => {
-    const input = {
+  it("forwards every OS basic, in either casing a caller may use, and nothing that merely resembles one", () => {
+    // Every name in OS_BASIC_ENV_KEYS appears here exactly once, split across
+    // the two casings a caller may use: Node's own Windows spelling and
+    // zuri-ai's upper-case allowlist spelling. Dropping any single name from
+    // the allowlist must fail this test — the spawn cases above cannot catch
+    // that, for the libuv reason stated above.
+    const osBasicsUnderTest = {
       // Node's own Windows casing.
-      Path: "C:\\bin", SystemRoot: "C:\\Windows", windir: "C:\\Windows", SystemDrive: "C:", ComSpec: "C:\\Windows\\system32\\cmd.exe",
+      Path: "C:\\bin", PathExt: ".COM;.EXE;.BAT", SystemRoot: "C:\\Windows", SystemDrive: "C:",
+      windir: "C:\\Windows", ComSpec: "C:\\Windows\\system32\\cmd.exe", Temp: "C:\\Temp", Tmp: "C:\\Tmp",
       // zuri-ai's allowlist casing.
-      SYSTEMROOT: "C:\\Windows", WINDIR: "C:\\Windows", COMSPEC: "C:\\Windows\\system32\\cmd.exe",
-      APPDATA: "C:\\Users\\u\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local", LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "Asia/Bangkok",
-      GKS_DB_PATH: "C:\\allowlist-test\\gks.sqlite",
-      // Names that merely start with or contain an OS basic are not OS basics.
-      PATH_SECRET: "decoy", TZ_API_KEY: "decoy", HOME_TOKEN: "decoy", MY_APPDATA: "decoy",
-      ...decoySecrets,
-      ...mspOwnSecrets,
+      TMPDIR: "/tmp", HOME: "/home/u", USERPROFILE: "C:\\Users\\u", HOMEDRIVE: "C:", HOMEPATH: "\\Users\\u",
+      APPDATA: "C:\\Users\\u\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local",
+      LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "Asia/Bangkok",
     };
-    const { PATH_SECRET, TZ_API_KEY, HOME_TOKEN, MY_APPDATA, ...expected } = input;
-    for (const key of [...Object.keys(decoySecrets), ...Object.keys(mspOwnSecrets)]) delete expected[key];
-    expect(buildGksChildEnv(input)).toEqual(expected);
+    expect(Object.keys(osBasicsUnderTest), "every allowlisted OS basic must be exercised here").toHaveLength(OS_BASIC_NAMES.length);
+    // Names that merely start with, end with or contain an OS basic are not OS basics.
+    const lookAlikes = { PATH_SECRET: "decoy", TZ_API_KEY: "decoy", HOME_TOKEN: "decoy", MY_APPDATA: "decoy", TEMPEST: "decoy", NOT_PATH: "decoy" };
+    expect(buildGksChildEnv({ ...osBasicsUnderTest, ...lookAlikes, ...decoySecrets, ...mspOwnSecrets })).toEqual(osBasicsUnderTest);
+  });
+
+  it("matches the GKS_ prefix case-insensitively too — the same rule as the OS basics, not a stricter one", () => {
+    const gksConfigUnderTest = {
+      GKS_DB_PATH: "C:\\allowlist-test\\gks.sqlite",
+      gks_default_portfolio_id: "portfolio-lower-case",
+      Gks_Automerge_Floor: "0.91",
+    };
+    // Only a real `GKS_` prefix qualifies: no underscore, or the prefix sitting
+    // anywhere but the front, is not the GKS namespace. MSP_GKS_PIPELINE_CREDENTIAL
+    // (in mspOwnSecrets) contains "GKS_" without starting with it, for the same reason.
+    const lookAlikes = { GKSDB: "decoy", MY_GKS_TOKEN: "decoy", XGKS_DB_PATH: "decoy" };
+    expect(buildGksChildEnv({ ...gksConfigUnderTest, ...lookAlikes, ...decoySecrets, ...mspOwnSecrets })).toEqual(gksConfigUnderTest);
   });
 });

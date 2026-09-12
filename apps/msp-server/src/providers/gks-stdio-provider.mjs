@@ -44,7 +44,9 @@ const OS_BASIC_ENV_KEYS = new Set([
 // side separately; MSP must not rely on that fix.
 //
 // Besides the OS basics above, only variables in GKS's own configuration
-// namespace are forwarded: anything named `GKS_*`, matching the standalone
+// namespace are forwarded: anything named `GKS_*` — matched case-insensitively
+// too, so the two halves of the rule agree on a platform whose environment
+// names are case-insensitive — matching the standalone
 // GKS server's own environment reads (Freshair129/Genesis-Knowledge-System,
 // apps/gks-server/src/server.mjs and packages/gks-contracts/src/resolution.mjs):
 //   GKS_DB_PATH                    - required, GKS's own SQLite path
@@ -64,7 +66,8 @@ const OS_BASIC_ENV_KEYS = new Set([
 export function buildGksChildEnv(env) {
   const childEnv = {};
   for (const key of Object.keys(env)) {
-    if (OS_BASIC_ENV_KEYS.has(key.toUpperCase()) || key.startsWith("GKS_")) childEnv[key] = env[key];
+    const name = key.toUpperCase();
+    if (OS_BASIC_ENV_KEYS.has(name) || name.startsWith("GKS_")) childEnv[key] = env[key];
   }
   return childEnv;
 }
