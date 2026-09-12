@@ -1,0 +1,32 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node 24 is deliberately absent: better-sqlite3 11.10.0 aborts on
+        # teardown under Node 24 ("Assertion failed: (env) != nullptr"), which
+        # fails a varying handful of the memory tests. Add 24 to this matrix in
+        # the same change that fixes that, not before — a gate that is red for
+        # reasons unrelated to the diff teaches everyone to ignore it.
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # Contract + integration, then the vault-isolation security proofs.
+      - run: npm test
+      # The publishable client must stay packable; it is the one artifact that
+      # leaves this repo.
+      - run: npm run pack:client
