@@ -27,7 +27,7 @@ function parseArgs(value) {
 // `SystemRoot`/`Path`/`windir`, while zuri-ai's allowlist names them
 // `SYSTEMROOT`/`PATH`/`WINDIR` — so an exact-case match would silently drop
 // them.
-const OS_BASIC_ENV_KEYS = new Set([
+export const OS_BASIC_ENV_KEYS = new Set([
   "PATH", "PATHEXT",
   "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
   "TEMP", "TMP", "TMPDIR",
@@ -44,7 +44,13 @@ const OS_BASIC_ENV_KEYS = new Set([
 // side separately; MSP must not rely on that fix.
 //
 // Besides the OS basics above, only variables in GKS's own configuration
-// namespace are forwarded: anything named `GKS_*`, matching the standalone
+// namespace are forwarded: anything named `GKS_*`. That name is matched
+// case-insensitively too, so both halves of the rule agree on a platform whose
+// environment names are case-insensitive. On POSIX, where names really are
+// case-sensitive, a caller's lower-case `gks_db_path` is forwarded under the
+// caller's own spelling and GKS — which reads exact upper-case names — does not
+// see it: MSP never renames a caller's variable, so that child behaves exactly
+// as if the variable had been withheld. The namespace mirrors the standalone
 // GKS server's own environment reads (Freshair129/Genesis-Knowledge-System,
 // apps/gks-server/src/server.mjs and packages/gks-contracts/src/resolution.mjs):
 //   GKS_DB_PATH                    - required, GKS's own SQLite path
@@ -64,7 +70,8 @@ const OS_BASIC_ENV_KEYS = new Set([
 export function buildGksChildEnv(env) {
   const childEnv = {};
   for (const key of Object.keys(env)) {
-    if (OS_BASIC_ENV_KEYS.has(key.toUpperCase()) || key.startsWith("GKS_")) childEnv[key] = env[key];
+    const name = key.toUpperCase();
+    if (OS_BASIC_ENV_KEYS.has(name) || name.startsWith("GKS_")) childEnv[key] = env[key];
   }
   return childEnv;
 }
