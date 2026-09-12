@@ -42,16 +42,13 @@ function tempDbPath() {
   return path.join(dir, "msp.sqlite3");
 }
 
-afterEach(() => {
-  while (openCallers.length) openCallers.pop().close();
-  while (tempDirs.length) {
-    const dir = tempDirs.pop();
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup
-    }
-  }
+afterEach(async () => {
+  // Await each runtime's real exit before removing its directory: until the
+  // process is gone it still has <db>-shm memory-mapped, and Windows refuses
+  // both the delete and any fresh SQLite connection to that database. With
+  // the exit awaited, cleanup is deterministic -- no best-effort swallow.
+  while (openCallers.length) await openCallers.pop().close();
+  while (tempDirs.length) rmSync(tempDirs.pop(), { recursive: true, force: true });
 });
 
 describe("AC-01: MSP runtime transport parity", () => {

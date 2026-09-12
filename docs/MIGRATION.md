@@ -1,7 +1,7 @@
 ---
-version: "0.1.3b"
+version: "0.1.4b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-08T00:00:00+07:00,ATHER"
+last_update: "2026-09-12T12:00:00+07:00,Claude Opus 5"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -36,6 +36,28 @@ npm install --save "$MspRoot\packages\msp-client-js"
 ```
 
 The GoVibe MSP exports then re-export the client symbols from `@freshair129/msp-client-js`. The deprecated local `gks-client.mjs` shim remains in GoVibe because it is a separate fail-closed compatibility surface.
+
+### `close()` now returns a promise
+
+Shipped in `@freshair129/msp-client-js` 0.1.1.
+
+`createMspStdioCaller(...).close()` used to return `undefined` after sending the
+kill request; it now returns a promise that resolves once the runtime process
+has actually exited. Existing callers need no change — ignoring the return value
+behaves exactly as before.
+
+Await it if you then touch the runtime's SQLite database, or delete the
+directory holding it, from your own process. The killed runtime keeps the WAL
+index (`<db>-shm`) memory-mapped until the OS finishes tearing it down, and
+inside that window Windows refuses both a fresh connection (as
+`SqliteError: disk I/O error`, `SQLITE_IOERR_TRUNCATE`) and the directory's
+removal (`EPERM`). See
+[`NOTES.md`](NOTES.md#better-sqlite3-13-on-node-24-two-failure-modes-and-what-each-one-was).
+
+```js
+await call.close();
+// the database file and its -wal/-shm sidecars are free from here
+```
 
 Exact `packages/govibe-core/src/index.mjs` diff:
 
@@ -102,6 +124,7 @@ Revert the single dependency/re-export change and reinstall GoVibe dependencies.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.4b | 2026-09-12 | beta | Documented `close()` returning a promise (client 0.1.1), and when a consumer must await it before touching the runtime's database file. | working-tree | Claude Opus 5 |
 | 0.1.3b | 2026-09-08 | beta | Replaced the retired hard-coded local path with an explicit checkout variable and documented the GenesisRAG17 relay handoff, role split, no-migration boundary and pinned contract. | working-tree | ATHER |
 | 0.1.2b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Added exact consumer diff, verified commands/results, and cleanup evidence. | 394a176 | ATHER |

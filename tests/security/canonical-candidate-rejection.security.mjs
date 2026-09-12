@@ -32,11 +32,9 @@ function tempDbPath() {
   return {
     dbPath,
     cleanup() {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup (Windows file-lock race on child process exit)
-      }
+      // Deterministic once the runtime's close() has been awaited: the
+      // exited child no longer holds the WAL sidecar files open.
+      rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -70,7 +68,20 @@ async function rawToolCall(dbPath, name, args) {
     return response.result;
   } finally {
     rl.close();
-    child.kill();
+    // Await the real exit, not just the kill request: until the process is
+    // gone it still has <db>-shm memory-mapped, and Windows refuses both a
+    // fresh SQLite connection to that database and the directory's removal.
+    // See msp-stdio-transport.mjs's close() for the full mechanism.
+    // The already-exited guard matters: "exit" does not fire twice, so without
+    // it a child that died on its own would leave this awaiting forever, and
+    // node --test has no default per-test timeout to break that.
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise((resolve) => {
+        child.once("exit", () => resolve());
+        child.once("error", () => resolve());
+        child.kill();
+      });
+    }
   }
 }
 

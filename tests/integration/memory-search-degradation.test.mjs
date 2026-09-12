@@ -28,16 +28,13 @@ const binPath = path.join(packageRoot, "apps", "msp-server", "bin", "msp-server.
 const openCallers = [];
 const tempDirs = [];
 
-afterEach(() => {
-  while (openCallers.length) openCallers.pop().close();
-  while (tempDirs.length) {
-    const dir = tempDirs.pop();
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup (Windows file-lock race on child process exit)
-    }
-  }
+afterEach(async () => {
+  // Await each runtime's real exit before removing its directory: until the
+  // process is gone it still has <db>-shm memory-mapped, and Windows refuses
+  // both the delete and any fresh SQLite connection to that database. With
+  // the exit awaited, cleanup is deterministic -- no best-effort swallow.
+  while (openCallers.length) await openCallers.pop().close();
+  while (tempDirs.length) rmSync(tempDirs.pop(), { recursive: true, force: true });
 });
 
 /** Binds an ephemeral TCP server, grabs its port, then closes it immediately --

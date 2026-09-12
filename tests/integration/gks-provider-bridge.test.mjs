@@ -74,7 +74,7 @@ it("validates GKS MCP results and persists an idempotent canonical promotion rec
     expect(first.knowledgeRef).toMatch(/^gks:knowledge\//);
     expect(first.promotionRef).toMatch(/^msp:promotion\//);
     expect(first.sourceHash).toBe("a".repeat(64));
-    firstRuntime.call.close();
+    await firstRuntime.call.close();
 
     restartedRuntime = runtime(dbPath, statePath);
     const retry = await restartedRuntime.client.submitKnowledgeCandidate(candidate());
@@ -89,9 +89,9 @@ it("validates GKS MCP results and persists an idempotent canonical promotion rec
       db.close();
     }
   } finally {
-    firstRuntime?.call.close();
-    restartedRuntime?.call.close();
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    await firstRuntime?.call.close();
+    await restartedRuntime?.call.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -109,8 +109,8 @@ it("rejects a malformed GKS result and leaves no promotion receipt", async () =>
       db.close();
     }
   } finally {
-    instance.call.close();
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    await instance.call.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -137,8 +137,8 @@ it("msp_knowledge_promote fails closed with gks_provider_unconfigured when no pr
       db.close();
     }
   } finally {
-    instance.call.close();
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    await instance.call.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -188,8 +188,8 @@ it("msp_knowledge_evidence_export relays a validated, cursor-paged evidence page
       db.close();
     }
   } finally {
-    instance.call.close();
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    await instance.call.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -206,7 +206,7 @@ it("msp_knowledge_evidence_export refuses a malformed page, a scopeless request,
     await expect(bad.call("msp_knowledge_evidence_export", { actor: "zuri-importer", scope, since_cursor: -1 })).rejects.toThrow(/since_cursor/);
     await expect(bad.call("msp_knowledge_evidence_export", { actor: "zuri-importer", scope, limit: 501 })).rejects.toThrow(/limit/);
   } finally {
-    bad.call.close();
+    await bad.call.close();
   }
   const unconfigured = unconfiguredRuntime(path.join(dir, "msp-unconfigured.sqlite3"));
   try {
@@ -219,8 +219,8 @@ it("msp_knowledge_evidence_export refuses a malformed page, a scopeless request,
     expect(thrown, "an unconfigured bridge must reject, never answer an empty page").toBeDefined();
     expect(thrown.message).toMatch(/gks_provider_unconfigured/);
   } finally {
-    unconfigured.call.close();
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    await unconfigured.call.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -257,8 +257,8 @@ it("msp_memory_promote(target_scope=shared) fails closed with gks_provider_uncon
       db.close();
     }
   } finally {
-    instance.call.close();
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    await instance.call.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 });

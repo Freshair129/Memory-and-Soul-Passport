@@ -22,11 +22,9 @@ function tempDbPath() {
   return {
     dbPath,
     cleanup() {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup (Windows file-lock race on child process exit)
-      }
+      // Deterministic once the runtime's close() has been awaited: the
+      // exited child no longer holds the WAL sidecar files open.
+      rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -86,7 +84,7 @@ test("AC-01: msp_memory_links_create rejects a link whose two endpoints belong t
     );
 
     // No row was written by the rejected attempts.
-    call.close();
+    await call.close();
     const db = open(dbPath);
     try {
       const rows = db.prepare("SELECT COUNT(*) AS count FROM links").get();
@@ -95,6 +93,11 @@ test("AC-01: msp_memory_links_create rejects a link whose two endpoints belong t
       db.close();
     }
   } finally {
+    // Also in the finally: the close() above sits inside the try, so an
+    // assertion failure would otherwise leak the runtime and let the
+    // cleanup below fail with EPERM, hiding the real message. close()
+    // is idempotent and returns immediately once the child has exited.
+    await call.close();
     cleanup();
   }
 });
@@ -110,7 +113,7 @@ test("AC-01 control case: a same-vault link is still accepted (the guard is not 
     const result = await call("msp_memory_links_create", { from_entity_id: entityA1, to_entity_id: entityA2, link_type: "relates_to" });
     assert.deepStrictEqual(result, { link: { from_entity_id: entityA1, to_entity_id: entityA2, link_type: "relates_to" } });
   } finally {
-    call.close();
+    await call.close();
     cleanup();
   }
 });
@@ -171,7 +174,7 @@ test("msp_memory_links_list is vault-scoped through its entity_id -- vault B's s
 
     // Direct DB proof that the wire behavior rests on vault-scoped rows,
     // not luck: the only link row is vault A's.
-    call.close();
+    await call.close();
     const db = open(dbPath);
     try {
       const rows = db.prepare("SELECT vault_id, from_entity_id, to_entity_id FROM links").all();
@@ -181,6 +184,11 @@ test("msp_memory_links_list is vault-scoped through its entity_id -- vault B's s
       db.close();
     }
   } finally {
+    // Also in the finally: the close() above sits inside the try, so an
+    // assertion failure would otherwise leak the runtime and let the
+    // cleanup below fail with EPERM, hiding the real message. close()
+    // is idempotent and returns immediately once the child has exited.
+    await call.close();
     cleanup();
   }
 });

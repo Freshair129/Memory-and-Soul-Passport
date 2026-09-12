@@ -14,6 +14,10 @@ export function createMspStdioCaller({ command, args = [], cwd, env = process.en
   let initialized;
   let stderrTail = "";
   let closed = false;
+  // `closed` means "this transport will accept no further requests"; `exited`
+  // means the OS process is actually gone. They are not the same instant, and
+  // close() has to resolve on the second one -- see its comment below.
+  let exited = false;
   const pending = new Map();
 
   function failPending(error) {
@@ -58,6 +62,7 @@ export function createMspStdioCaller({ command, args = [], cwd, env = process.en
   child.on("error", (error) => failPending(error));
   child.on("exit", (code) => {
     closed = true;
+    exited = true;
     failPending(new Error(`MSP process exited with code ${code}.${stderrTail ? ` ${stderrTail.trim()}` : ""}`));
   });
 
@@ -93,10 +98,37 @@ export function createMspStdioCaller({ command, args = [], cwd, env = process.en
     return result?.structuredContent ?? (text ? JSON.parse(text) : {});
   };
 
+  /**
+   * Shut the runtime down and resolve once the OS process is actually gone.
+   *
+   * Awaiting the exit is not politeness. `child.kill()` only asks the OS to
+   * terminate the process; until the kernel has finished tearing it down, the
+   * dying process still holds its SQLite WAL index (`<db>-shm`) memory-mapped.
+   * A connection opened against the same database inside that window takes the
+   * WAL dead-man-switch lock, concludes it is the first connection, and
+   * truncates `-shm` to zero to force a WAL-index rebuild -- which Windows
+   * refuses while a user-mapped section is open, surfacing as
+   * `SqliteError: disk I/O error` (`SQLITE_IOERR_TRUNCATE`). SQLite 3.53.x
+   * (better-sqlite3 12/13) reports that refusal; 3.49.2 (better-sqlite3 11)
+   * did not, which is why the race only became visible on the upgrade.
+   *
+   * Callers that touch the database file -- or delete the directory holding it
+   * -- after shutting a runtime down must await this.
+   *
+   * @returns {Promise<void>} resolves when the child process has exited.
+   */
   call.close = () => {
     closed = true;
     failPending(new Error("MSP transport closed."));
+    if (exited) return Promise.resolve();
+    const settled = new Promise((resolve) => {
+      child.once("exit", () => resolve());
+      // A process that never spawned emits "error" and no "exit"; resolving
+      // here keeps close() from hanging on that path.
+      child.once("error", () => resolve());
+    });
     child.kill();
+    return settled;
   };
   return call;
 }
