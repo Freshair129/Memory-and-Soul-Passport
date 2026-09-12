@@ -24,11 +24,9 @@ function tempDbPath() {
   return {
     dbPath,
     cleanup() {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup (Windows file-lock race on child process exit)
-      }
+      // Deterministic once the runtime's close() has been awaited: the
+      // exited child no longer holds the WAL sidecar files open.
+      rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -129,7 +127,7 @@ test("AC-06: a decay sweep scoped to vault A never alters an equally-decayable e
     assert.ok(resultB.transitioned.some((t) => t.entity_id === entityB.entity.entity_id));
     assert.strictEqual(resultB.evaluated, 1, "a vault-B-scoped sweep must only evaluate vault B's own entities");
   } finally {
-    call.close();
+    await call.close();
     cleanup();
   }
 });
@@ -162,7 +160,7 @@ test("AC-06: dry_run:true against vault A reports no transitions for vault B's e
     assert.ok(dry.transitioned.some((t) => t.entity_id === entityA.entity.entity_id));
     assert.ok(!dry.transitioned.some((t) => t.entity_id === entityB.entity.entity_id));
   } finally {
-    call.close();
+    await call.close();
     cleanup();
   }
 });

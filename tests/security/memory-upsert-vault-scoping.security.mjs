@@ -28,11 +28,9 @@ function tempDbPath() {
   return {
     dbPath,
     cleanup() {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup (Windows file-lock race on child process exit)
-      }
+      // Deterministic once the runtime's close() has been awaited: the
+      // exited child no longer holds the WAL sidecar files open.
+      rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -124,7 +122,7 @@ test("an upsert through vault B never overwrites or shadows vault A's same-(cate
     // Direct DB proof behind the wire behavior: two rows exist for the
     // contested (category, key), one per vault, and vault A's body is the
     // victim's original.
-    call.close();
+    await call.close();
     const db = open(dbPath);
     try {
       const rows = db
@@ -140,6 +138,11 @@ test("an upsert through vault B never overwrites or shadows vault A's same-(cate
       db.close();
     }
   } finally {
+    // Also in the finally: the close() above sits inside the try, so an
+    // assertion failure would otherwise leak the runtime and let the
+    // cleanup below fail with EPERM, hiding the real message. close()
+    // is idempotent and returns immediately once the child has exited.
+    await call.close();
     cleanup();
   }
 });

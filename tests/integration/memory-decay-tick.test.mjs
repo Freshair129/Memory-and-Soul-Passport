@@ -26,16 +26,13 @@ const binPath = path.join(packageRoot, "apps", "msp-server", "bin", "msp-server.
 const openCallers = [];
 const tempDirs = [];
 
-afterEach(() => {
-  while (openCallers.length) openCallers.pop().close();
-  while (tempDirs.length) {
-    const dir = tempDirs.pop();
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup (Windows file-lock race on child process exit)
-    }
-  }
+afterEach(async () => {
+  // Await each runtime's real exit before removing its directory: until the
+  // process is gone it still has <db>-shm memory-mapped, and Windows refuses
+  // both the delete and any fresh SQLite connection to that database. With
+  // the exit awaited, cleanup is deterministic -- no best-effort swallow.
+  while (openCallers.length) await openCallers.pop().close();
+  while (tempDirs.length) rmSync(tempDirs.pop(), { recursive: true, force: true });
 });
 
 function spawnRuntime() {
@@ -153,7 +150,7 @@ describe("AC-05/AC-07: msp_memory_decay_tick round-trips over the real stdio pro
     await call("msp_memory_decay_tick", { vault_id: vaultId, dry_run: true });
     await call("msp_memory_decay_tick", { vault_id: vaultId, dry_run: false });
 
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {
@@ -205,7 +202,7 @@ describe("AC-05/AC-07: msp_memory_decay_tick round-trips over the real stdio pro
     expect(history.length).toBeGreaterThanOrEqual(1);
 
     // Row still physically exists -- no DELETE was ever issued.
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {
@@ -232,7 +229,7 @@ describe("WP-16 Bounded Scope item 3: reinforcement on access (touch())", () => 
 
     await call("msp_memory_get", { vault_id: vaultId, category: "note", key: "touched-by-get" });
 
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {
@@ -256,7 +253,7 @@ describe("WP-16 Bounded Scope item 3: reinforcement on access (touch())", () => 
 
     await call("msp_memory_search", { vault_id: vaultId, query: "findme-unique-token", mode: "fts" });
 
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {
@@ -286,7 +283,7 @@ describe("WP-16 Bounded Scope item 3: reinforcement on access (touch())", () => 
       as_of_recorded_at: created.entity.recorded_at,
     });
 
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {

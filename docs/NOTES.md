@@ -1,7 +1,7 @@
 ---
-version: "0.1.5b"
+version: "0.1.6b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-07T00:00:00+07:00,Claude Fable 5.1"
+last_update: "2026-09-12T12:00:00+07:00,Claude Opus 5"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -104,10 +104,113 @@ Evidence:
 
 Promotion receipts can therefore be minted whose evidence chain points at nothing. Requiring namespaced (`msp:`-resolvable) evidence refs would reject requests today's contract documents as valid, so this too is a design decision, recorded rather than patched.
 
+## better-sqlite3 13 on Node 24: two failure modes, and what each one was
+
+Recorded 2026-09-12 on Windows 11, Node v24.19.0, npm 11.17.0. Both modes were
+reproduced in a sibling worktree before anything was changed.
+
+### Mode 1 — the pinned 11.10.0 aborts the runtime (exit 134)
+
+`better-sqlite3` 11.10.0 publishes no `node-v137` prebuild, so `npm ci` compiles
+it from source against the running Node's headers. Node 24.19.0 backported the
+`node::ObjectWrap` cleanup hooks into the header-only `node_object_wrap.h`
+without the global hook registry that makes removal safe with no live
+`Environment`, so `~ObjectWrap()` calls
+`RemoveEnvironmentCleanupHook(Isolate::GetCurrent())` and aborts whenever a
+wrapped object is collected with no entered context
+([nodejs/node#65446](https://github.com/nodejs/node/issues/65446); the v24
+backport of the registry is open in
+[nodejs/node#65943](https://github.com/nodejs/node/pull/65943), and 24.20/24.21
+are unchanged). Any `Statement` finalization can therefore kill the MSP process:
+
+```
+node::RemoveEnvironmentCleanupHook ... Assertion failed: (env) != nullptr
+  Statement::`scalar deleting destructor'
+```
+
+Observed as `MSP process exited with code 134` — nondeterministically, in
+different tests on each run. This is upstream and not fixable in MSP; it is the
+same finding, and the same remedy, as
+[Genesis-Knowledge-System#9](https://github.com/Freshair129/Genesis-Knowledge-System/pull/9).
+
+### Mode 2 — 12.x/13.x raise `SQLITE_IOERR_TRUNCATE`, and why that was MSP's bug
+
+Upgrading removed the abort and exposed a race MSP's tests had always had.
+Every failure landed on the same line — `open()` in
+`packages/msp-storage/src/db/connection.mjs`, from the *test* process — with
+`SqliteError: disk I/O error`, extended code `SQLITE_IOERR_TRUNCATE`.
+
+The trigger is not the journal mode, the busy timeout, or any open option. An
+isolated matrix (spawn a runtime that opens the database in WAL and writes,
+then try to open it from a second process) isolates it to one window:
+
+| When the second connection opens | 11.10.0 (SQLite 3.49.2) | 12.11.1 (3.53.2) | 13.0.3 (3.53.4) |
+|---|---|---|---|
+| while the runtime is alive | pass | pass | pass |
+| after `child.kill()`, same synchronous turn | pass | **49/60 fail** | **42/60 fail** |
+| after the child's `exit` event | pass | 0/60 fail | 0/60 fail |
+
+`child.kill()` only asks the OS to terminate the process. Until the kernel has
+finished tearing it down, the dying process still has the WAL index
+(`<db>-shm`) memory-mapped. A connection opened inside that window takes the
+WAL dead-man-switch lock, concludes it is the first connection, and truncates
+`-shm` to zero to force a WAL-index rebuild — which Windows refuses while a
+user-mapped section is open. A direct `ftruncate` on the same file from Node in
+that window fails the same way (`UNKNOWN`, errno `-4094`, i.e.
+`ERROR_USER_MAPPED_FILE`) while `<db>-wal` truncates fine, which is how the
+`-shm` was identified as the file involved. SQLite 3.53.x surfaces that refusal;
+3.49.2 did not, so the suite had been resting on the older library tolerating a
+race that was always present.
+
+The same window is what the tests' `try { rmSync(...) } catch {}` blocks —
+commented "best-effort cleanup (Windows file-lock race on child process exit)"
+— had been swallowing, and what
+`tests/contract/api-009-conformance.test.mjs`'s `setTimeout(100)` plus
+`maxRetries: 5` had been sleeping through.
+
+### What was changed, and what deliberately was not
+
+- `createMspStdioCaller`'s `close()` now returns a promise that resolves on the
+  child's real `exit`. It is backward compatible: callers that ignore the
+  return value behave exactly as before.
+- Every test that reads a vault database from the test process, or deletes the
+  directory holding it, awaits that promise. The two hand-rolled JSON-RPC
+  harnesses (`canonical-candidate-rejection`, `shared-scope-fail-closed`) and
+  `transport-framing-boundary` await their own `child.kill()` the same way.
+- The best-effort `rmSync` swallows and the sleep-and-retry were removed rather
+  than kept. With the exit awaited, cleanup must succeed on the first try, so
+  those blocks now fail loudly if this contract ever regresses — which is how
+  the two hand-rolled harnesses were found.
+- `tests/contract/transport-close-lifecycle.test.mjs` pins the contract:
+  reopening the same WAL database immediately after an awaited `close()`, ten
+  times, with no retry and no sleep. Reverting `close()` to fire-and-forget
+  fails all three of its cases.
+- **`packages/msp-storage/src/db/connection.mjs` is unchanged.** `journal_mode
+  = WAL`, `foreign_keys = ON` and `busy_timeout = 5000` all stay as they were.
+  A retry around `open()` was considered and rejected: SQLite's busy handler
+  does not cover `SQLITE_IOERR`, so a retry there would have to swallow a real
+  error class to hide a race that is only reachable inside one synchronous turn
+  after killing the process that owns the database. A restart by a supervisor
+  cannot reach it — spawning a replacement process costs many event-loop turns —
+  which is why `tests/integration/gks-provider-bridge.test.mjs`'s
+  close-then-restart case passed throughout.
+
+### Result on this machine
+
+| Suite | 11.10.0 (before) | 13.0.3, no code change | 13.0.3 + this change |
+|---|---|---|---|
+| `vitest` contract + integration | 7 failed / 173 passed (180), 4 files | 6 failed / 174 passed (180), 2 files | **183 passed (183), 24 files** |
+| `node --test` security | 2 failed / 31 passed (33) | 13 failed / 20 passed (33) | **33 passed (33)** |
+
+The 11.10.0 numbers vary run to run — the abort is nondeterministic; the run
+recorded here is one sample. The full suite was run five consecutive times on
+the final tree, green every time.
+
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.6b | 2026-09-12 | beta | Recorded both Node 24.19 SQLite failure modes: the upstream `ObjectWrap` abort on `better-sqlite3` 11.x, and the `SQLITE_IOERR_TRUNCATE` WAL-index race that 12.x/13.x expose in tests that open a vault database while a killed runtime is still tearing down. Fixed by making `close()` await the child's real exit; storage pragmas unchanged. | working-tree | Claude Opus 5 |
 | 0.1.5b | 2026-09-07 | beta | Added `msp_knowledge_evidence_export`, the relay of GKS's `gks_stage_evidence_export` for zuri-ai's evidence pull (`docs/TIER-BOUNDARY-17-STAGE.md` 0.2.0b): provider method, validated page, journal, fail-closed without a provider; reference fixture and bridge cases. The two 2026-08-30 QA design gaps above are unchanged. | working-tree | Claude Fable 5.1 |
 | 0.1.4b | 2026-08-30 | beta | Recorded QA-audit known gaps (context-tool caller ownership, evidence-ref namespacing) alongside the same audit's test-only closures. | 3767738 | KIN |
 | 0.1.3b | 2026-08-12 | beta | Recorded successful exact-slug repository creation and draft review publication. | 04f48f6 | ATHER |

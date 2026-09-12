@@ -44,11 +44,9 @@ function tempDbPath() {
   return {
     dbPath,
     cleanup() {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup (Windows file-lock race on child process exit)
-      }
+      // Deterministic once the runtime's close() has been awaited: the
+      // exited child no longer holds the WAL sidecar files open.
+      rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -105,7 +103,7 @@ test("AC-04: msp_vault_mount denies mounting ANOTHER workspace's private vault_i
       "mounting a real vault_id that does not belong to the caller must be denied with vault_scope_denied, not a silent success",
     );
   } finally {
-    runtime.call.close();
+    await runtime.call.close();
     cleanup();
   }
 });
@@ -162,7 +160,7 @@ test("AC-04: msp_vault_mount denies mounting a Shared vault belonging to a DIFFE
       "mounting a different project's shared vault must be denied with vault_scope_denied",
     );
   } finally {
-    runtime.call.close();
+    await runtime.call.close();
     cleanup();
   }
 });
@@ -202,7 +200,7 @@ test("AC-04 control case: mounting one's OWN workspace_private vault still succe
     assert.equal(result.mounted, true);
     assert.equal(result.policyDecision, "allow");
   } finally {
-    runtime.call.close();
+    await runtime.call.close();
     cleanup();
   }
 });
@@ -240,7 +238,7 @@ test("AC-04: an UNKNOWN vault_id still surfaces the pre-existing not_found error
       },
     );
   } finally {
-    runtime.call.close();
+    await runtime.call.close();
     cleanup();
   }
 });
@@ -290,7 +288,7 @@ test("AC-04: re-mounting an already-legitimately-mounted vault_id (idempotent re
     });
     assert.equal(second.mounted, true);
   } finally {
-    runtime.call.close();
+    await runtime.call.close();
     cleanup();
   }
 });

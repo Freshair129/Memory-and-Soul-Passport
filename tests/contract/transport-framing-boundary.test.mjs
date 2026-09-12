@@ -43,14 +43,10 @@ function collectSourceFiles(dir) {
 
 const tempDirs = [];
 afterEach(() => {
-  while (tempDirs.length) {
-    const dir = tempDirs.pop();
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup
-    }
-  }
+  // Each test awaits its child's real exit before returning (see the finally
+  // blocks below), so the WAL sidecar files are released by the time this
+  // runs and removal is deterministic rather than best-effort.
+  while (tempDirs.length) rmSync(tempDirs.pop(), { recursive: true, force: true });
 });
 
 function tempDbPath() {
@@ -141,7 +137,18 @@ describe("AC-02: wire framing boundary vs Content-Length/LSP framing", () => {
       expect(initializeResponse.result.protocolVersion).toBe("2024-11-05");
       expect(toolCallResponse.result.structuredContent).toEqual({ ok: true, timestamp: expect.any(String) });
     } finally {
-      child.kill();
+      // Await the exit, not just the kill request: the dying process keeps
+      // <db>-shm memory-mapped, which blocks the directory's removal on
+      // Windows. See msp-stdio-transport.mjs's close(). The already-exited
+      // guard keeps a child that died on its own from leaving this awaiting an
+      // "exit" that has already fired.
+      if (child.exitCode === null && child.signalCode === null) {
+        await new Promise((resolve) => {
+          child.once("exit", () => resolve());
+          child.once("error", () => resolve());
+          child.kill();
+        });
+      }
     }
   });
 });

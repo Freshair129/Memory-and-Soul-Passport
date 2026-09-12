@@ -67,13 +67,11 @@ describe("AC-05: msp_context_replay", () => {
     contextId = resolved.contextId;
   });
 
-  afterAll(() => {
-    call?.close();
-    try {
-      rmSync(tempDir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup (Windows file-lock race on child process exit)
-    }
+  afterAll(async () => {
+    // Awaiting close() removes the race this cleanup used to swallow: the
+    // child still has <db>-shm mapped until it actually exits.
+    await call?.close();
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("execution_reproducible and output_identical are always false, with a diagnostic reason, on a matching-hash replay", async () => {

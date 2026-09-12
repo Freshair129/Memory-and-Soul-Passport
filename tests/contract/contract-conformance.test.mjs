@@ -86,17 +86,11 @@ describe("AC-01: WP-13 contract-conformance (real stdio process, real client con
     typed = createTypedVaultContextMsp(client);
   });
 
-  afterAll(() => {
-    call?.close();
-    // Best-effort cleanup, mirroring test/transport-fixture-parity.test.mjs's
-    // afterEach: on Windows the child process's SQLite file handle can still
-    // be releasing when this runs, which would otherwise make rmSync throw
-    // EPERM on an already-passing test run.
-    try {
-      rmSync(tempDir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup
-    }
+  afterAll(async () => {
+    // Awaiting close() means the child is gone and has released its SQLite
+    // handles, so this cleanup is deterministic rather than best-effort.
+    await call?.close();
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("msp_workspace_register: registerWorkspace's exact request shape, workspaceRef requireRef'd msp:workspace/", async () => {

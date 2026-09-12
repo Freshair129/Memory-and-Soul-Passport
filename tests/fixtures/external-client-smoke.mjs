@@ -61,5 +61,5 @@ try {
     history_versions: history.history.length,
   })}\n`);
 } finally {
-  call.close();
+  await call.close();
 }

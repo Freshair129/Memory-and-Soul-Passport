@@ -19,7 +19,7 @@
     "start": "node apps/msp-server/bin/msp-server.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "devDependencies": {
     "vitest": "^4.1.9"

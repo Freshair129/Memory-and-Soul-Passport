@@ -43,13 +43,11 @@ describe("AC-04: msp_memory_promote(target_scope=global_private) idempotency", (
     typed = createTypedVaultContextMsp(new MspClient(call));
   });
 
-  afterAll(() => {
-    call?.close();
-    try {
-      rmSync(tempDir, { recursive: true, force: true });
-    } catch {
-      // best-effort cleanup (Windows file-lock race on child process exit)
-    }
+  afterAll(async () => {
+    // Awaiting close() removes the race this cleanup used to swallow: the
+    // child still has <db>-shm mapped until it actually exits.
+    await call?.close();
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
   function promoteInput(overrides = {}) {
