@@ -1,7 +1,7 @@
 ---
-version: "0.2.2b"
+version: "0.2.3b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-13T00:00:00+07:00,KIN"
+last_update: "2026-09-13T12:00:00+07:00,KIN"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -86,6 +86,7 @@ The repository-root `migrations/` directory is canonical. `msp-storage` owns the
 - Missing GKS configuration never fabricates canonical success.
 - The server never chooses an implicit database path.
 - GenesisRAG17 requests require `schemaVersion: "genesisrag17.v1"`, exact six-field scope and an explicit source or worker runtime grant.
+- The publishable client (`packages/msp-client-js`) spawns the MSP server with an allowlisted environment too — MSP runtime names, GKS's `GKS_*` namespace and OS basics — so a host that starts MSP never hands it the production credentials MSP does not read.
 - Every GKS child process (pipeline relay, promote, stage-evidence export) gets an environment built from an explicit allowlist — GKS's own `GKS_*` configuration plus OS basics — never a copy of MSP's own process environment, and both halves of that allowlist match a variable name case-insensitively (OS basics by whole name, GKS's configuration by `GKS_` prefix) so a caller's casing cannot silently drop a name, which MSP's caller may hand it in full. The Tier 4 worker token is used only for the explicit loopback query and, like every other MSP-internal credential, is never forwarded to a GKS child.
 - A malformed, foreign-scope, redirected or unconfigured pipeline hop fails closed; MSP never turns it into an empty success.
 
@@ -97,6 +98,7 @@ Risk is HIGH because code crosses package and repository boundaries and migratio
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.3b | 2026-09-13 | beta | `createMspStdioCaller` now builds the MSP child environment from an explicit allowlist (MSP runtime names + `GKS_*` + OS basics) instead of defaulting to a full copy of the caller's `process.env`. Breaking for `@freshair129/msp-client-js` consumers that relied on unrelated variables reaching the MSP child; client version 0.1.0 -> 0.2.0. | fix/client-transport-env-allowlist | KIN |
 | 0.2.2b | 2026-09-13 | beta | The GKS child-environment allowlist now matches names case-insensitively on both halves of its rule: previously OS basics were matched case-insensitively but the `GKS_` namespace was matched case-sensitively, so a lower-case `gks_db_path` was dropped on a platform whose environment names are case-insensitive. Fail-closed, never a leak. Test-only: every allowlisted OS-basic name is now proven individually against the exported allowlist. | fix/gks-prefix-case-and-test-coverage | KIN |
 | 0.2.1b | 2026-09-11 | beta | Every GKS child spawn (pipeline relay, promote, stage-evidence export) now builds its environment from an explicit `GKS_*` + OS-basics allowlist instead of forwarding MSP's own process environment; previously only the pipeline relay path stripped a fixed credential blocklist, and `promote`/`exportStageEvidence` forwarded MSP's full environment unchanged. | working-tree | KIN |
 | 0.2.0b | 2026-09-08 | beta | Documented the GenesisRAG17 Tier 2 relay composition, exact grant boundary, Tier 4 query route and fail-closed invariants. | working-tree | ATHER |

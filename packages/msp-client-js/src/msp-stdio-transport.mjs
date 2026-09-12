@@ -4,11 +4,73 @@ function encode(payload) {
   return Buffer.from(`${JSON.stringify(payload)}\n`, "utf8");
 }
 
+/**
+ * Every variable the MSP server itself reads, from MSP's own source:
+ *   MSP_DB_PATH                    apps/msp-server/bin/msp-server.mjs
+ *   MSP_GKS_COMMAND/_ARGS/_CWD     apps/msp-server/src/providers/gks-stdio-provider.mjs
+ *   MSP_PIPELINE_*, MSP_GKS_PIPELINE_CREDENTIAL
+ *                                  apps/msp-server/src/transport/handlers/pipeline-handlers.mjs
+ *   OLLAMA_BASE_URL                packages/msp-retrieval/src/retrieval/vector.mjs
+ */
+export const MSP_RUNTIME_ENV_NAMES = Object.freeze([
+  "MSP_DB_PATH",
+  "MSP_GKS_COMMAND",
+  "MSP_GKS_ARGS",
+  "MSP_GKS_CWD",
+  "MSP_PIPELINE_PRINCIPALS",
+  "MSP_GKS_PIPELINE_CREDENTIAL",
+  "MSP_PIPELINE_WORKER_URL",
+  "MSP_PIPELINE_WORKER_TOKEN",
+  "OLLAMA_BASE_URL",
+]);
+
+/**
+ * What a Node child needs from the OS to start and to spawn its own child:
+ * command lookup, temp and home directories, the Windows system paths libuv
+ * and OpenSSL resolve through, and locale/time zone. No credentials, no
+ * proxies, and no NODE_OPTIONS — that one can load code into the child.
+ */
+export const MSP_OS_ENV_NAMES = Object.freeze([
+  "PATH", "PATHEXT",
+  "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
+  "TEMP", "TMP", "TMPDIR",
+  "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
+  "LANG", "LC_ALL", "TZ",
+]);
+
+const ALLOWED_ENV_NAMES = new Set([...MSP_RUNTIME_ENV_NAMES, ...MSP_OS_ENV_NAMES].map((name) => name.toUpperCase()));
+
+/**
+ * The environment an MSP child is spawned with: the allowlisted names above,
+ * plus GKS's own `GKS_*` namespace, which MSP does not read itself but must
+ * receive in order to pass on to the GKS child it spawns (that hop applies the
+ * same rule again — apps/msp-server/src/providers/gks-stdio-provider.mjs).
+ *
+ * Names are matched without case and copied as the caller spelled them:
+ * Windows environment names are case-insensitive and arrive as `Path` or
+ * `SystemRoot`, so an exact-case match would silently drop them.
+ *
+ * This is an allowlist, not a denylist, because the host that starts MSP —
+ * zuri-ai's server and edge apps today — holds production database URLs, chat
+ * platform credentials and model API keys that MSP has no use for. A denylist
+ * withholds only what someone remembered to name; anything added to the host's
+ * environment later would reach MSP by default.
+ */
+export function buildMspChildEnv(env = process.env) {
+  const childEnv = {};
+  for (const [name, value] of Object.entries(env ?? {})) {
+    if (typeof value !== "string") continue;
+    const upper = name.toUpperCase();
+    if (ALLOWED_ENV_NAMES.has(upper) || upper.startsWith("GKS_")) childEnv[name] = value;
+  }
+  return childEnv;
+}
+
 export function createMspStdioCaller({ command, args = [], cwd, env = process.env, timeoutMs = 15000 }) {
   if (!command) throw new Error("MSP command is required.");
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new TypeError("MSP timeoutMs must be a positive number.");
 
-  const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: false });
+  const child = spawn(command, args, { cwd, env: buildMspChildEnv(env), stdio: ["pipe", "pipe", "pipe"], shell: false });
   let buffer = Buffer.alloc(0);
   let nextId = 1;
   let initialized;

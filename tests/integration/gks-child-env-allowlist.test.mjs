@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { OS_BASIC_ENV_KEYS, buildGksChildEnv, createGksProviderFromEnvironment } from "../../apps/msp-server/src/providers/gks-stdio-provider.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const providerPath = path.join(here, "fixtures", "env-report-gks-provider.mjs");
+const providerPath = path.join(here, "fixtures", "env-report-stdio-server.mjs");
 
 // The OS basics the allowlist forwards, read from the provider's own allowlist
 // rather than a hand-copied duplicate, so the two can never drift apart. Real

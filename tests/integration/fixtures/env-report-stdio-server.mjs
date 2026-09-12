@@ -1,7 +1,8 @@
-// Minimal NDJSON MCP provider used only to prove what environment the GKS
-// child process actually received. Every tools/call answers with the
-// requested env var names mapped to their observed values (or null when
-// absent) instead of doing any real GKS work.
+// Minimal NDJSON MCP server used only to prove what environment a spawned
+// child process actually received — a GKS child below MSP, or an MSP child
+// below the published client. Every tools/call answers with the requested env
+// var names mapped to their observed values (or null when absent) instead of
+// doing any real work.
 function write(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
