@@ -10,16 +10,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { buildGksChildEnv, createGksProviderFromEnvironment } from "../../apps/msp-server/src/providers/gks-stdio-provider.mjs";
+import { OS_BASIC_ENV_KEYS, buildGksChildEnv, createGksProviderFromEnvironment } from "../../apps/msp-server/src/providers/gks-stdio-provider.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const providerPath = path.join(here, "fixtures", "env-report-gks-provider.mjs");
 
-// The OS basics the allowlist forwards (upper-case; matched
-// case-insensitively). Real values are taken from the environment this test
-// itself runs under, in whatever casing that environment uses, so the
-// assertions hold on both Windows and POSIX CI runners.
-const OS_BASIC_NAMES = ["PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "LANG", "LC_ALL", "TZ"];
+// The OS basics the allowlist forwards, read from the provider's own allowlist
+// rather than a hand-copied duplicate, so the two can never drift apart. Real
+// values are taken from the environment this test itself runs under, in
+// whatever casing that environment uses, so the assertions hold on both
+// Windows and POSIX CI runners.
+const OS_BASIC_NAMES = [...OS_BASIC_ENV_KEYS];
 const osBasics = {};
 for (const key of Object.keys(process.env)) if (OS_BASIC_NAMES.includes(key.toUpperCase())) osBasics[key] = process.env[key];
 
@@ -131,7 +132,10 @@ describe("GKS child process environment allowlist", () => {
       APPDATA: "C:\\Users\\u\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local",
       LANG: "C.UTF-8", LC_ALL: "C.UTF-8", TZ: "Asia/Bangkok",
     };
-    expect(Object.keys(osBasicsUnderTest), "every allowlisted OS basic must be exercised here").toHaveLength(OS_BASIC_NAMES.length);
+    // Set equality against the provider's own allowlist, not a count against a
+    // copy of it: a name added to OS_BASIC_ENV_KEYS but never exercised here
+    // fails, and so does swapping one name for a second casing of another.
+    expect(new Set(Object.keys(osBasicsUnderTest).map((key) => key.toUpperCase())), "every allowlisted OS basic must be exercised here, exactly once").toEqual(OS_BASIC_ENV_KEYS);
     // Names that merely start with, end with or contain an OS basic are not OS basics.
     const lookAlikes = { PATH_SECRET: "decoy", TZ_API_KEY: "decoy", HOME_TOKEN: "decoy", MY_APPDATA: "decoy", TEMPEST: "decoy", NOT_PATH: "decoy" };
     expect(buildGksChildEnv({ ...osBasicsUnderTest, ...lookAlikes, ...decoySecrets, ...mspOwnSecrets })).toEqual(osBasicsUnderTest);
