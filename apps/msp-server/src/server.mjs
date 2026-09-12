@@ -27,6 +27,7 @@ import { createVectorClient } from "@freshair129/msp-retrieval/vector";
 import { createContextHandlers } from "./transport/handlers/context-handlers.mjs";
 import { createLifecycleHandlers } from "./transport/handlers/lifecycle-handlers.mjs";
 import { createMemoryHandlers } from "./transport/handlers/memory-handlers.mjs";
+import { createPipelineHandlers } from "./transport/handlers/pipeline-handlers.mjs";
 import { createGksProviderFromEnvironment } from "./providers/gks-stdio-provider.mjs";
 import { createVaultHandlers } from "./transport/handlers/vault-handlers.mjs";
 import { createStdioJsonRpcServer } from "./transport/stdio-jsonrpc-server.mjs";
@@ -62,6 +63,7 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const contextHandlers = createContextHandlers({ db, journal });
   const lifecycleHandlers = createLifecycleHandlers({ db, entityStore, vaultRegistry, journal, gksProvider });
   const memoryHandlers = createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore });
+  const pipelineHandlers = createPipelineHandlers({ gksProvider, journal, env });
 
   const toolRegistry = new ToolRegistry();
   toolRegistry.register("msp_ping", async () => ({ ok: true, timestamp: new Date().toISOString() }));
@@ -69,6 +71,7 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   for (const [name, handler] of Object.entries(contextHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(lifecycleHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(memoryHandlers)) toolRegistry.register(name, handler);
+  for (const [name, handler] of Object.entries(pipelineHandlers)) toolRegistry.register(name, handler);
 
   const transport = createStdioJsonRpcServer({ toolRegistry, input, output });
 

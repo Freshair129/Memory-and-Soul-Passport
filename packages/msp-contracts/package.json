@@ -5,7 +5,8 @@
   "description": "MSP contract guards, reference vocabulary, and machine-readable tool schemas.",
   "exports": {
     "./*": "./src/contracts/*.mjs",
-    "./api-009": "./schemas/API-009.tools.json"
+    "./api-009": "./schemas/API-009.tools.json",
+    "./genesisrag17": "./schemas/GENESISRAG17.tools.json"
   },
   "files": [
     "src",
