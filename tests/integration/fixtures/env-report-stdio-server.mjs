@@ -17,7 +17,7 @@ let input = Buffer.alloc(0);
 
 function handle(message) {
   if (message.method === "initialize") {
-    write({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "env-report-gks-provider", version: "1" } } });
+    write({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "env-report-stdio-server", version: "1" } } });
     return;
   }
   if (message.method === "tools/call") {

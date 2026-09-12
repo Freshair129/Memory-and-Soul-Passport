@@ -51,6 +51,15 @@ async function reportChildEnv(callerOptions) {
 }
 
 describe("MSP client child-process environment allowlist", () => {
+  it("publishes the builder and both name lists from the package entry, not only the deep path", async () => {
+    // The rest of this file imports by relative path; every other suite imports the
+    // package. Without this, a typo in the index re-export leaves all of them green.
+    const entry = await import("@freshair129/msp-client-js");
+    expect(entry.buildMspChildEnv).toBe(buildMspChildEnv);
+    expect(entry.MSP_RUNTIME_ENV_NAMES).toBe(MSP_RUNTIME_ENV_NAMES);
+    expect(entry.MSP_OS_ENV_NAMES).toBe(MSP_OS_ENV_NAMES);
+  });
+
   it("a spawned MSP child receives the allowlist and none of the host's secrets", async () => {
     const receivedEnv = await reportChildEnv({ env: { ...mspConfig, ...hostSecrets, PATH: process.env.PATH ?? "/usr/bin" } });
     for (const [name, value] of Object.entries(mspConfig)) expect(receivedEnv[name], `${name} must reach the MSP child`).toBe(value);
