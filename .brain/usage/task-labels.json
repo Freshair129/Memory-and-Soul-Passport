@@ -621,8 +621,14 @@
         "BL-MEMOS-033",
         "BL-MEMOS-040..049"
       ],
-      "label": "Fix it all: fuzz anomaly, keyring nits, stage-2 spec, Sonnet trailer rewrite",
-      "status": "open"
+      "label": "Fix it all: fuzz anomaly, keyring nits, stage-2 spec, Sonnet trailer rewrite"
+    },
+    "31": {
+      "task_ids": [
+        "BL-MEMOS-014",
+        "BL-MEMOS-087"
+      ],
+      "label": "Record owner confirmation of DEC-MEMOS-17..21 (docs 8737285)"
     }
   }
 }
