@@ -329,7 +329,13 @@
           "task_ids": [
             "BL-MEMOS-049"
           ],
-          "label": "Keyring doc nits (escape typo, round label, GATE-A row)",
+          "label": "Keyring doc nits (escape typo, round label, GATE-A row) (623e931)"
+        },
+        "9": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Keyring parser: decode values in scanner, not via native JSON.parse keys (V8 bug)",
           "status": "open"
         }
       }
@@ -388,7 +394,19 @@
           "task_ids": [
             "BL-MEMOS-049"
           ],
-          "label": "Root-cause keyring fuzz anomaly (quote-character ids)",
+          "label": "Root-cause keyring fuzz anomaly: V8 JSON.parse non-first-key corruption"
+        }
+      }
+    },
+    "a8d3c47cdf31340cd": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-033",
+            "BL-MEMOS-040..049"
+          ],
+          "label": "Assess V8 JSON.parse bug blast radius across MSP",
           "status": "open"
         }
       }
