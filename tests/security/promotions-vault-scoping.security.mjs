@@ -43,11 +43,9 @@ function tempDbPath() {
   return {
     dbPath,
     cleanup() {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup (Windows file-lock race on child process exit)
-      }
+      // Deterministic once the runtime's close() has been awaited: the
+      // exited child no longer holds the WAL sidecar files open.
+      rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -139,7 +137,7 @@ test("AC-03: two different agents (vaults) reusing the SAME idempotency_key each
     assert.equal(agentBRetry.targetRef, agentBResult.targetRef);
     assert.notEqual(agentBRetry.promotionRef, agentAResult.promotionRef);
   } finally {
-    runtime.call.close();
+    await runtime.call.close();
     cleanup();
   }
 });
@@ -151,7 +149,7 @@ test("AC-03: direct DB proof -- two distinct promotions rows exist, correctly va
     const SHARED_IDEMPOTENCY_KEY = "idem-db-proof";
     await runtime.typed.promoteMemory(promoteInput({ agentId: "agent-gamma", workspaceId: "workspace-gamma", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "gamma" }));
     await runtime.typed.promoteMemory(promoteInput({ agentId: "agent-delta", workspaceId: "workspace-delta", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "delta" }));
-    runtime.call.close();
+    await runtime.call.close();
 
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
@@ -175,6 +173,11 @@ test("AC-03: direct DB proof -- two distinct promotions rows exist, correctly va
       db.close();
     }
   } finally {
+    // Also in the finally: the close() above sits inside the try, so an
+    // assertion failure would otherwise leak the runtime and let the
+    // cleanup below fail with EPERM, hiding the real message. close()
+    // is idempotent and returns immediately once the child has exited.
+    await runtime.call.close();
     cleanup();
   }
 });

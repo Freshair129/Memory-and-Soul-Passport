@@ -46,7 +46,7 @@ async function reportChildEnv(callerOptions) {
     const result = await call("msp_env_report", { report_keys: REPORT_KEYS });
     return result.received_env;
   } finally {
-    call.close();
+    await call.close();
   }
 }
 

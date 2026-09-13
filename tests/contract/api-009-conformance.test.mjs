@@ -74,9 +74,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  call?.close();
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  if (tempDir) rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  // close() resolves on the child's real exit, so no sleep-and-retry dance is
+  // needed to get past the WAL sidecar files it holds until then.
+  await call?.close();
+  if (tempDir) rmSync(tempDir, { recursive: true, force: true });
 });
 
 describe("API-009 machine contract", () => {

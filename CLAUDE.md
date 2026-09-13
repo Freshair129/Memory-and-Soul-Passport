@@ -19,6 +19,13 @@ vault B's data (30/30 security checks at Gate A).
 
 ## Toolchain
 
+Node `>=22`. `better-sqlite3` is pinned to 13.x (N-API, prebuilt): 11.x/12.x
+must not come back — see the Toolchain section of `README.md` and
+`docs/NOTES.md`. Anything that kills an MSP runtime and then touches its
+database file, or the directory holding it, must `await` the client's
+`close()`; it resolves on the child's real exit, and the WAL `-shm` mapping is
+not released before then.
+
 ```bash
 npm install
 npm test                    # test:vitest (contract + integration) + test:security

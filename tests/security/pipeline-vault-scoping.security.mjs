@@ -56,8 +56,10 @@ test("real stdio registration enforces every pipeline grant before unconfigured 
     }
     await assert.rejects(call("msp_pipeline_claim", { ...base, credential: "worker", limit: 1 }), /unconfigured/);
   } finally {
-    call.close();
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    // Awaiting close() (it resolves on the child's real exit) replaces the
+    // sleep-and-retry this used to need: the runtime keeps its WAL sidecars
+    // open until it is actually gone. See msp-stdio-transport.mjs's close().
+    await call.close();
+    rmSync(temp, { recursive: true, force: true });
   }
 });

@@ -12,12 +12,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Node 24 is deliberately absent: better-sqlite3 11.10.0 aborts on
-        # teardown under Node 24 ("Assertion failed: (env) != nullptr"), which
-        # fails a varying handful of the memory tests. Add 24 to this matrix in
-        # the same change that fixes that, not before — a gate that is red for
-        # reasons unrelated to the diff teaches everyone to ignore it.
-        node: ["20", "22"]
+        # Node 24 is back: better-sqlite3 11.10.0 aborted on teardown under
+        # Node 24.19+ ("Assertion failed: (env) != nullptr", nodejs/node#65446)
+        # because it was compiled against a broken node_object_wrap.h. The
+        # workspace now pins better-sqlite3 13 (N-API, prebuilt), which imports
+        # neither cleanup-hook symbol. Node 20 is dropped because
+        # better-sqlite3 13 and the workspace engines field both require >=22.
+        # See docs/NOTES.md "better-sqlite3 13 on Node 24".
+        node: ["22", "24"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

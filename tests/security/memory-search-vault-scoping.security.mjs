@@ -45,11 +45,9 @@ function tempDbPath() {
   return {
     dbPath,
     cleanup() {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup (Windows file-lock race on child process exit)
-      }
+      // Deterministic once the runtime's close() has been awaited: the
+      // exited child no longer holds the WAL sidecar files open.
+      rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -121,7 +119,7 @@ test("AC-03: an entity in vault A is never returned to a caller scoped to vault 
     assert.ok(keysFoundByA.includes("vault-a-secret"));
     assert.ok(!keysFoundByA.includes("vault-b-secret"), "FAIL-CLOSED VIOLATION: vault B's entity leaked into vault A's FTS search results");
   } finally {
-    call.close();
+    await call.close();
     cleanup();
   }
 });
@@ -150,7 +148,7 @@ test("AC-03: an entity in vault A is never returned to a caller scoped to vault 
     const keysFoundByB = resultB.hits.map((hit) => hit.entity.key);
     assert.ok(!keysFoundByB.includes("hybrid-a-secret"), "FAIL-CLOSED VIOLATION: vault A's entity leaked into vault B's hybrid search results");
   } finally {
-    call.close();
+    await call.close();
     cleanup();
   }
 });
@@ -184,7 +182,7 @@ test("AC-03: the exact-match short-circuit is vault-scoped -- a key that exists 
     assert.equal(resultA.searchMode, "exact");
     assert.equal(resultA.hits[0].entity.key, "only-in-vault-a");
   } finally {
-    call.close();
+    await call.close();
     cleanup();
   }
 });
@@ -224,7 +222,7 @@ test("AC-03: msp_memory_get/list/history are likewise vault-scoped -- vault B ca
     assert.equal(history[0].vault_id, vaultA);
     assert.notEqual(history[0].vault_id, vaultB);
   } finally {
-    call.close();
+    await call.close();
     cleanup();
   }
 });
@@ -288,7 +286,7 @@ test("AC-03: msp_memory_forget re-derives the vault from its entity_id -- a forg
       /no memory entity found/i,
     );
   } finally {
-    call.close();
+    await call.close();
     cleanup();
   }
 });
