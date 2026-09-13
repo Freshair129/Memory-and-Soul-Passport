@@ -36,6 +36,12 @@ export const MSP_OS_ENV_NAMES = Object.freeze([
   "TEMP", "TMP", "TMPDIR",
   "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
   "LANG", "LC_ALL", "TZ",
+  // A file path, not a secret. Without it an MSP child cannot verify an HTTPS
+  // endpoint issued by a private CA — and the one outbound call MSP makes,
+  // the embedding request to OLLAMA_BASE_URL, never throws on failure: it
+  // degrades to FTS-only with a diagnostic. Withholding this turns a
+  // configuration problem into silently worse search results.
+  "NODE_EXTRA_CA_CERTS",
 ]);
 
 const ALLOWED_ENV_NAMES = new Set([...MSP_RUNTIME_ENV_NAMES, ...MSP_OS_ENV_NAMES].map((name) => name.toUpperCase()));
