@@ -1,7 +1,7 @@
 ---
 version: "0.1.4b"
 created_at: "2026-08-12T08:33:00+07:00,ATHER,394a176"
-last_update: "2026-09-14T00:00:00+07:00,KIN"
+last_update: "2026-09-15T00:00:00+07:00,KIN"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -54,7 +54,7 @@ All seven root migration files matched the SHA-256 of the corresponding GoVibe s
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
-| 0.1.4b | 2026-09-14 | beta | TASK-MEMOS-002 stage 1 (API-011 thread memory): `npm run test:security` grew from the pre-existing 45 vault-isolation cases (this row's "30/30" baseline grew into by WP-14/WP-16/pipeline/promotions work, unchanged and still passing) with the addition of `tests/security/thread-memory-scoping.security.mjs`. After RKOI's code review round 2 revision, the full security suite is 66 real-process tests, 21 of them thread cases in that one file (C-1 read-isolation attack reproductions, W1/W6/W7, every RKOI post-implementation review item, and the round-2 CRITICAL room-scope-bypass closure) -- up from an interim 57/12 split recorded earlier in this same stage. | working-tree | KIN |
+| 0.1.4b | 2026-09-15 | beta | TASK-MEMOS-002 stage 1 (API-011 thread memory): `npm run test:security` grew from the pre-existing 45 vault-isolation cases (this row's "30/30" baseline grew into by WP-14/WP-16/pipeline/promotions work, unchanged and still passing) with the addition of `tests/security/thread-memory-scoping.security.mjs` (66 total, 21 thread cases, after RKOI's stage-1 code review round 2). TASK-MEMOS-002 stage 2 (BL-MEMOS-049, per-tenant `MSP_THREAD_SERVICE_KEYRING`) added `tests/security/thread-service-keyring.security.mjs`; after RKOI's stage-2 code review round 2 (the CRITICAL closure: no rejection ever quotes anything read out of the keyring), the full security suite is **75 real-process tests**, 9 of them keyring cases in that file. | working-tree | KIN |
 | 0.1.3b | 2026-09-08 | beta | Added the GenesisRAG17 authenticated relay boundary evidence and removed the retired local checkout path from the verification record. | working-tree | ATHER |
 | 0.1.2b | 2026-08-12 | beta | Added repository, branch, and draft-review delivery evidence. | 04f48f6 | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |

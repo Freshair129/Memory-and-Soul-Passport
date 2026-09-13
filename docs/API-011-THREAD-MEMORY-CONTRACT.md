@@ -1,9 +1,9 @@
 ---
 doc_id: "API-011-THREAD-MEMORY-CONTRACT"
-version: "0.3.1b"
+version: "0.3.2b"
 status: "beta"
 created_at: "2026-09-08T00:25:00+07:00,RWANG"
-last_update: "2026-09-14T00:00:00+07:00,KIN"
+last_update: "2026-09-15T00:00:00+07:00,KIN"
 ---
 
 # API-011 Thread, Speaker, Session and Compaction Contract
@@ -282,7 +282,92 @@ the identity-hashing key described above. Both are in
 so a client-spawned MSP child receives them; missing keys fail closed and
 neither key is ever journaled or echoed back to a caller.
 `MSP_THREAD_IDLE_TIMEOUT_MINUTES` and `MSP_THREAD_RECENT_EXCHANGES` are
-ceilings. A host invokes the exported worker functions
+ceilings.
+
+### Per-tenant service key keyring (BL-MEMOS-049, stage 2)
+
+`MSP_THREAD_SERVICE_KEYRING` is an **optional** replacement for the single
+`MSP_THREAD_SERVICE_KEY`, resolved and validated once, synchronously, at
+server start (`apps/msp-server/src/config/thread-service-keyring.mjs`,
+wired in `apps/msp-server/src/server.mjs` — before `open(dbPath)` /
+`runMigrations`, so a malformed keyring never creates or migrates a
+database file, and never leaves an in-process caller holding an open,
+uncloseable DB handle).
+
+**Opt-in, no fallback.** Unset (or an empty string), `keyFor(tenantId)`
+resolves every tenant to `MSP_THREAD_SERVICE_KEY`, byte-for-byte the
+stage-1 behavior. Once `MSP_THREAD_SERVICE_KEYRING` is set to anything
+else, `MSP_THREAD_SERVICE_KEY` is never consulted again, for **any**
+tenant — including one present in the environment but absent from the
+keyring, and including a grant signed with the old single key.
+
+**Format.** A JSON object, `{"<tenantId>": "<key>"}`. `verifyThreadGrant`
+(`packages/msp-contracts/src/contracts/thread-access.mjs`) already resolves
+its HMAC key through an injected `keyFor(claimedTenantId)` function — the
+keyring only supplies a smarter one; no change to grant verification, the
+signature check, or `thread-guard.mjs` was needed. Selection uses the
+grant's own **unverified** `tenantId` claim to pick a candidate key, and
+that same key must then make the HMAC signature verify — a grant claiming
+tenant B is only ever checked against tenant B's key, so a grant signed
+under tenant A's key but claiming tenant B fails signature verification
+(`grant_signature_invalid`), never reaching a per-tool authorization
+decision. A tenant absent from a configured keyring resolves to no key at
+all, which raises the **existing** `grant_unconfigured` — the same code a
+caller already gets today when `MSP_THREAD_SERVICE_KEY` itself is
+unresolvable. No new error code exists for "tenant not in the keyring".
+
+**Refused outright, fail-closed at server start**, with the typed
+`thread_keyring_config_invalid` configuration error (a class distinct from
+the per-request grant vocabulary above — a deployment defect, not a
+decision about any one caller's grant):
+- invalid JSON;
+- a non-object (JSON array, string, number, or `null`);
+- an **empty** object (`{}`) — a keyring, once configured, must name at
+  least one tenant, since naming none makes every grant unconditionally
+  refused;
+- a **duplicate** tenant id among the raw JSON's own top-level keys,
+  including one that only differs from another by JSON escaping (e.g. a
+  literal `-` versus its `-` escape) — detected by scanning the raw
+  source's own key tokens, since JSON.parse (and any reviver run over its
+  result) silently keeps only the *last* occurrence of a repeated key
+  before either ever sees the object;
+- a tenant id that is empty, or that differs from its own trimmed form
+  (leading/trailing whitespace never silently trimmed, never treated as a
+  distinct tenant from its trimmed spelling);
+- a key that is not a string, is under 32 characters (the same floor as
+  `MSP_THREAD_SERVICE_KEY`/`MSP_IDENTITY_HMAC_KEY`), is blank, or has
+  leading/trailing whitespace.
+
+**Secrecy.** No error raised while parsing or validating the keyring ever
+includes any text read out of the keyring itself — a caller-authored map of
+`{tenantId: key}` can be written reversed (`{key: tenantId}`), at which
+point there is no way, from inside the parser, to tell "this is a tenant
+id" from "this is a secret key" by position alone. Every rejection instead
+names the offending entry only by its 1-based position among the keyring's
+top-level entries (e.g. "entry 2"), never by quoting anything drawn from
+the map, in the message, a `cause`, or anywhere else the error object
+exposes text. This matters beyond an operator's own log:
+`apps/msp-server/bin/msp-server.mjs` lets a malformed-keyring exception
+reach the process's default uncaught-exception handler (stderr), and
+`packages/msp-client-js/src/msp-stdio-transport.mjs` folds a crashed
+child's stderr tail into the error it raises to the **calling
+application** — so a leak here would have reached the very caller the
+keyring's tenant boundary exists to protect. The parsed keyring is also
+built with `Object.create(null)` and looked up with `Object.hasOwn`, so an
+entry literally named `__proto__` (a genuine, JSON.parse-produced own
+property, not a prototype override) is stored and resolved as an ordinary
+tenant, while `keyFor("constructor")`, `keyFor("toString")` and similar
+`Object.prototype` member names resolve to `undefined` outright when not
+actually configured — never by incidentally falling through to
+`verifyThreadGrant`'s own `typeof key !== "string"` check.
+
+**Secrecy (env forwarding).** `MSP_THREAD_SERVICE_KEYRING` is in
+`MSP_RUNTIME_ENV_NAMES` alongside `MSP_THREAD_SERVICE_KEY` and
+`MSP_IDENTITY_HMAC_KEY`; it is never journaled or echoed back to a caller.
+
+**Rotation** (more than one live key per tenant) is explicitly deferred —
+the flat `{tenantId: key}` format has no room for it, and none is designed
+here. A host invokes the exported worker functions
 (`apps/msp-server/src/thread-summary-worker.mjs`) with a scoped, pre-signed
 authorized `call`, `workerId`, policy/summarizer versions and injected
 `summarize({sources, protectedRecords, signal, instructions})`. It must
@@ -321,6 +406,20 @@ memory.
 
 ## Version history
 
+### TASK-MEMOS-002 stage 2, BL-MEMOS-049, 2026-09-15
+
+Added the optional per-tenant `MSP_THREAD_SERVICE_KEYRING` described in
+"Per-tenant service key keyring" above -- the one stage-2 item the ADR
+specified fully ahead of the rest of stage 2 (multi-agent: `thread_agents`,
+the agent gate, `agentId`/`nonce`/`assertAgents`, record visibility, worker
+identity), which waits on its own spec review. RKOI's code review round 2
+found and closed a CRITICAL (an inverted `{key: tenantId}` map could echo
+the key itself through the startup error, reaching both the server's
+stderr and, via `msp-stdio-transport.mjs`'s crashed-child-stderr-in-error
+behavior, the calling application) before this landed -- every rejection
+now names an offending entry by position only, never by quoting anything
+read out of the keyring.
+
 ### TASK-MEMOS-002 stage 1, 2026-09-13
 
 Folded the unmerged `origin/codex/msp-thread-memory` design (branch commits
@@ -353,6 +452,7 @@ GKS-as-DNA meaning is not imported into Zuri's GKS knowledge authority.
 
 | Version | Date | Status | Summary | Agent |
 |---|---|---|---|---|
+| 0.3.2b | 2026-09-15 | beta | TASK-MEMOS-002 stage 2, BL-MEMOS-049: optional per-tenant `MSP_THREAD_SERVICE_KEYRING` (opt-in, no fallback once configured, parsed/validated once at server start before the database is even opened); RKOI code review round 2 CRITICAL closed -- no rejection ever quotes anything read out of the keyring, only an entry's 1-based position, closing a path where an inverted `{key: tenantId}` map could echo the key through the startup crash into both the server's stderr and the calling application's own error | KIN |
 | 0.3.1b | 2026-09-14 | beta | RKOI review revision (2 CRITICALs, multiple WARNINGs, 4 rounds against zuri-ai `origin/main`): dropped `channel_type` from the room hash and removed `channelType` from the delivery grant (CRITICAL 1, zuri-ai's real delivery grant never sent one); added DEC-MEMOS-15's self-upgrade exception plus its stored-`person_id` tightening (CRITICAL 2); added the per-tool audience requirement (required on every tool except delivery) and the room-hash cross-check on every thread-bound tool including compaction claim/commit/retry; `person_id` constrained to `{null, principalId}` unconditionally; tenant-scoped uniqueness extended to `thread_injection_receipts`/`thread_summary_invalidations`/cross-references between messages, jobs, summaries and their sessions; `chat_sessions` uniqueness narrowed to "at most one OPEN" only (a schema-level "one CLOSING" constraint was tried and dropped -- late-delivery reconciliation legitimately produces two); tombstone-then-INSERT and `IS NOT`-safe tenant triggers; `ON CONFLICT DO NOTHING` replacing `INSERT OR IGNORE` where it could swallow a NOT NULL violation; output-contract validation removed (ran only after commit); typed grant-verification errors (`grant_unconfigured`/`grant_signature_invalid`/`grant_expired`/`grant_payload_mismatch`) | KIN |
 | 0.3.0b | 2026-09-13 | beta | TASK-MEMOS-002 stage 1: renamed API-010 -> API-011, tenant-scoped uniqueness, HMAC room refs, append-only participants with the one-human-per-DIRECT-thread invariant, `msp-contracts` decoupled from storage, required `source_event_id`, typed errors, test-only clock | KIN |
 | 0.2.0b | 2026-09-08 | beta | Approved cross-repository contract, scope, exchange, coverage and summary refinement; verify implementation per acceptance matrix | RWANG |
