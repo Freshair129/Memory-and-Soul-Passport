@@ -593,6 +593,10 @@ export class ThreadMemoryStore {
       ) {
         throw new ThreadMemoryConflictError("source_event_id was already recorded with different content.");
       }
+      // #drainDeliveries never throws (RKOI code review round 3) -- an
+      // identical replay must reconcile whatever it can and still return
+      // deduplicated:true, never fail permanently because an earlier
+      // attempt left an unreconcilable pending row behind.
       if (existing.direction === "INBOUND") this.#drainDeliveries(existing.message_id);
       return { message: rowMessage(existing), session: rowSession(this.#getSession(existing.session_id)), deduplicated: true };
     }
@@ -706,6 +710,19 @@ export class ThreadMemoryStore {
       translateTriggerError(error);
     }
 
+    // RKOI code review round 3: this runs AFTER the transaction above has
+    // already committed the message -- deliberately kept out of that
+    // transaction (the simpler of the two options RKOI offered) rather
+    // than moved inside it, because #drainDeliveries can call back into
+    // recordDelivery, which opens its OWN nested db.transaction(); folding
+    // that into this method's transaction would mean a reconcile failure
+    // either has to be swallowed mid-transaction (fragile: better-sqlite3
+    // transactions roll back their ENTIRE effect on any uncaught throw,
+    // including the message INSERT this method is trying to protect) or
+    // requires threading a "some errors are fine here" exception ladder
+    // through both methods. #drainDeliveries now never throws instead
+    // (see its own comment), so the append's result is unconditionally
+    // safe to return either way, with none of that complexity.
     if (messageDirection === 'INBOUND') this.#drainDeliveries(result.message.messageId);
 
     this.#journalAppend({
@@ -1143,9 +1160,36 @@ export class ThreadMemoryStore {
       JOIN thread_messages m ON m.message_id=p.inbound_message_id JOIN threads t ON t.thread_id=m.thread_id
       WHERE p.inbound_message_id=? AND p.reconcile_state='pending' AND p.tenant_id=t.tenant_id AND p.business_id IS t.business_id
       AND p.channel_account_id=t.channel_account_id AND p.external_room_ref_hmac=t.external_room_ref_hmac`).all(inboundId)) {
-      this.recordDelivery({ inboundMessageId: inboundId, sourceEventId: row.source_event_id, receiptId: row.receipt_id, outcome: row.outcome,
-        text: row.text, providerRef: row.provider_ref, now: row.recorded_at,
-        scope: { tenantId: row.tenant_id, businessId: row.business_id, channelAccountId: row.channel_account_id, externalRoomRef: null, __precomputedHmac: row.external_room_ref_hmac } });
+      try {
+        this.recordDelivery({ inboundMessageId: inboundId, sourceEventId: row.source_event_id, receiptId: row.receipt_id, outcome: row.outcome,
+          text: row.text, providerRef: row.provider_ref, now: row.recorded_at,
+          scope: { tenantId: row.tenant_id, businessId: row.business_id, channelAccountId: row.channel_account_id, externalRoomRef: null, __precomputedHmac: row.external_room_ref_hmac } });
+      } catch (error) {
+        // RKOI code review round 3: reconciliation is best-effort from the
+        // append's point of view. RKOI's r3/q1.mjs showed a pending
+        // receipt_id that collides with an UNRELATED tenant's already
+        // -delivered receipt (thread_delivery_receipts.receipt_id is a
+        // global namespace, same as message_id/exchange_id/injection_id --
+        // see RSK-MEMOS-09 in docs/IMPLEMENTATION-PLAN-MEMORY-OS.md) can
+        // make recordDelivery throw here, AFTER this append's own INSERT
+        // has already committed. That must never fail, or retroactively
+        // unwind, the append that already succeeded -- #drainDeliveries
+        // runs once per pending row, after the append's own transaction,
+        // specifically so a reconcile failure on one row can never touch
+        // the message it is trying to attach a receipt to. The
+        // unreconcilable row is left exactly as it was (recordDelivery's
+        // own transaction rolled back before ever reaching the
+        // reconcile_state='reconciled' UPDATE) for a later drain attempt --
+        // this append's caller still sees its own successful result.
+        this.#journalAppend({
+          actor: "msp:delivery-drain",
+          toolName: "msp_thread_message_append.reconcile_skipped",
+          ref: inboundId,
+          workspaceId: row.tenant_id,
+          payload: { receipt_id: row.receipt_id, reconciled: false },
+          policyDecision: "allow",
+        });
+      }
     }
   }
 

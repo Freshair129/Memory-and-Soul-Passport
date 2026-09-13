@@ -474,4 +474,75 @@ describe("unified thread, speaker and session memory", () => {
       }),
     ).resolves.toMatchObject({ status: "PENDING_INBOUND" });
   });
+
+  // RKOI code review round 3: RKOI's r3/q1.mjs "drain failure after inbound
+  // commit (receipt collision)" sequence -- an inbound append must never
+  // fail, or become permanently unrepeatable, just because #drainDeliveries
+  // (which runs AFTER the append's own transaction has already committed)
+  // hits an unreconcilable pending receipt.
+  it("an inbound append succeeds, and replays cleanly, even when reconciling its pending delivery collides with an unrelated tenant's already-delivered receipt_id", async () => {
+    const server = makeServer();
+    const tools = server.threadHandlers;
+    const { thread: threadOne } = await tools.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa-drain", external_room_ref: "dm-alice-drain", tenant_id: "tenant-drain-1",
+    });
+    await tools.msp_thread_message_append({
+      thread_id: threadOne.threadId, speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice",
+      direction: "INBOUND", text: "hi", source_event_id: "alice-e1", message_id: "alice-m1",
+    });
+    const { thread: threadTwo } = await tools.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa-drain", external_room_ref: "dm-zed-drain", tenant_id: "tenant-drain-2",
+    });
+
+    // Tenant 1's inbound is fully delivered under receipt_id
+    // "crm-delivered-alice" -- a real row in thread_delivery_receipts.
+    await tools.msp_thread_delivery_record({
+      inbound_message_id: "alice-m1", source_event_id: "alice-m1:assistant", receipt_id: "crm-delivered-alice", outcome: "ACCEPTED", text: "yo",
+      delivery_scope: { tenantId: "tenant-drain-1", businessId: null, channelAccountId: "oa-drain", externalRoomRef: "dm-alice-drain" },
+    });
+    // Tenant 2, entirely independently, records a PENDING delivery for its
+    // OWN future inbound message, using the exact SAME receipt_id (a
+    // caller-supplied global id -- see RSK-MEMOS-09).
+    const pending = await tools.msp_thread_delivery_record({
+      inbound_message_id: "zed-future", source_event_id: "zed-future:assistant", receipt_id: "crm-delivered-alice", outcome: "ACCEPTED", text: "t",
+      delivery_scope: { tenantId: "tenant-drain-2", businessId: null, channelAccountId: "oa-drain", externalRoomRef: "dm-zed-drain" },
+    });
+    expect(pending.status).toBe("PENDING_INBOUND");
+
+    // Tenant 2's inbound now arrives -- #drainDeliveries tries to reconcile
+    // the pending row above, which hits tenant 1's already-delivered
+    // receipt_id and must NOT fail this append.
+    const arrive = tools.msp_thread_message_append({
+      thread_id: threadTwo.threadId, speaker_id: "zed", speaker_kind: "HUMAN", identity_assurance: "VERIFIED",
+      direction: "INBOUND", text: "q", source_event_id: "zf", message_id: "zed-future",
+    });
+    await expect(arrive).resolves.toMatchObject({ message: { messageId: "zed-future" }, deduplicated: false });
+
+    // An identical replay must also succeed, not fail the same way forever.
+    const replay = tools.msp_thread_message_append({
+      thread_id: threadTwo.threadId, speaker_id: "zed", speaker_kind: "HUMAN", identity_assurance: "VERIFIED",
+      direction: "INBOUND", text: "q", source_event_id: "zf", message_id: "zed-future",
+    });
+    await expect(replay).resolves.toMatchObject({ message: { messageId: "zed-future" }, deduplicated: true });
+
+    // The pending row is left exactly as it was, for a later drain --
+    // never silently marked reconciled, never deleted.
+    const pendingRow = server.db.prepare("SELECT tenant_id, reconcile_state FROM thread_pending_deliveries WHERE receipt_id=?").get("crm-delivered-alice");
+    expect(pendingRow).toMatchObject({ tenant_id: "tenant-drain-2", reconcile_state: "pending" });
+
+    // Tenant 1's already-delivered receipt is completely untouched.
+    const deliveredRow = server.db.prepare("SELECT tenant_id, message_id FROM thread_delivery_receipts WHERE receipt_id=?").get("crm-delivered-alice");
+    expect(deliveredRow.tenant_id).toBe("tenant-drain-1");
+
+    // The skipped reconcile is journaled, scoped to tenant 2, with no raw
+    // ids beyond the usual application refs -- once for the original
+    // append and once more for the replay, since each independently
+    // retries (and again fails) the same reconcile.
+    const skipped = server.db.prepare("SELECT ref, workspace_id, payload_json FROM journal WHERE tool_name = 'msp_thread_message_append.reconcile_skipped'").all();
+    expect(skipped).toHaveLength(2);
+    for (const entry of skipped) {
+      expect(entry).toMatchObject({ ref: "zed-future", workspace_id: "tenant-drain-2" });
+      expect(JSON.parse(entry.payload_json)).toMatchObject({ receipt_id: "crm-delivered-alice", reconciled: false });
+    }
+  });
 });
