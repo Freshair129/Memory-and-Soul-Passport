@@ -500,8 +500,14 @@
       "task_ids": [
         "BL-MEMOS-040..049"
       ],
-      "label": "Start stage 2: stacked branches, dispatch ATHER spec and KIN keyring",
-      "status": "open"
+      "label": "Start stage 2: stacked branches, dispatch ATHER spec and KIN keyring"
+    },
+    "29": {
+      "task_ids": [
+        "BL-MEMOS-014",
+        "BL-MEMOS-087"
+      ],
+      "label": "Record owner confirmation of DEC-MEMOS-01..16 (docs 214a7d2)"
     }
   }
 }
