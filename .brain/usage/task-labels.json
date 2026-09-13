@@ -99,6 +99,13 @@
             "BL-MEMOS-012"
           ],
           "label": "TASK-MEMOS-001 docs review, round 4 (approved, 9 warnings)"
+        },
+        "17": {
+          "task_ids": [
+            "BL-MEMOS-012"
+          ],
+          "label": "TASK-MEMOS-001 docs closure check (36b6211)",
+          "status": "open"
         }
       }
     },
@@ -217,8 +224,7 @@
             "BL-MEMOS-010",
             "BL-MEMOS-011"
           ],
-          "label": "Docs round 5: fold RKOI round-4 warnings (design v0.3.4b)",
-          "status": "open"
+          "label": "Docs round 5: fold RKOI round-4 warnings (design v0.3.4b, commit 36b6211)"
         }
       }
     },
