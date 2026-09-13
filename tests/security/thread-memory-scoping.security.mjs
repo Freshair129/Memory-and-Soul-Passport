@@ -911,3 +911,188 @@ test("RKOI review (docs round 4), item 3: a self-upgrade is refused when the STO
     cleanup();
   }
 });
+
+// RKOI code review round 2, CRITICAL: thread-guard.mjs's room-hash check
+// used to run only `if (grant.externalRoomRef)`, so a validly-SIGNED grant
+// that simply OMITTED externalRoomRef skipped the room check entirely --
+// fail OPEN, not fail closed. RKOI's own probe (r2/p2.mjs) demonstrated
+// this claiming another room's compaction job and reading/appending to a
+// DIRECT thread that was not the grant's own, and planting a membership
+// into a GROUP thread with no room claim at all. Every real zuri-ai grant
+// for every thread-bound tool always carries externalRoomRef (and
+// channelAccountId); a grant missing either is now refused outright,
+// covering every thread-bound tool, not just the ones the original probe
+// happened to try.
+test("RKOI code review round 2, CRITICAL: a grant with NO externalRoomRef is refused on every thread-bound tool, never treated as \"nothing to check\"", async () => {
+  const { dbPath, cleanup } = tempDbPath("no-room-critical");
+  const call = spawnRuntime(dbPath);
+  try {
+    const aliceClaims = { ...ROOM, externalRoomRef: "dm-alice-no-room", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1" };
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-alice-no-room" }, aliceClaims),
+    );
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "alice-in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "alice's secret" },
+        aliceClaims,
+      ),
+    );
+
+    // A helper mirroring RKOI's r2/p2.mjs `noRoom()`: same claims as a
+    // legitimate grant, but with externalRoomRef deleted entirely (never
+    // set to a wrong value -- genuinely ABSENT, which is exactly what fell
+    // through the old `if (grant.externalRoomRef)` guard).
+    const noRoom = (extra = {}) => {
+      const claims = { ...ROOM, audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1", ...extra };
+      delete claims.externalRoomRef;
+      return claims;
+    };
+
+    await assert.rejects(
+      call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, noRoom({ readPrivate: true }))),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a grant with no externalRoomRef read a DIRECT thread's private context",
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          { thread_id: thread.threadId, source_event_id: "no-room-append", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "no-room write" },
+          noRoom(),
+        ),
+      ),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a grant with no externalRoomRef appended to a DIRECT thread",
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_memory_record",
+        signed(
+          "msp_thread_memory_record",
+          { thread_id: thread.threadId, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", scope: {}, body: { x: 1 }, source_message_refs: [inbound.message.messageId] },
+          noRoom({ writePrivate: true }),
+        ),
+      ),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a grant with no externalRoomRef recorded protected memory on a DIRECT thread",
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_injection_record",
+        signed(
+          "msp_thread_injection_record",
+          { thread_id: thread.threadId, exchange_id: inbound.message.exchangeId, injection_id: "inj-no-room", packet_hash: "a".repeat(64), policy_revision: "pol1", model_ref: "m", state: "RESOLVED" },
+          noRoom({ readPrivate: true }),
+        ),
+      ),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a grant with no externalRoomRef recorded an injection receipt on a DIRECT thread",
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_delivery_record",
+        signed(
+          "msp_thread_delivery_record",
+          { inbound_message_id: inbound.message.messageId, source_event_id: inbound.message.messageId + ":assistant", receipt_id: "recv-no-room", outcome: "ACCEPTED", text: "reply" },
+          (() => {
+            const claims = { ...ROOM, principalId: "zuri-line-agent", policyRevision: "v1", deliveryWriter: true };
+            delete claims.externalRoomRef;
+            return claims;
+          })(),
+        ),
+      ),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a grant with no externalRoomRef recorded a delivery receipt against alice's inbound message",
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_resolve",
+        signed(
+          "msp_thread_resolve",
+          { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-alice-no-room" },
+          noRoom(),
+        ),
+      ),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a grant with no externalRoomRef resolved an existing thread",
+    );
+
+    // Compaction claim/commit/retry, via the job's thread -- the job itself
+    // needs a real idle session, which needs a real wall-clock wait (W1 /
+    // item 12: MSP_TEST_CLOCK never reaches a spawned child).
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "alice-in-2", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "one more", idle_timeout_minutes: 1 },
+        aliceClaims,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 65_000));
+    const sweep = await call("msp_session_sweep", signed("msp_session_sweep", {}, { ...aliceClaims, operator: true }));
+    assert.equal(sweep.jobs.length, 1);
+    const jobId = sweep.jobs[0].jobId;
+
+    const noRoomOperator = (extra = {}) => {
+      const claims = { ...ROOM, audienceKind: "DIRECT", principalId: "worker-no-room", policyRevision: "v1", operator: true, ...extra };
+      delete claims.externalRoomRef;
+      return claims;
+    };
+    await assert.rejects(
+      call("msp_session_compaction_claim", signed("msp_session_compaction_claim", { job_id: jobId, worker_id: "worker-no-room" }, noRoomOperator())),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a grant with no externalRoomRef claimed a compaction job and could have read its transcript",
+    );
+    await assert.rejects(
+      call("msp_session_compaction_retry", signed("msp_session_compaction_retry", { job_id: jobId, error: "E", lease_token: "does-not-matter" }, noRoomOperator())),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a grant with no externalRoomRef retried a compaction job",
+    );
+    const commitSummary = { topics: [], decisions: [], openQuestions: [], pendingActions: [], corrections: [], outcomes: [], participants: [] };
+    await assert.rejects(
+      call(
+        "msp_session_compaction_commit",
+        signed(
+          "msp_session_compaction_commit",
+          { session_id: "does-not-matter", job_id: jobId, source_start_sequence: 1, source_end_sequence: 2, summary: commitSummary, source_digest: "0".repeat(64), policy_revision: "p", summarizer_version: "v", invocation_state: "TERMINAL", lease_token: "does-not-matter" },
+          noRoomOperator(),
+        ),
+      ),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a grant with no externalRoomRef committed a compaction job",
+    );
+
+    // The GROUP-thread membership-planting reproduction from RKOI's own
+    // probe: a no-room grant must never be able to join a GROUP thread as a
+    // brand-new HUMAN participant either.
+    const groupClaims = { ...ROOM, externalRoomRef: "grp-no-room", audienceKind: "GROUP", policyRevision: "v1", principalId: "mallory" };
+    const { thread: groupThread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "GROUP", audience_kind: "GROUP", ...ROOM_REQUEST, external_room_ref: "grp-no-room" }, groupClaims),
+    );
+    const noRoomMallory = () => {
+      const claims = { ...ROOM, audienceKind: "GROUP", principalId: "mallory", policyRevision: "v1" };
+      delete claims.externalRoomRef;
+      return claims;
+    };
+    await assert.rejects(
+      call(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          { thread_id: groupThread.threadId, source_event_id: "mallory-plant", speaker_id: "mallory", speaker_kind: "HUMAN", identity_assurance: "PENDING", direction: "INBOUND", text: "planted into grp-no-room" },
+          noRoomMallory(),
+        ),
+      ),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a grant with no externalRoomRef planted a HUMAN membership into a GROUP thread",
+    );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});

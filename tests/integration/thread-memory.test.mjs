@@ -296,6 +296,37 @@ describe("unified thread, speaker and session memory", () => {
     expect(secondAppend.message.threadId).toBe(second.thread.threadId);
   });
 
+  // RKOI code review round 2, WARNING 3: unlike source_event_id,
+  // exchange_id IS a single global namespace by design (the trigger's whole
+  // purpose is refusing a second thread's claim on an exchange_id already
+  // used by a first) -- going through the real domain call (not a raw SQL
+  // INSERT) proves translateTriggerError now maps that RAISE(ABORT) to the
+  // module's typed vocabulary, with the exact same generic conflict text as
+  // any other caller-supplied global id collision, instead of leaking the
+  // raw SqliteError/trigger message.
+  it("refuses an inbound append naming an exchange_id already used on a different thread, as a typed conflict with the generic id-collision text", async () => {
+    const server = makeServer();
+    const tools = server.threadHandlers;
+    const base = { thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE_DM", channel_account_id: "oa-zuri", tenant_id: "tenant-01" };
+    const first = await tools.msp_thread_resolve({ ...base, external_room_ref: "dm-exchange-one" });
+    const second = await tools.msp_thread_resolve({ ...base, external_room_ref: "dm-exchange-two" });
+    const firstAppend = await tools.msp_thread_message_append({
+      thread_id: first.thread.threadId, source_event_id: "ex-first", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi",
+    });
+    await expect(
+      tools.msp_thread_message_append({
+        thread_id: second.thread.threadId,
+        source_event_id: "ex-second",
+        exchange_id: firstAppend.message.exchangeId,
+        speaker_id: "bob",
+        speaker_kind: "HUMAN",
+        identity_assurance: "VERIFIED",
+        direction: "INBOUND",
+        text: "stealing the exchange",
+      }),
+    ).rejects.toThrow(/^conflict: That identifier is already in use\.$/);
+  });
+
   it("requires source_event_id on every append", async () => {
     const server = makeServer();
     const tools = server.threadHandlers;
@@ -334,5 +365,113 @@ describe("unified thread, speaker and session memory", () => {
         tenant_id: "tenant-01",
       }),
     ).rejects.toThrow(/identity_hmac_unconfigured/i);
+  });
+
+  // RKOI code review round 2, WARNING 1 (DEC-MEMOS-16, adopted default
+  // pending owner confirmation): the room-hash binding does not encode
+  // channel_type at all (deliberate -- see hmacRoomRef's header comment), so
+  // a resolve naming a DIFFERENT channel_type than the thread that already
+  // owns this exact (tenant, channel_account, external_room_ref) binding
+  // must be refused as a typed conflict, never silently handed the other
+  // channel's thread under the caller's own requested kind.
+  it("refuses a resolve whose channel_type differs from the existing ACTIVE thread's binding, never returning the other channel's thread (DEC-MEMOS-16)", async () => {
+    const server = makeServer();
+    const tools = server.threadHandlers;
+    const base = {
+      thread_kind: "DIRECT",
+      audience_kind: "DIRECT",
+      channel_account_id: "oa-cross-channel",
+      external_room_ref: "same-room-ref",
+      tenant_id: "tenant-01",
+    };
+    const line = await tools.msp_thread_resolve({ ...base, channel_type: "LINE" });
+    await expect(tools.msp_thread_resolve({ ...base, channel_type: "FACEBOOK" })).rejects.toThrow(/different thread scope/i);
+    // Confirm the LINE thread itself is completely unaffected -- a refused
+    // cross-channel resolve must not have created, mutated, or handed out
+    // any thread under the FACEBOOK identity.
+    const relookup = await tools.msp_thread_resolve({ ...base, channel_type: "LINE" });
+    expect(relookup.thread.threadId).toBe(line.thread.threadId);
+    expect(relookup.created).toBe(false);
+  });
+
+  // RKOI code review round 2, WARNING 5: an inbound append naming an
+  // explicit, no-longer-open session_id (with no exchange reference) used
+  // to fall through to the auto-rotation branch, which silently created a
+  // brand-new session -- and if a DIFFERENT session was already OPEN by
+  // then, that INSERT collided with idx_chat_sessions_one_open and
+  // surfaced as a raw, misleading "That identifier is already in use."
+  // conflict. It must instead say the named session is not open.
+  it("gives a typed, specific error for an inbound append naming a stale (non-open) session_id while a different session is already OPEN", async () => {
+    const server = makeServer();
+    const tools = server.threadHandlers;
+    const { thread } = await tools.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa-stale", external_room_ref: "room-stale", tenant_id: "tenant-01",
+    });
+    const first = await tools.msp_thread_message_append({
+      thread_id: thread.threadId, source_event_id: "stale-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "first",
+      idle_timeout_minutes: 1, now: timestamp(0),
+    });
+    const staleSessionId = first.session.sessionId;
+    // Idle the first session out and rotate into a new OPEN one.
+    await tools.msp_thread_message_append({
+      thread_id: thread.threadId, source_event_id: "stale-2", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "second",
+      now: timestamp(5),
+    });
+    await expect(
+      tools.msp_thread_message_append({
+        thread_id: thread.threadId,
+        session_id: staleSessionId,
+        source_event_id: "stale-3",
+        speaker_id: "alice",
+        speaker_kind: "HUMAN",
+        identity_assurance: "VERIFIED",
+        direction: "INBOUND",
+        text: "naming the stale session",
+        now: timestamp(6),
+      }),
+    ).rejects.toThrow(/session_id names a session that is not open/i);
+  });
+
+  // RKOI code review round 2, WARNING 4: a receipt_id colliding with a
+  // DIFFERENT tenant's pending delivery answers with the exact same generic
+  // conflict text as any other caller-supplied global id collision
+  // (message_id/exchange_id/injection_id), chosen because it was cheap to
+  // do -- it does not, and cannot, remove the residual existence-oracle
+  // inherent to any globally unique caller-supplied id (a truly UNUSED
+  // receipt_id still succeeds as PENDING_INBOUND), which is recorded as a
+  // named stage-1 gap rather than fixed.
+  it("a pending delivery receipt_id colliding with a different tenant's pending delivery gets the same generic conflict text as any other id collision", async () => {
+    const server = makeServer();
+    const tools = server.threadHandlers;
+    await tools.msp_thread_delivery_record({
+      inbound_message_id: "nope-ten1",
+      source_event_id: "nope-ten1:assistant",
+      receipt_id: "shared-receipt",
+      outcome: "ACCEPTED",
+      text: "t",
+      delivery_scope: { tenantId: "tenant-01", businessId: null, channelAccountId: "oa-r4", externalRoomRef: "room-r4" },
+    });
+    await expect(
+      tools.msp_thread_delivery_record({
+        inbound_message_id: "nope-ten2",
+        source_event_id: "nope-ten2:assistant",
+        receipt_id: "shared-receipt",
+        outcome: "ACCEPTED",
+        text: "t",
+        delivery_scope: { tenantId: "tenant-02", businessId: null, channelAccountId: "oa-r4", externalRoomRef: "room-r4" },
+      }),
+    ).rejects.toThrow(/That identifier is already in use\./);
+    // A genuinely UNUSED receipt_id still succeeds -- the residual
+    // existence-oracle this leaves in place is the named stage-1 gap.
+    await expect(
+      tools.msp_thread_delivery_record({
+        inbound_message_id: "nope-ten3",
+        source_event_id: "nope-ten3:assistant",
+        receipt_id: "totally-unused-receipt",
+        outcome: "ACCEPTED",
+        text: "t",
+        delivery_scope: { tenantId: "tenant-03", businessId: null, channelAccountId: "oa-r4", externalRoomRef: "room-r4" },
+      }),
+    ).resolves.toMatchObject({ status: "PENDING_INBOUND" });
   });
 });

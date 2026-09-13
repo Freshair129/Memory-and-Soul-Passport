@@ -352,6 +352,83 @@ describe("migrations/0008_thread_memory.sql trigger invariants", () => {
     server.db.prepare("INSERT INTO thread_summary_invalidations(summary_id,tenant_id,reason,recorded_at) VALUES('sum-v','tenant-a','r','t')").run();
     expect(() => server.db.prepare("UPDATE thread_summary_invalidations SET tenant_id='tenant-b'").run()).toThrow(/immutable/);
     expect(() => server.db.prepare("DELETE FROM thread_summary_invalidations").run()).toThrow(/never be deleted/);
+    // RKOI code review round 2, WARNING 7: the WHOLE row is immutable, not
+    // just tenant_id/summary_id -- reason and recorded_at are facts
+    // observed at write time and must never be edited after the fact.
+    expect(() => server.db.prepare("UPDATE thread_summary_invalidations SET reason='different-reason' WHERE summary_id='sum-v'").run()).toThrow(/immutable/);
+    expect(() => server.db.prepare("UPDATE thread_summary_invalidations SET recorded_at='later' WHERE summary_id='sum-v'").run()).toThrow(/immutable/);
+  });
+
+  // RKOI code review round 2, WARNING 7: `threads` had every no-delete
+  // trigger EXCEPT its own -- every other durable table in this file
+  // refuses a DELETE, but a thread row itself did not.
+  it("refuses to ever DELETE a threads row", async () => {
+    const server = makeServer();
+    const { thread } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-no-delete", tenant_id: "tenant-a",
+    });
+    expect(() => server.db.prepare("DELETE FROM threads WHERE thread_id=?").run(thread.threadId)).toThrow(/never be deleted/);
+  });
+
+  // RKOI code review round 2, WARNING 7: an injection receipt's exchange_id
+  // must belong to ITS OWN thread_id -- the domain layer already checks
+  // this before ever inserting (ThreadMemoryStore#recordInjection), so this
+  // proves the schema-level backstop independently, the same way every
+  // other cross-reference integrity rule in this file is proven directly
+  // against the table.
+  it("thread_injection_receipts refuses an exchange_id that belongs to a different thread", async () => {
+    const server = makeServer();
+    const { thread: threadA } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-inj-a", tenant_id: "tenant-a",
+    });
+    const { thread: threadB } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-inj-b", tenant_id: "tenant-a",
+    });
+    const { message: messageA } = await server.threadHandlers.msp_thread_message_append({
+      thread_id: threadA.threadId, source_event_id: "inj-a-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi from A",
+    });
+    expect(() =>
+      server.db
+        .prepare(
+          "INSERT INTO thread_injection_receipts(injection_id,tenant_id,thread_id,exchange_id,packet_hash,policy_revision,model_ref,state,updated_at) VALUES('inj-cross','tenant-a',?,?,?,'p','m','RESOLVED','t')",
+        )
+        .run(threadB.threadId, messageA.exchangeId, "a".repeat(64)),
+    ).toThrow(/exchange_id must belong to thread_id/);
+  });
+
+  // RKOI code review round 2, WARNING 7: a delivery receipt's target
+  // message is, by definition, the reply that was delivered -- it can only
+  // ever be an OUTBOUND message. The domain layer only ever looks up an
+  // OUTBOUND message before inserting a receipt, so this proves the
+  // schema-level backstop independently.
+  it("thread_delivery_receipts refuses a message_id that names an INBOUND message", async () => {
+    const server = makeServer();
+    const { thread } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-recv-only", tenant_id: "tenant-a",
+    });
+    const { message } = await server.threadHandlers.msp_thread_message_append({
+      thread_id: thread.threadId, source_event_id: "recv-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi",
+    });
+    expect(() =>
+      server.db
+        .prepare("INSERT INTO thread_delivery_receipts(receipt_id,tenant_id,message_id,outcome,text,recorded_at) VALUES('recv-only-receipt','tenant-a',?,'ACCEPTED','x','t')")
+        .run(message.messageId),
+    ).toThrow(/must name an OUTBOUND message/);
+  });
+
+  // RKOI code review round 2, WARNING 3: idx_thread_messages_exchange_lookup
+  // (exchange_id, thread_id) exists specifically so the cross-thread
+  // exchange_id check in trg_thread_messages_tenant_consistency is a single
+  // index seek, not a full table scan of thread_messages.
+  it("uses an index, not a full table scan, for the exchange_id-across-threads lookup the tenant-consistency trigger runs", async () => {
+    const server = makeServer();
+    const plan = server.db
+      .prepare("EXPLAIN QUERY PLAN SELECT 1 FROM thread_messages m WHERE m.exchange_id = ? AND m.thread_id <> ?")
+      .all("some-exchange", "some-thread")
+      .map((row) => row.detail)
+      .join(" | ");
+    expect(plan).toMatch(/USING (COVERING )?INDEX idx_thread_messages_exchange_lookup/);
+    expect(plan).not.toMatch(/SCAN thread_messages/);
   });
 });
 
