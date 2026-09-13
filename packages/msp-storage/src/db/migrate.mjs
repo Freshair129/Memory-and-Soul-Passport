@@ -12,8 +12,9 @@
 // docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md §12.0): a migration file
 // whose FIRST LINE is exactly "-- msp-migration: foreign-keys=off" is
 // applied as:
-//   1. Refuse (prefixed error, see below) if the connection is already
-//      inside a transaction -- PRAGMA foreign_keys cannot be changed there.
+//   1. Refuse, prefixed `migration_in_transaction_refused:`, if the
+//      connection is already inside a transaction -- PRAGMA foreign_keys
+//      cannot be changed there.
 //   2. PRAGMA foreign_keys = OFF, outside any transaction -- SQLite ignores
 //      that pragma inside one, and better-sqlite3 will not error if you
 //      try, so ordering is the whole point -- then read it back and refuse
@@ -58,13 +59,18 @@
 // the migration file's text, so the existing checksum-drift guard covers it
 // automatically; the runner itself never decides on its own to relax
 // foreign keys. A migration without the directive is applied exactly as
-// before, on the plain path. A migration that contains the directive text
-// in its leading comment block but NOT as the exact first line -- wrong
-// line, a leading byte-order mark, leading/trailing whitespace, or
-// different casing -- is refused outright
-// (`migration_directive_misplaced:`) rather than silently treated as plain,
-// so a typo in the one line that turns off foreign-key enforcement is never
-// silent.
+// before, on the plain path. Any line in the file's leading comment block
+// that mentions "msp-migration" (case-insensitively, anywhere in the line)
+// and is not exactly the directive on the file's first line -- a near-miss
+// spelling of the directive itself (missing space, underscore instead of a
+// hyphen, extra or missing whitespace around "="), the directive on the
+// wrong line, a leading byte-order mark, leading/trailing whitespace,
+// different casing, or even a prose comment that only talks about the
+// directive -- is refused outright (`migration_directive_misplaced:`)
+// rather than silently treated as plain, so a typo in the one line that
+// turns off foreign-key enforcement is never silent. Content outside that
+// leading comment block -- the SQL body, or a comment after the file's
+// first non-comment statement -- is never scanned for this.
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -80,42 +86,57 @@ function stripLeadingBom(line) {
   return line.charCodeAt(0) === 0xfeff ? line.slice(1) : line;
 }
 
-// Classifies a migration file's relationship to FOREIGN_KEYS_OFF_DIRECTIVE:
+// Marker substring the runner treats as "this header line is talking to
+// me". Deliberately broader than the directive's own text: a line that
+// merely names "msp-migration" without being exactly right is far more
+// likely a typo an author would want surfaced than a deliberate comment
+// that happens to share the word.
+const DIRECTIVE_MARKER = "msp-migration";
+
+// Classifies a migration file's relationship to FOREIGN_KEYS_OFF_DIRECTIVE
+// by scanning its LEADING COMMENT BLOCK -- every line from the top of the
+// file (after an optional UTF-8 BOM on line 1) that is blank or starts with
+// a SQL line comment ("--"), stopping at the first line that is neither:
 //   - "off": the file's first line is exactly the directive (no BOM, no
 //     leading/trailing whitespace, exact case) -- the foreign-keys=off mode
 //     applies.
-//   - "misplaced": the directive text appears (case-insensitively, ignoring
-//     surrounding whitespace) on some other line of the file's LEADING
-//     COMMENT BLOCK -- every line from the top of the file that is blank or
-//     starts with a SQL line comment ("--"), stopping at the first line
-//     that is neither. This also covers a leading UTF-8 BOM in front of an
-//     otherwise-exact directive on line 1, since the BOM makes the raw
-//     first line not an exact match. A migration in this state is refused
-//     rather than silently run on the plain path, on the theory that a
-//     malformed directive is far more likely a mistake an author would want
-//     to know about than a deliberate comment.
-//   - "plain": the directive text does not appear in the leading comment
-//     block at all -- applied exactly as every migration was before this
-//     mode existed.
+//   - "misplaced" (with the offending raw line attached, for the error
+//     message): some line in the leading comment block contains
+//     DIRECTIVE_MARKER (case-insensitively, anywhere in the line) and is
+//     not the exact directive on line 1. This single rule covers every
+//     near-miss: a misspelled directive on line 1 itself (missing space
+//     after "--", underscore instead of a hyphen, spaces around "=", a
+//     missing or doubled space after the colon), the directive on the
+//     wrong line, a leading BOM in front of an otherwise-exact line 1, and
+//     a prose comment that only talks about the directive (e.g. "-- see
+//     msp-migration directive docs"). A migration in this state is refused
+//     rather than silently run on the plain path.
+//   - "plain": no line in the leading comment block contains
+//     DIRECTIVE_MARKER at all -- applied exactly as every migration was
+//     before this mode existed. Content outside the leading comment block
+//     (the SQL body, or a comment after the file's first non-comment
+//     statement) is never scanned, so mentioning the marker there has no
+//     effect.
 function classifyForeignKeysDirective(sql) {
   const lines = sql.split("\n").map(stripTrailingCr);
   const firstLineWithoutBom = stripLeadingBom(lines[0] ?? "");
   const firstLineHasBom = (lines[0] ?? "") !== firstLineWithoutBom;
 
   if (!firstLineHasBom && firstLineWithoutBom === FOREIGN_KEYS_OFF_DIRECTIVE) {
-    return "off";
+    return { state: "off" };
   }
 
-  const normalizedDirective = FOREIGN_KEYS_OFF_DIRECTIVE.toLowerCase();
   for (const rawLine of lines) {
     const line = stripLeadingBom(rawLine);
     const trimmed = line.trim();
     if (trimmed === "") continue;
-    if (trimmed.toLowerCase() === normalizedDirective) return "misplaced";
     if (!trimmed.startsWith("--")) break; // left the leading comment block
+    if (trimmed.toLowerCase().includes(DIRECTIVE_MARKER)) {
+      return { state: "misplaced", line: trimmed };
+    }
   }
 
-  return "plain";
+  return { state: "plain" };
 }
 
 // Deliberate note on a spec tension: WP-12's prose says domain/errors.mjs's
@@ -268,7 +289,7 @@ function checkForeignKeyTargetsStructurallyValid(db, file) {
 function applyForeignKeysOffMigration(db, file, insertMigration) {
   if (db.inTransaction) {
     throw new SchemaVersionError(
-      `migration_foreign_key_check_failed: migration "${file.name}" carries the foreign-keys=off directive, but the ` +
+      `migration_in_transaction_refused: migration "${file.name}" carries the foreign-keys=off directive, but the ` +
         `connection is already inside a transaction -- PRAGMA foreign_keys cannot be changed there. Refusing to start.`,
     );
   }
@@ -398,16 +419,17 @@ export function runMigrations(db, migrationsDir) {
   );
 
   for (const file of pending) {
-    const directiveState = classifyForeignKeysDirective(file.sql);
-    if (directiveState === "misplaced") {
+    const directive = classifyForeignKeysDirective(file.sql);
+    if (directive.state === "misplaced") {
       throw new SchemaVersionError(
-        `migration_directive_misplaced: migration "${file.name}" contains the "${FOREIGN_KEYS_OFF_DIRECTIVE}" ` +
-          `directive text in its leading comment block, but not as the file's exact first line (wrong line, a ` +
-          `leading byte-order mark, surrounding whitespace, or different casing all count). The directive only ` +
-          `takes effect there; fix or remove it. Refusing to start.`,
+        `migration_directive_misplaced: migration "${file.name}" has a line in its leading comment block that ` +
+          `mentions "${DIRECTIVE_MARKER}" but is not exactly the directive "${FOREIGN_KEYS_OFF_DIRECTIVE}" on the ` +
+          `file's first line (wrong line, a leading byte-order mark, surrounding whitespace, different casing, or ` +
+          `a near-miss spelling all count) -- the offending line reads: "${directive.line}". The directive only ` +
+          `takes effect there; fix or remove this line. Refusing to start.`,
       );
     }
-    if (directiveState === "off") {
+    if (directive.state === "off") {
       applyForeignKeysOffMigration(db, file, insertMigration);
     } else {
       const applyOne = db.transaction(() => {

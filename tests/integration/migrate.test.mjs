@@ -2,7 +2,7 @@
 // migrations with a checksum, a checksum-drift guard rejects a modified
 // already-applied migration file, and a downgrade guard rejects a database
 // whose recorded schema version is higher than any migration file present.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -377,7 +377,7 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
     expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
   });
 
-  it("refuses a directive migration that runs while the connection is already inside a transaction", () => {
+  it("refuses a directive migration that runs while the connection is already inside a transaction, prefixed migration_in_transaction_refused (not migration_foreign_key_check_failed, since no check ran), and records nothing", () => {
     const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
     const db = freshDb();
 
@@ -388,7 +388,12 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
       db.transaction(() => {
         runMigrations(db, migrationsDir);
       })(),
-    ).toThrow(/^migration_foreign_key_check_failed:.*already inside a transaction/s);
+    ).toThrow(/^migration_in_transaction_refused:.*already inside a transaction/s);
+
+    // Nothing recorded, nothing bumped -- the check never even ran.
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    expect(db.pragma("user_version", { simple: true })).toBe(1);
   });
 
   it("without the directive, the same populated rebuild fails on the plain path -- this is the reason the mode exists", () => {
@@ -448,7 +453,29 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
     expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
   });
 
-  it("leading/trailing whitespace and different casing on an otherwise-exact directive line are refused as misplaced too", () => {
+  it("trailing whitespace after an otherwise-exact directive on line 1 is refused as misplaced, not accepted via trim()", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(migrationsDir, withDirective(parentRebuildBody()).replace(FOREIGN_KEYS_OFF_DIRECTIVE, `${FOREIGN_KEYS_OFF_DIRECTIVE} `));
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_directive_misplaced:/);
+  });
+
+  it("a leading space after '--' (not before it) on an otherwise-exact directive line is refused as misplaced, not accepted", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    // One extra space right after the "--" prefix, before "msp-migration".
+    const extraSpaceAfterDashes = `--  msp-migration: foreign-keys=off`;
+    addMigration0002(migrationsDir, `${extraSpaceAfterDashes}\n${parentRebuildBody()}`);
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_directive_misplaced:/);
+  });
+
+  it("different casing on an otherwise-exact directive line is refused as misplaced, not accepted case-insensitively", () => {
     const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
     const db = freshDb();
 
@@ -456,6 +483,101 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
     addMigration0002(migrationsDir, withDirective(parentRebuildBody()).toUpperCase());
 
     expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_directive_misplaced:/);
+  });
+
+  // RKOI review of WP-E0, warning 2: classifyForeignKeysDirective() used to
+  // compare a whole header line against the exact directive text, so any
+  // near-miss spelling was classified "plain" and applied silently on the
+  // path with no structural FK check -- exactly the outage this mode exists
+  // to prevent. Each near-miss below must be refused as misplaced instead.
+  const NEAR_MISS_DIRECTIVE_LINES = [
+    ["no space after '--'", "--msp-migration: foreign-keys=off"],
+    ["underscore instead of a hyphen", "-- msp-migration: foreign_keys=off"],
+    ["spaces around '='", "-- msp-migration: foreign-keys = off"],
+    ["missing space after the colon", "-- msp-migration:foreign-keys=off"],
+    ["doubled space after the colon", "-- msp-migration:  foreign-keys=off"],
+  ];
+
+  it.each(NEAR_MISS_DIRECTIVE_LINES)(
+    "near-miss spelling (%s) is refused as misplaced, not silently applied on the plain path",
+    (_description, nearMissLine) => {
+      const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+      const db = freshDb();
+
+      initAndPopulate(migrationsDir, db);
+      // The unsafe rebuild order: if this were misclassified "plain" and
+      // applied, it would either throw a plain FOREIGN KEY error (masking
+      // the real problem) or, worse, silently corrupt the schema on an
+      // empty child table. It must never reach that path at all.
+      addMigration0002(migrationsDir, `${nearMissLine}\n${renameAwayRebuildBody()}`);
+
+      expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+      expect(() => runMigrations(db, migrationsDir)).toThrow(
+        /^migration_directive_misplaced:.*"0002_widen_parent_kind\.sql"/s,
+      );
+
+      const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+      expect(rows).toEqual([{ version: 1 }]);
+      expect(db.pragma("user_version", { simple: true })).toBe(1);
+    },
+  );
+
+  it("a prose comment in the header that merely mentions 'msp-migration' is refused as misplaced -- the header is reserved for the runner (documented in docs/MIGRATION.md)", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(
+      migrationsDir,
+      ["-- see msp-migration directive docs", parentRebuildBody()].join("\n"),
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_directive_misplaced:.*"0002_widen_parent_kind\.sql"/s,
+    );
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    expect(db.pragma("user_version", { simple: true })).toBe(1);
+  });
+
+  it("'msp-migration' appearing only after the file's first SQL statement is not scanned -- the migration runs on the plain path", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    // The leading comment block ends at the first non-comment line (the
+    // CREATE TABLE below); everything after that, including a comment that
+    // mentions "msp-migration", is outside it and must not be scanned.
+    addMigration0002(
+      migrationsDir,
+      ["CREATE TABLE unrelated_after_first_statement (id INTEGER PRIMARY KEY);", "-- msp-migration: not a directive here"].join(
+        "\n",
+      ),
+    );
+
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(1);
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'unrelated_after_first_statement'").all()).toHaveLength(1);
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }, { version: 2 }]);
+  });
+
+  it("the real root migrations 0001-0007, copied into a temp directory, apply with no directive classification error -- none of their leading comment blocks mentions msp-migration", () => {
+    const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
+    const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
+    expect(migrationFileNames).toHaveLength(7);
+
+    const files = Object.fromEntries(
+      migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
+    );
+    const migrationsDir = setupMigrationsDir(files);
+    const db = freshDb();
+
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(7);
+    expect(result.currentVersion).toBe(7);
   });
 
   it("idempotency: a second runMigrations over the same directory applies 0 migrations and leaves foreign_keys at 1", () => {
