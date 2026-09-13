@@ -153,7 +153,7 @@ describe("AC-05/AC-07: msp_memory_decay_tick round-trips over the real stdio pro
     await call("msp_memory_decay_tick", { vault_id: vaultId, dry_run: true });
     await call("msp_memory_decay_tick", { vault_id: vaultId, dry_run: false });
 
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {
@@ -205,7 +205,7 @@ describe("AC-05/AC-07: msp_memory_decay_tick round-trips over the real stdio pro
     expect(history.length).toBeGreaterThanOrEqual(1);
 
     // Row still physically exists -- no DELETE was ever issued.
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {
@@ -232,7 +232,7 @@ describe("WP-16 Bounded Scope item 3: reinforcement on access (touch())", () => 
 
     await call("msp_memory_get", { vault_id: vaultId, category: "note", key: "touched-by-get" });
 
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {
@@ -256,7 +256,7 @@ describe("WP-16 Bounded Scope item 3: reinforcement on access (touch())", () => 
 
     await call("msp_memory_search", { vault_id: vaultId, query: "findme-unique-token", mode: "fts" });
 
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {
@@ -286,7 +286,7 @@ describe("WP-16 Bounded Scope item 3: reinforcement on access (touch())", () => 
       as_of_recorded_at: created.entity.recorded_at,
     });
 
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {

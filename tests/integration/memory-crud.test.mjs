@@ -224,7 +224,7 @@ describe("AC-04: msp_memory_* CRUD tools round-trip over the real stdio process"
     expect(history[history.length - 1].change_reason).toBe("gdpr-request");
 
     // Row still physically exists in the database -- no DELETE was ever issued.
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {
@@ -251,7 +251,7 @@ describe("AC-04: msp_memory_* CRUD tools round-trip over the real stdio process"
       body_json: { v: 1 },
     });
 
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {

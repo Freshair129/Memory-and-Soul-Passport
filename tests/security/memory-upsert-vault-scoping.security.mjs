@@ -124,7 +124,7 @@ test("an upsert through vault B never overwrites or shadows vault A's same-(cate
     // Direct DB proof behind the wire behavior: two rows exist for the
     // contested (category, key), one per vault, and vault A's body is the
     // victim's original.
-    call.close();
+    await call.close();
     const db = open(dbPath);
     try {
       const rows = db

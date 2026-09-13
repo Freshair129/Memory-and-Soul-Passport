@@ -86,7 +86,7 @@ test("AC-01: msp_memory_links_create rejects a link whose two endpoints belong t
     );
 
     // No row was written by the rejected attempts.
-    call.close();
+    await call.close();
     const db = open(dbPath);
     try {
       const rows = db.prepare("SELECT COUNT(*) AS count FROM links").get();
@@ -171,7 +171,7 @@ test("msp_memory_links_list is vault-scoped through its entity_id -- vault B's s
 
     // Direct DB proof that the wire behavior rests on vault-scoped rows,
     // not luck: the only link row is vault A's.
-    call.close();
+    await call.close();
     const db = open(dbPath);
     try {
       const rows = db.prepare("SELECT vault_id, from_entity_id, to_entity_id FROM links").all();

@@ -151,7 +151,7 @@ test("AC-03: direct DB proof -- two distinct promotions rows exist, correctly va
     const SHARED_IDEMPOTENCY_KEY = "idem-db-proof";
     await runtime.typed.promoteMemory(promoteInput({ agentId: "agent-gamma", workspaceId: "workspace-gamma", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "gamma" }));
     await runtime.typed.promoteMemory(promoteInput({ agentId: "agent-delta", workspaceId: "workspace-delta", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "delta" }));
-    runtime.call.close();
+    await runtime.call.close();
 
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);

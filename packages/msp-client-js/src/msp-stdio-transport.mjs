@@ -155,10 +155,33 @@ export function createMspStdioCaller({ command, args = [], cwd, env = process.en
     return result?.structuredContent ?? (text ? JSON.parse(text) : {});
   };
 
+  /**
+ * Stop the MSP child and resolve once it has actually exited.
+ *
+ * Closing stdin first is what makes the exit clean: the server reads stdin
+ * through readline, so ending it lets the process finish and SQLite close and
+ * checkpoint its write-ahead log. A kill leaves that log behind with the file
+ * handles still open for a moment, and anything that reopens the database in
+ * that window races the dying child — on Windows SQLite reports it as
+ * SQLITE_IOERR_TRUNCATE. The kill stays as a fallback for a child that will
+ * not leave on its own.
+ *
+ * Returning a promise keeps every existing caller working (the return value
+ * was undefined before, and is still ignorable) while letting a caller that
+ * touches the database afterwards await the exit.
+ */
   call.close = () => {
     closed = true;
     failPending(new Error("MSP transport closed."));
-    child.kill();
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    const exited = new Promise((resolve) => child.once("exit", () => resolve()));
+    try {
+      child.stdin.end();
+    } catch {
+      // Already gone; the kill below covers it.
+    }
+    const killer = setTimeout(() => child.kill(), 1000);
+    return exited.finally(() => clearTimeout(killer));
   };
   return call;
 }

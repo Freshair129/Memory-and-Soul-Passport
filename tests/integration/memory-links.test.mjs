@@ -130,7 +130,7 @@ describe("AC-01: msp_memory_links_create/list round-trip over the real stdio pro
     await call("msp_memory_links_create", { from_entity_id: a, to_entity_id: b, link_type: "relates_to" });
     await call("msp_memory_links_create", { from_entity_id: a, to_entity_id: b, link_type: "relates_to" });
 
-    openCallers.pop().close();
+    await openCallers.pop().close();
     const { open } = await import("@freshair129/msp-storage/connection");
     const db = open(dbPath);
     try {
