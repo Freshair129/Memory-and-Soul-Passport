@@ -1,7 +1,7 @@
 ---
-version: "0.1.0b"
+version: "0.1.1b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-14T10:00:00+07:00,ATHER"
+last_update: "2026-09-14T14:00:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -20,6 +20,22 @@ about each other, adopts RKOI's recommended default for each, and specifies
 the multi-user/multi-agent model neither piece of prior work fully covered.
 Every adopted default is explicitly **pending owner confirmation** (see the
 checklist below) — this ADR authorizes design work, not a merge.
+
+## Revision note — RKOI NEEDS REVISION (2026-09-14)
+
+RKOI reviewed commit `2f4d584` and returned **NEEDS REVISION with 3
+critical findings** against the first version of this ADR and its
+companion design. All three were about the design's DDL and wire shapes,
+not this ADR's decision list directly, and are fixed in
+`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.1b §0.1: (1) migration
+0008 did not apply (a `CHECK` used a forbidden subquery); (2) the design's
+tool shapes broke this ADR's own decision 2 by inventing camelCase,
+nested-grant, renamed fields instead of using the branch's actual frozen
+shapes; (3) any agent could attach itself to any thread via resolve. This
+ADR is amended to: correct the C-2 citation (below), record RKOI's rulings
+on the four judgement calls this ADR previously raised on its own
+authority, add four new adopted defaults (DEC-MEMOS-11..14), and list the
+cross-repo wire changes stage 2 will require of zuri-ai.
 
 ## Context
 
@@ -67,10 +83,16 @@ line-by-line security review of the branch's own code, found:
   different Person.
 - **C-2 (critical):** the branch's authorization guard in `msp-contracts`
   runs SQL to answer "is this speaker a current verified participant" —
-  the same layering violation `vault-scope-guard.mjs` and
-  `thread-scope-guard.mjs` were built to avoid (both take a precomputed
-  boolean from a DB-backed registry; see
-  `packages/msp-contracts/src/contracts/vault-scope-guard.mjs:22-33`).
+  the same layering violation `vault-scope-guard.mjs`
+  (`packages/msp-contracts/src/contracts/vault-scope-guard.mjs:22-33`) was
+  built to avoid: it takes a precomputed boolean from a DB-backed registry
+  and never touches SQL itself. **Correction (RKOI, 2026-09-14):** an
+  earlier version of this ADR cited a `thread-scope-guard.mjs` as if it
+  already existed alongside `vault-scope-guard.mjs`; no such file exists
+  in this repository. The fix is a **new** file,
+  `packages/msp-contracts/src/contracts/grant-scope-guard.mjs`, to be
+  created following exactly `vault-scope-guard.mjs`'s pattern (design
+  §16).
 - A dozen warnings: caller-supplied `now` (lease theft), independent
   (unchecked) `thread_kind`/`audience_kind`, an unbound record subject, no
   erasure path against blanket tombstone-forbidding triggers, raw
@@ -129,9 +151,15 @@ of these is a final owner ruling.
    (design §6.2's existing rotation and fail-closed rules apply unchanged).
    — *adopted default, pending owner confirmation.*
 7. **Delivery order: thread memory first.** The branch's `0008`+`0009` are
-   folded into one corrected migration, shipped as root migration **0008**.
-   Principal vault types (`principal_private`, `principal_passport` — the
-   design's original `0008`) follow as **0009**. — *adopted default,
+   folded into one corrected migration, shipped as root migration **0008**,
+   containing **stage 1 only** (no agent fields, no `grant_nonces` — see
+   DEC-MEMOS-14). **Correction (RKOI, 2026-09-14):** the rest of this
+   decision as first written — "principal vault types follow as `0009`" —
+   is wrong: DEC-MEMOS-14 requires migration numbers after `0008` to be
+   assigned in actual merge order, not pre-bound. Principal vault types
+   ship whenever their phase merges, under whatever number the runner
+   assigns then, expected (but not guaranteed) to be *after* the stage-2
+   multi-agent migration given the plan's phase order. — *adopted default,
    pending owner confirmation.*
 8. **Thread-scoped memory stays in thread tables.** Protected records and
    session summaries are not vault rows. A `CONFIRMED` protected record
@@ -147,6 +175,35 @@ of these is a final owner ruling.
     messages, the response carries a `coverageGap` marker; MSP never
     fabricates or truncates a stand-in summary. — *adopted default, pending
     owner confirmation.*
+11. **DEC-MEMOS-11, relink closes the thread.** A `DIRECT` thread whose
+    channel account is reassigned to a different Person is **closed**; the
+    channel binding then mints a **new** thread for the new principal.
+    Binding uniqueness is scoped to `ACTIVE` bindings only, so the same
+    external ref can be re-bound the instant the old thread closes. The
+    lifetime single-`HUMAN` trigger stays; the new principal never
+    inherits the old thread's history, because it is a different
+    `thread_id` entirely. — *adopted default, pending owner confirmation.*
+12. **DEC-MEMOS-12, first membership by append.** zuri-ai's frozen flow is
+    resolve, then a `HUMAN` append — `msp_thread_resolve` carries no
+    `participants` field. The first `HUMAN` membership of a thread is
+    created by the first `HUMAN`-kind append whose `speaker_id ===
+    grant.principalId`, bound to the grant's own principal rather than
+    asserted by the caller. Every other participant creation or change
+    requires `grant.assertParticipants === true`. `AGENT` speakers are
+    never participants. — *adopted default, pending owner confirmation.*
+13. **DEC-MEMOS-13, package placement.** The thread/session/protected-record
+    store stays in `msp-core`, where the branch and stage 1 already put it
+    — no separate `msp-thread-memory` package. An earlier draft of the
+    design proposed one; it is withdrawn. — *adopted default, pending
+    owner confirmation.*
+14. **DEC-MEMOS-14, agent timing and migration numbering.** Stage 1
+    (`0008`) has no `thread_agents`, no required `agentId`, no record
+    `agent_id`/`visibility`, and no `grant_nonces`. Stage 2 adds all of
+    these in its own later migration. Migration numbers after `0008` are
+    assigned in merge order — this corrects decision 7's original
+    "principal vaults = `0009`" wording, which pre-bound a number this
+    decision says must not be pre-bound. — *adopted default, pending owner
+    confirmation.*
 
 ### The multi-user model
 
@@ -200,27 +257,66 @@ does for every `authorization.*` flag on the existing API-011 sibling
 surfaces. A nonce/replay rule closes the specific 60-second replay window
 RKOI found (see the design's §6.1 for which mechanism was chosen and why).
 
-## Judgement calls not covered by the ten defaults
+## RKOI rulings on ATHER's four judgement calls (2026-09-14)
 
-Two decisions were necessary to specify the model above and are **not**
-among the owner's ten questions; they are ATHER's calls, flagged for the
-owner to overturn if wrong:
+The first version of this ADR raised four judgement calls on its own
+authority. RKOI has now ruled on all four; none is an open question any
+longer, though each still carries the same "pending owner confirmation"
+status as the ten numbered defaults, since the owner has not been asked
+directly.
 
-- **The grant's capability set may grow** (a new `assertAgents` flag, used
-  to authorize adding a `thread_agents` row) even though decision 2 freezes
-  the *business* wire shapes of the six zuri-ai calls. The grant is MSP's
-  own authorization envelope, not a documented zuri-ai contract field; Tier
-  1 must be told to start minting grants with the new flag when it wants to
-  attach a second agent to a thread, but nothing zuri-ai already sends
-  changes shape or meaning.
-- **The single all-tenant `MSP_THREAD_SERVICE_KEY` is retained as the
-  default, but a deployment may opt into a per-tenant keyring**
-  (`MSP_THREAD_SERVICE_KEYRING`, a JSON map of `tenantId → key`) instead.
-  RKOI's warning about "one all-tenant service key" is real: a compromised
-  shared key can forge a grant for every tenant, not just its own. The
-  default keeps single-tenant/dev deployments simple; a keyring is the
-  production-grade answer and is specified so it exists on day one rather
-  than being retrofitted after a real cross-tenant deployment.
+1. **Grant capability growth — accepted narrowly.** Additive optional
+   flags (`agentId`, `workspaceId`, `nonce`, `assertAgents`,
+   `assertParticipants`) are MSP's own concern and may be added to the
+   grant without a cross-repo contract change. **New required fields,
+   nesting, or an encoding change are cross-repo and out of bounds** — the
+   grant's flat/epoch/hex layout, signed over zuri-ai's own
+   `JSON.stringify(grant)`, is frozen (design §6.1).
+2. **Per-tenant keyring — accepted, with conditions.** The key is selected
+   by the grant's own **unverified** `tenantId` and then the signature is
+   verified against it; when a keyring is configured, **the single
+   default key is disabled for every tenant, with no fallback**;
+   `MSP_THREAD_SERVICE_KEYRING` is allowlisted in the client transport and
+   never journaled; **per-tenant rotation is explicitly deferred**, not
+   designed; the keyring is **defense in depth only while Tier 1 itself
+   holds every tenant's key** — it does not protect against a compromise
+   of Tier 1's own key store.
+3. **Nonce split — accepted, with conditions.** A nonce is required on
+   **every** mutating tool except `msp_thread_message_append`, including
+   `resolve` and the lifecycle tool. The nonce insert runs in the same
+   transaction as the mutation it guards. An append replay with the same
+   `source_event_id` and *different* content is `conflict`, never a
+   silent dedupe or overwrite. Pruning is bounded and opportunistic on
+   insert, never dependent on the operator retention tick. `grant_nonces`
+   is added to the design's erasure table and security suite.
+   **Named tension:** `grant_nonces` itself ships in stage 2
+   (DEC-MEMOS-14), so stage 1 cannot yet enforce the nonce requirement on
+   `resolve`/`memory_record`/`injection_record`/`delivery_record` — an
+   accepted, temporary gap (design §6.1, §19).
+4. **Single `thread_kind` — accepted.** A `threads` `UPDATE` trigger pins
+   kind, tenant, business id and binding state, with a `CHECK` on
+   `status`; mint requires `thread_kind == audience_kind ==
+   grant.audienceKind`; `ROOM` behaves as `GROUP` everywhere.
+
+## Cross-repo changes stage 2 requires of zuri-ai (RSK-MEMOS-01)
+
+Recorded here and in the plan's `RSK-MEMOS-01` risk entry, per RKOI's
+instruction that every cross-repo change be listed in both places:
+
+- **`agentId` and `workspaceId` become required** grant fields starting in
+  stage 2 (design §6.1, §8). zuri-ai's signer does not send them today.
+- **A `nonce` field** is required on every mutating call except append,
+  once stage 2's `grant_nonces` exists (design §6.1). zuri-ai's signer
+  must start generating and including one.
+- **`assertAgents`** must be set by zuri-ai when it wants an agent to join
+  a thread it did not create (design §8 rule 2).
+- **`assertParticipants`** must be set by zuri-ai for any participant
+  creation or change beyond the first `HUMAN` append DEC-MEMOS-12 already
+  covers implicitly (design §7 rule 1).
+- None of the above changes any field zuri-ai already sends on the six
+  frozen calls (decision 2) — they are strictly additive to the grant
+  envelope. No activation of these requirements happens before stage 2
+  merges, and no channel activation (PH-MEMOS-8) happens before that.
 
 ## Consequences
 
@@ -246,7 +342,7 @@ owner to overturn if wrong:
 ## What this ADR does not decide
 
 - The exact corrected DDL for the folded migration — that is
-  `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.0b's job, not
+  `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.1b's job, not
   this ADR's.
 - Whether or when GoVibe or Zuri actually calls the participant lifecycle
   tool (decision 4 only says MSP must provide it).
@@ -271,18 +367,25 @@ owner to overturn if wrong:
 - [ ] 8. Thread-scoped memory stays in thread tables; consolidation to principal vaults is later and owner-context-only.
 - [ ] 9. Caller-supplied `now` is test-only, never production.
 - [ ] 10. No extractive fallback; `coverageGap` is the mechanism.
-- [ ] Judgement call A: the grant's capability set may grow independently of the six tools' business shapes.
-- [ ] Judgement call B: a per-tenant `MSP_THREAD_SERVICE_KEYRING` is offered alongside the single-key default.
+- [ ] 11. Relink closes the DIRECT thread and mints a new one for the new principal (DEC-MEMOS-11).
+- [ ] 12. First HUMAN membership is created by append, bound to the grant's own principal (DEC-MEMOS-12).
+- [ ] 13. The thread store lives in `msp-core`, no new package (DEC-MEMOS-13).
+- [ ] 14. Agent fields and `grant_nonces` ship in stage 2, not `0008`; migration numbers are assigned in merge order (DEC-MEMOS-14).
+- [ ] RKOI ruling 1: grant capability growth is additive-only; new required/nested/re-encoded fields are cross-repo.
+- [ ] RKOI ruling 2: per-tenant keyring, with the stated selection/fallback/rotation/defense-in-depth conditions.
+- [ ] RKOI ruling 3: nonce required on every mutating tool except append, with the stated transaction/conflict/pruning conditions, and the named stage-1 gap.
+- [ ] RKOI ruling 4: single persisted `thread_kind`, pinned by trigger, `ROOM` behaves as `GROUP`.
 
 Overturning any row above reopens the corresponding section of
-`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.0b named in its
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.1b named in its
 mapping table (§3.1).
 
 ## Evidence and implementation map
 
-- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) (superseded in relevant part by this ADR + its v0.3.0b rewrite)
+- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.3.1b (superseded in relevant part by this ADR + the design's own §0.1 review response)
 - Unmerged branch (facts only, not read via git by this ADR's author): `origin/codex/msp-thread-memory`, commits `50859fb`, `e4303cb`
-- Existing guard pattern this design's C-2 fix follows: [`packages/msp-contracts/src/contracts/vault-scope-guard.mjs`](../packages/msp-contracts/src/contracts/vault-scope-guard.mjs)
+- Existing guard pattern the design's C-2 fix follows: [`packages/msp-contracts/src/contracts/vault-scope-guard.mjs`](../packages/msp-contracts/src/contracts/vault-scope-guard.mjs) (the fix itself, `grant-scope-guard.mjs`, does not exist yet — see the corrected C-2 entry above)
+- Implementation plan: [`IMPLEMENTATION-PLAN-MEMORY-OS.md`](IMPLEMENTATION-PLAN-MEMORY-OS.md)
 - Tier boundary this ADR stays inside: [`TIER-BOUNDARY-17-STAGE.md`](TIER-BOUNDARY-17-STAGE.md)
 - Frozen legacy contract, unaffected: [`API-009-Persistent-Memory-Contract.md`](API-009-Persistent-Memory-Contract.md)
 
@@ -290,4 +393,5 @@ mapping table (§3.1).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.1b | 2026-09-14 | proposed | Answers RKOI's NEEDS REVISION on commit `2f4d584` (3 critical findings, all in the companion design's DDL/wire shapes, not this ADR's decision list directly). Corrected the C-2 citation, which wrongly named an already-existing `thread-scope-guard.mjs`; the real fix is a new `grant-scope-guard.mjs`. Recorded RKOI's rulings on all four of ATHER's prior judgement calls (narrow capability growth, conditional per-tenant keyring, conditional nonce split with a named stage-1 gap, single persisted `thread_kind`). Added four new adopted defaults: DEC-MEMOS-11 (relink closes the thread and mints a new one), DEC-MEMOS-12 (first HUMAN membership created by append, bound to the grant's own principal — zuri-ai's resolve carries no `participants` field), DEC-MEMOS-13 (no separate `msp-thread-memory` package — the store stays in `msp-core`), DEC-MEMOS-14 (agent fields and `grant_nonces` ship in stage 2, not `0008`; migration numbers assigned in merge order, correcting decision 7's pre-bound `0009`). Added the cross-repo change list stage 2 requires of zuri-ai (`agentId`/`workspaceId` required, `nonce`, `assertAgents`, `assertParticipants`), cross-referenced with the plan's `RSK-MEMOS-01`. Extended the owner confirmation checklist accordingly. | working-tree | ATHER |
 | 0.1.0b | 2026-09-14 | proposed | Initial ADR: reconciled the unmerged `codex/msp-thread-memory` branch (API-010-labelled, ten tools, two migrations, C-1/C-2 critical findings) against `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.2.3b's from-scratch, unshipped design. Adopted RKOI's ten recommended defaults as pending-confirmation decisions, renamed the branch surface to API-011, and specified the multi-user (one human per DIRECT thread, subject-bound protected records, explicit-claim-only participation changes) and multi-agent (`thread_agents` relation, per-agent episodic vaults, AGENT/THREAD record visibility, shared passport and summaries) model neither prior effort fully covered. Flagged two judgement calls (grant capability growth; optional per-tenant keyring) for owner review. | working-tree | ATHER |
