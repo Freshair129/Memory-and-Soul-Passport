@@ -1547,3 +1547,351 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_directive_followup'").all()).toHaveLength(1);
   });
 });
+
+// RKOI pre-merge fixup of the final review (warning 1, required): skipping
+// `shadow` targets in the parent-side DELETE probe (because the probe
+// itself false-rejects them under this connection's defensive mode) only
+// means the probe cannot ask whether a shadow-targeting foreign key
+// resolves -- it does not mean every such foreign key resolves. One that
+// names a shadow table's own NON-key column (or a column that does not
+// exist on it at all) is still invalid and was wrongly ACCEPTED on the
+// plain path. These tests use their own temporary migration directories --
+// the root migrations/ files are never touched.
+describe("db/migrate a foreign key to a shadow table's own NON-key column is refused, not silently accepted (RKOI pre-merge fixup, warning 1)", () => {
+  it("refuses a foreign key to an FTS5 shadow table's own NON-key column (<fts>_data(block)) on the plain path -- this used to commit silently", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent.sql": [
+        "CREATE VIRTUAL TABLE items_fts USING fts5(body);",
+        "INSERT INTO items_fts(rowid, body) VALUES (1, 'hello world');",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_child.sql"),
+      "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val TEXT REFERENCES items_fts_data(block));",
+      "utf8",
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_foreign_key_check_failed:.*"child".*foreign key mismatch.*items_fts_data/is,
+    );
+
+    // Rolled back -- the migration never committed, matching every other
+    // structural refusal in this file.
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'child'").all()).toEqual([]);
+  });
+
+  it("refuses the same FTS5 shadow-table non-key column on the directive path too", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent.sql": [
+        "CREATE VIRTUAL TABLE items_fts USING fts5(body);",
+        "INSERT INTO items_fts(rowid, body) VALUES (1, 'hello world');",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_child.sql"),
+      withDirective("CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val TEXT REFERENCES items_fts_data(block));"),
+      "utf8",
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_foreign_key_check_failed:.*foreign key mismatch.*items_fts_data/is,
+    );
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+  });
+
+  // Two more non-key shapes SQLite itself refuses to resolve the same way,
+  // confirmed against real SQLite: a column that does not exist at all on
+  // the shadow table, and the `_content` shadow table's own non-key
+  // column. Plain path only -- the directive path's behavior is already
+  // covered above and is not shape-sensitive (the same whole-database
+  // `PRAGMA foreign_key_check` catches all of these).
+  const SHADOW_NON_KEY_EXTRA_SHAPES = [
+    ["a column that does not exist at all on an FTS5 shadow table (<fts>_data(nope))", "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val TEXT REFERENCES items_fts_data(nope));"],
+    ["an FTS5 _content shadow table's own non-key column (<fts>_content(c0))", "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val TEXT REFERENCES items_fts_content(c0));"],
+  ];
+
+  it.each(SHADOW_NON_KEY_EXTRA_SHAPES)("also refuses %s on the plain path", (_description, childSql) => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent.sql": [
+        "CREATE VIRTUAL TABLE items_fts USING fts5(body);",
+        "INSERT INTO items_fts(rowid, body) VALUES (1, 'hello world');",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    writeFileSync(path.join(migrationsDir, "0002_child.sql"), childSql, "utf8");
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:.*"child".*foreign key mismatch/is);
+  });
+
+  // rtree is compiled into the better-sqlite3 build this workspace pins
+  // (confirmed against the actual bundled binary below); if it were ever
+  // unavailable, this falls back to a second FTS5 non-key shape so the
+  // "some other virtual-table family's shadow tables" case is still
+  // covered.
+  function probeRtreeAvailable() {
+    const db = freshDb();
+    try {
+      db.exec("CREATE VIRTUAL TABLE __rtree_availability_probe USING rtree(id, minX, maxX);");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it("refuses a foreign key to an rtree virtual table's own shadow table's non-key column (geo_node_node(data)) on the plain path", () => {
+    const rtreeAvailable = probeRtreeAvailable();
+    expect(rtreeAvailable).toBe(true); // confirmed compiled into the bundled better-sqlite3; see the fallback below if this ever changes
+
+    const parentSql = rtreeAvailable
+      ? "CREATE VIRTUAL TABLE geo_node USING rtree(id, minX, maxX, minY, maxY);"
+      : ["CREATE VIRTUAL TABLE items_fts USING fts5(body);", "INSERT INTO items_fts(rowid, body) VALUES (1, 'hello world');"].join("\n");
+    const childSql = rtreeAvailable
+      ? "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val REFERENCES geo_node_node(data));"
+      : "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val REFERENCES items_fts_content(c0));";
+    if (!rtreeAvailable) {
+      // eslint-disable-next-line no-console
+      console.warn("rtree is NOT available in this bundled SQLite build -- fell back to a second FTS5 non-key shape (items_fts_content(c0))");
+    }
+
+    const migrationsDir = setupMigrationsDir({ "0001_parent.sql": parentSql });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    writeFileSync(path.join(migrationsDir, "0002_child.sql"), childSql, "utf8");
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:.*"child".*foreign key mismatch/is);
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+  });
+
+  it("refuses the same rtree (or fallback FTS5) non-key shadow column on the directive path too", () => {
+    const rtreeAvailable = probeRtreeAvailable();
+    const parentSql = rtreeAvailable
+      ? "CREATE VIRTUAL TABLE geo_node USING rtree(id, minX, maxX, minY, maxY);"
+      : ["CREATE VIRTUAL TABLE items_fts USING fts5(body);", "INSERT INTO items_fts(rowid, body) VALUES (1, 'hello world');"].join("\n");
+    const childSql = rtreeAvailable
+      ? "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val REFERENCES geo_node_node(data));"
+      : "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val REFERENCES items_fts_content(c0));";
+
+    const migrationsDir = setupMigrationsDir({ "0001_parent.sql": parentSql });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    writeFileSync(path.join(migrationsDir, "0002_child.sql"), withDirective(childSql), "utf8");
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:.*foreign key mismatch/is);
+  });
+
+  it("refuses a pre-existing shadow-table non-key mismatch as migration_preexisting_structural_violation, and never runs the unrelated migration's SQL", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_init.sql": "CREATE TABLE placeholder (id INTEGER PRIMARY KEY);" });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    // Out-of-band, unrelated to any migration.
+    db.pragma("foreign_keys = OFF");
+    db.exec("CREATE VIRTUAL TABLE items_fts USING fts5(body);");
+    db.exec("INSERT INTO items_fts(rowid, body) VALUES (1, 'hello world');");
+    db.exec("CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val TEXT REFERENCES items_fts_data(block));");
+    db.pragma("foreign_keys = ON");
+
+    writeFileSync(path.join(migrationsDir, "0002_unrelated.sql"), "CREATE TABLE unrelated (id INTEGER PRIMARY KEY);", "utf8");
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_preexisting_structural_violation:.*"child".*foreign key mismatch.*items_fts_data/is,
+    );
+    expect(() => runMigrations(db, migrationsDir)).not.toThrow(/^migration_foreign_key_check_failed:/);
+
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'unrelated'").all()).toEqual([]);
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+  });
+
+  it("the shadow-table PRIMARY KEY acceptance case (RKOI final review) is still accepted, with a real child insert and a follow-on migration -- this fix must not reintroduce that false rejection", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent.sql": [
+        "CREATE VIRTUAL TABLE items_fts USING fts5(body);",
+        "INSERT INTO items_fts(rowid, body) VALUES (1, 'hello world');",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+    const shadowRow = db.prepare("SELECT id FROM items_fts_data LIMIT 1").get();
+    expect(shadowRow).toBeTruthy();
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_child.sql"),
+      [
+        "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_id INTEGER REFERENCES items_fts_data(id));",
+        `INSERT INTO child (fk_id) VALUES (${shadowRow.id});`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(1);
+    expect(db.prepare("SELECT fk_id FROM child").all()).toEqual([{ fk_id: shadowRow.id }]);
+
+    writeFileSync(path.join(migrationsDir, "0003_unrelated.sql"), "CREATE TABLE unrelated (id INTEGER PRIMARY KEY);", "utf8");
+    const followOn = runMigrations(db, migrationsDir);
+    expect(followOn.appliedCount).toBe(1);
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'unrelated'").all()).toHaveLength(1);
+  });
+});
+
+// RKOI pre-merge fixup of the final review (warning 2, included): every
+// unqualified object name this module asks SQLite to resolve is resolved
+// under SQLite's ordinary name-resolution rules, where a `temp` object of
+// the same name takes priority over one in `main`. Confirmed against real
+// SQLite: a `TEMP VIEW` sharing a `main` parent table's name, created on
+// the SAME connection BEFORE a migration runs, used to make an unqualified
+// `PRAGMA foreign_key_list`/`DELETE ... WHERE 0` silently target the temp
+// object instead, misreporting the real table. These tests use their own
+// temporary migration directories -- the root migrations/ files are never
+// touched.
+describe("db/migrate schema-qualifies every foreign-key lookup, so a same-named TEMP object cannot shadow a real main table (RKOI pre-merge fixup, warning 2)", () => {
+  it("still applies a migration referencing a main parent table when the connection holds a same-named TEMP VIEW", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent_child.sql": [
+        "CREATE TABLE parent (id TEXT PRIMARY KEY);",
+        "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    // Simulate some other part of the process creating a scratch TEMP VIEW
+    // on this same connection that happens to share the main `parent`
+    // table's name. Before the fix, an unqualified DELETE-probe against
+    // "parent" would resolve to THIS view and fail with "cannot modify
+    // parent because it is a view".
+    db.exec("CREATE TEMP VIEW parent AS SELECT 1 AS id;");
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_child2.sql"),
+      "CREATE TABLE child2 (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));",
+      "utf8",
+    );
+
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(1);
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'child2'").all()).toHaveLength(1);
+  });
+
+  it("still applies the same migration on the directive path too, with the same TEMP VIEW present", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent_child.sql": [
+        "CREATE TABLE parent (id TEXT PRIMARY KEY);",
+        "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    db.exec("CREATE TEMP VIEW parent AS SELECT 1 AS id;");
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_child2.sql"),
+      withDirective("CREATE TABLE child2 (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));"),
+      "utf8",
+    );
+
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(1);
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'child2'").all()).toHaveLength(1);
+  });
+});
+
+// RKOI pre-merge fixup of the final review (warning 3, included): a
+// foreign key naming one of SQLite's own internal `sqlite_*` catalog
+// tables (e.g. `sqlite_sequence`, the AUTOINCREMENT bookkeeping table) is
+// correctly refused, but `mainSchemaEntries` deliberately excludes
+// `sqlite_*` names from its lookups, so it used to fall through to the
+// "missing" case and claim the table does not exist, when it is very much
+// present. These tests use their own temporary migration directories --
+// the root migrations/ files are never touched.
+describe("db/migrate a foreign key to an internal SQLite table is attributed correctly, never reported as missing (RKOI pre-merge fixup, warning 3)", () => {
+  const parentWithAutoincrementSql = ["CREATE TABLE parent (id INTEGER PRIMARY KEY AUTOINCREMENT);", "INSERT INTO parent DEFAULT VALUES;"].join("\n");
+
+  it("refuses a foreign key to sqlite_sequence on the plain path, naming it as an internal SQLite table -- never 'does not exist'", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent.sql": parentWithAutoincrementSql });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_child.sql"),
+      "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_name TEXT REFERENCES sqlite_sequence(name));",
+      "utf8",
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_foreign_key_check_failed:.*"child".*"sqlite_sequence".*an internal SQLite table/is,
+    );
+    expect(() => runMigrations(db, migrationsDir)).not.toThrow(/does not exist/i);
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+  });
+
+  it("refuses the same sqlite_sequence foreign key on the directive path too", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent.sql": parentWithAutoincrementSql });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_child.sql"),
+      withDirective("CREATE TABLE child (id INTEGER PRIMARY KEY, fk_name TEXT REFERENCES sqlite_sequence(name));"),
+      "utf8",
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_foreign_key_check_failed:.*"child".*"sqlite_sequence".*an internal SQLite table/is,
+    );
+    expect(() => runMigrations(db, migrationsDir)).not.toThrow(/does not exist/i);
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+  });
+
+  it("refuses a pre-existing foreign key to sqlite_sequence as migration_preexisting_structural_violation, and never runs the unrelated migration's SQL", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_init.sql": parentWithAutoincrementSql });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    db.pragma("foreign_keys = OFF");
+    db.exec("CREATE TABLE child (id INTEGER PRIMARY KEY, fk_name TEXT REFERENCES sqlite_sequence(name));");
+    db.pragma("foreign_keys = ON");
+
+    writeFileSync(path.join(migrationsDir, "0002_unrelated.sql"), "CREATE TABLE unrelated (id INTEGER PRIMARY KEY);", "utf8");
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_preexisting_structural_violation:.*"child".*"sqlite_sequence".*an internal SQLite table/is,
+    );
+    expect(() => runMigrations(db, migrationsDir)).not.toThrow(/does not exist/i);
+
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'unrelated'").all()).toEqual([]);
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+  });
+});
