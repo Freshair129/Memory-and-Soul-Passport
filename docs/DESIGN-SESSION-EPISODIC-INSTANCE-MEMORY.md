@@ -1,7 +1,7 @@
 ---
-version: "0.4.1b"
+version: "0.4.2b"
 created_at: "2026-09-13T21:00:00+07:00,Claude Fable 5.1,working-tree"
-last_update: "2026-09-15T07:00:00+07:00,ATHER"
+last_update: "2026-09-15T09:00:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -14,7 +14,25 @@ attributes:
 
 ## สรุปภาษาไทย
 
-**ฉบับ 0.4.1b (ล่าสุด)**: ตอบ RKOI stage-2 review round 1 (`f74ad0d`,
+**ฉบับ 0.4.2b (ล่าสุด)**: RKOI **อนุมัติ** stage-2 spec round 2 ที่
+`72e593f` (0 critical) พร้อมขอให้พับคำเตือนก่อน KIN ลงมือ ประเด็นหลัก:
+**คำตอบตอน supersede ขัดแย้งกันเอง** — รอบก่อนเพิ่ม `thread_scope_denied`
+เป็นคำตอบที่สาม ซึ่งกลายเป็น oracle เอง (บอกได้ว่า agent อื่นเคยบันทึก
+อะไรไว้) คำสั่งเจ้าของ: รวมทุกกรณี (id ไม่มีจริง, แถว AGENT ของ agent อื่น,
+และกรณี ownership/status เดิมของ stage 1 ที่เคยเป็น `conflict`) ให้เป็น
+`validation_failed` คำตอบเดียวกันทั้งหมด จำกัดเฉพาะแถว `AGENT`-visibility
+เท่านั้น ส่วนแถว `THREAD`/legacy ยัง supersede ได้ตามกติกาเดิม; แก้
+`trg_thread_pending_deliveries_update_guard` ให้ pin `agent_id`/
+`workspace_id` ด้วย (ไม่ใช่ trigger เดียวที่ drop+recreate ตามที่คอมเมนต์
+เดิมเข้าใจผิด); จุดเช็ค agent ตอน drain ต้องเทียบกับ thread ของ inbound
+message เอง ไม่ใช่ ACTIVE thread ของห้องที่หามาใหม่; ระบุชัดว่าไม่มี
+`speakerId` คงที่ที่ไหนเลยใน MSP — resolved path ใช้ `grant.agentId`,
+drain path ใช้ agent ที่บันทึกไว้; nonce ของ resolve ถูกบันทึกทุกผลลัพธ์
+(mint, attach, no-op); เพิ่ม `thread_kind`/`channel_type` ใน response ของ
+`msp_session_sweep`; และเพิ่ม **`DEC-MEMOS-21`** (ขอบเขตความยาว
+`agentId`/`workspaceId` ที่ 128 ตัวอักษร) จากข้อความที่ไม่เคยมีเลขกำกับ
+
+**ฉบับ 0.4.1b**: ตอบ RKOI stage-2 review round 1 (`f74ad0d`,
 NEEDS REVISION, 2 critical) — schema §12.2 เองผ่าน ใช้กับ runner จริงได้
 ทั้งฐานข้อมูลใหม่และมีข้อมูลอยู่แล้ว ไม่ rebuild ตารางไหนเลย **CRITICAL 1**:
 เส้นทาง delivery ที่ยังไม่มี inbound message ไม่เก็บ agent เลย ทำให้
@@ -527,7 +545,7 @@ adds claims to the same flat object, it does not restructure it.
 |---|---|---|---|---|
 | `agentId` | non-empty string, ≤ 128 chars | **Every one of the ten API-011 tools** — all six caller tools and all four worker tools (`resolve`, `append`, `context`, `memory_record`, `injection_record`, `delivery_record`, `sweep`, `claim`, `commit`, `retry`) | Extends `verifyThreadGrant`'s existing required-claim check (`thread-access.mjs:97-99`), which today refuses a grant missing `tenantId`/`principalId`/`policyRevision` with `grant_signature_invalid` — `agentId` and `workspaceId` join that same list, reusing the same code and the same "missing required claim" message shape, not a new error class | `grant_signature_invalid` |
 | `workspaceId` | non-empty string, ≤ 128 chars | Same as `agentId` | Same as `agentId` | `grant_signature_invalid` |
-| `nonce` | non-empty string, ≤ 128 chars — signers must use ≥ 128 random bits (`DEC-MEMOS-20`, below) | **Every mutating tool except `msp_thread_message_append`**: `resolve` (it can mint), `memory_record`, `injection_record`, `delivery_record`, and all four worker tools. **Not required on `append`** (`source_event_id` already gives it replay protection — a second nonce layer would be redundant with an existing, already-reviewed mechanism) **or on `context`** (read-only; nothing to replay) | A new per-tool guard check in `thread-guard.mjs`, alongside the existing `audienceKind`/`deliveryWriter`/`operator` checks — not part of `verifyThreadGrant`, since the requirement is per-tool, not universal. **Corrected (RKOI stage-2 review round 1, warning 2): the nonce is not inserted by the guard itself.** `thread-guard.mjs`'s handlers are `async`, and better-sqlite3 refuses to run inside an `async` transaction callback (`this.#db.transaction()` requires a synchronous function) — so the guard cannot wrap "insert the nonce, then call the handler" in one `better-sqlite3` transaction itself. Instead, the guard passes the verified `nonce` (and `tenantId`) down as an ordinary parameter into the store method the handler calls; that store method's own **synchronous** `this.#db.transaction(() => { ... })()` body — the same one that already performs its mutation — does the bounded prune (§12.2) and the `(tenantId, nonce, expiresAt)` insert *inside* that existing transaction, immediately alongside its own write. A `PRIMARY KEY` conflict on the nonce insert aborts the whole transaction (mutation included) and is re-thrown as `GrantReplayedError` once outside it. Every nonce-required store method (`resolve`'s mint path, `recordMemory`, `recordInjection`, `recordDelivery`'s **both** paths, and the four worker-tool methods) gains this same shape | Missing on a nonce-required tool: `grant_nonce_required` (new). A nonce already recorded for that tenant and not yet expired: `grant_replayed` (new) |
+| `nonce` | non-empty string, ≤ 128 chars — signers must use ≥ 128 random bits (`DEC-MEMOS-20`, below) | **Every mutating tool except `msp_thread_message_append`**: `resolve` (it can mint), `memory_record`, `injection_record`, `delivery_record`, and all four worker tools. **Not required on `append`** (`source_event_id` already gives it replay protection — a second nonce layer would be redundant with an existing, already-reviewed mechanism) **or on `context`** (read-only; nothing to replay) | A new per-tool guard check in `thread-guard.mjs`, alongside the existing `audienceKind`/`deliveryWriter`/`operator` checks — not part of `verifyThreadGrant`, since the requirement is per-tool, not universal. **Corrected (RKOI stage-2 review round 1, warning 2): the nonce is not inserted by the guard itself.** `thread-guard.mjs`'s handlers are `async`, and better-sqlite3 refuses to run inside an `async` transaction callback (`this.#db.transaction()` requires a synchronous function) — so the guard cannot wrap "insert the nonce, then call the handler" in one `better-sqlite3` transaction itself. Instead, the guard passes the verified `nonce` (and `tenantId`) down as an ordinary parameter into the store method the handler calls; that store method's own **synchronous** `this.#db.transaction(() => { ... })()` body — the same one that already performs its mutation — does the bounded prune (§12.2) and the `(tenantId, nonce, expiresAt)` insert *inside* that existing transaction, immediately alongside its own write. A `PRIMARY KEY` conflict on the nonce insert aborts the whole transaction (mutation included) and is re-thrown as `GrantReplayedError` once outside it. Every nonce-required store method (`resolve`, `recordMemory`, `recordInjection`, `recordDelivery`'s **both** paths, and the four worker-tool methods) gains this same shape. **Corrected (RKOI stage-2 review round 2, finding 5): `resolve`'s nonce is recorded on every one of its outcomes, not only the mint path** — mint (`created: true`), self-assert attach (`assertAgents` inserting a `thread_agents` row on an existing thread), and the no-op case (already-current agent, existing thread, nothing changes) all still run inside `resolve`'s own transaction and all still consume the nonce there; the nonce insert rolls back only when the call itself is refused end-to-end (e.g. `agent_not_current`, `thread_scope_denied`), never merely because the outcome happened to be a no-op | Missing on a nonce-required tool: `grant_nonce_required` (new). A nonce already recorded for that tenant and not yet expired: `grant_replayed` (new) |
 | `assertAgents` | boolean, optional | `resolve` only, to self-attach to an *existing* thread the calling agent did not mint (§8) | Read by the per-tool guard logic, exactly like `assertParticipants` (§6.1) — not part of `verifyThreadGrant` | n/a — its absence is not an error by itself; it only changes whether a non-current agent's resolve succeeds (§8) |
 
 **Reasoning for the error-code choices (both reused, not invented, where
@@ -555,12 +573,14 @@ codes where they fit"):**
   apart from "you're not this thread's *current agent*," since the fix
   differs (attach via `assertAgents`, vs. a scope problem entirely).
 
-**Adopted default, pending owner confirmation: agentId/workspaceId
-length and charset are unconstrained beyond a 128-character bound and
-non-emptiness** — MSP has no agent/workspace identity registry of its
-own (mirroring `principalId`, which is likewise an opaque Tier-1-owned
-string MSP never validates against a directory), so the bound exists
-only to cap storage and `payloadHash` cost, not to validate shape.
+**`DEC-MEMOS-21`, new adopted default, pending owner confirmation
+(promoted from unnumbered prose, RKOI stage-2 review round 2, finding
+8): `agentId`/`workspaceId` length and charset are unconstrained beyond
+a 128-character bound and non-emptiness** — MSP has no agent/workspace
+identity registry of its own (mirroring `principalId`, which is
+likewise an opaque Tier-1-owned string MSP never validates against a
+directory), so the bound exists only to cap storage and `payloadHash`
+cost, not to validate shape.
 
 **Per-tenant keyring, corrected to match the stricter shape KIN is
 implementing now (`BL-MEMOS-049`, RKOI stage-2 review round 1, warning
@@ -600,9 +620,16 @@ narrowed).**
   built-in and being read back as something other than its own
   configured value). This finalizes the design; no further correction
   is expected here.
-- Every one of the following is refused at start, each with the stable
-  `thread_keyring_config_invalid` code and no per-condition message
-  variety that could leak which specific rule failed:
+- Every one of the following is refused at start with the stable
+  `thread_keyring_config_invalid` code. **Corrected (RKOI stage-2
+  review round 2, finding 6): the code does give a distinct,
+  per-rule message for each case below** ("entry 3: key shorter than
+  32 characters" is a real, specific message, not a single generic
+  string reused everywhere) — **the earlier claim that there is "no
+  per-condition message variety" was wrong; what is actually true, and
+  the property that matters, is that none of those per-rule messages
+  ever names the offending tenant id or key value itself**, only the
+  entry's 1-based position and which rule it violated:
   - the value fails to parse as JSON at all;
   - **an empty env value is treated as unset** (no keyring configured,
     falling back to the single `MSP_THREAD_SERVICE_KEY` exactly as
@@ -1055,29 +1082,56 @@ still current.
   thread yet is refused `not_found` outright (above); it is never
   possible to queue a pending delivery for a room MSP has never seen a
   thread for.
-- **Drain time (`#drainDeliveries`)**: the stored `agent_id` is
-  **re-checked** against `thread_agents` before the `OUTBOUND` `AGENT`
-  message is appended — an agent current when the delivery was queued
-  may have departed by the time the matching inbound message finally
-  arrives. If it is no longer current, the row is **left unreconciled**
-  (`reconcile_state` stays `'pending'`). **No new journal shape is
-  needed at all**: `#drainDeliveries`'s existing catch block already
-  journals every reconciliation failure under the fixed
-  `toolName: "msp_thread_message_append.reconcile_skipped"` label with
-  a `payload.error_code` field set from the thrown error's own `.code`
-  (falling back to `"internal"`, `thread-memory.mjs:1196-1204`) — this
-  is the same shipped mechanism `RSK-MEMOS-09` already documents for a
-  `receipt_id` collision. Stage 2 adds exactly one new typed throw (a
-  dedicated `AgentNotCurrentError` with `.code = 'agent_not_current'`)
-  inside the reconciliation attempt itself; that error flows through
-  the *existing* `error_code` field the exact same way `'conflict'`/
-  `'internal'` already do, so `error_code: 'agent_not_current'` is the
-  only new fact this fix adds to that journal entry, not a new entry
-  shape. A later drain attempt (the next matching inbound, or a
-  future reconciliation sweep) tries again from scratch.
-- **The drained message's `speaker_id` is the stored `agent_id`**,
-  never the hard-coded `'zuri-line-agent'` label — closing the
-  root cause directly, not only gating access to it.
+- **Drain time (`#drainDeliveries`), corrected (RKOI stage-2 review
+  round 2, findings 3–4).** The stored `(agent_id, workspace_id)` pair
+  is **re-checked** for currency against `thread_agents` — **on the
+  *inbound message's own* thread, not the room's `ACTIVE` thread**: by
+  drain time the matching inbound message already exists (that is what
+  triggers a drain attempt in the first place), so it already names a
+  concrete `thread_id` directly, the same thread `#drainDeliveries`
+  already joins through (`thread-memory.mjs:1159-1162`); re-deriving the
+  room's *current* `ACTIVE` thread instead would be both unnecessary and
+  wrong the instant a relink or closure ever changes which thread is
+  `ACTIVE` for that room between queue time and drain time. An agent
+  current when the delivery was queued may have departed by the time the
+  matching inbound message finally arrives — if it is no longer current,
+  the row is **left unreconciled** (`reconcile_state` stays `'pending'`).
+  **A legacy pending row with a `NULL` stored `agent_id` (queued before
+  stage 2 existed) is never drained either — this fails closed by
+  construction**, not by a special case: a `NULL` agent trivially never
+  satisfies "is this agent current," so it takes the identical refusal
+  path as a departed agent, with the identical stable journal code.
+  **No new journal shape is needed at all**: `#drainDeliveries`'s
+  existing catch block already journals every reconciliation failure
+  under the fixed `toolName: "msp_thread_message_append.reconcile_skipped"`
+  label with a `payload.error_code` field set from the thrown error's
+  own `.code` (falling back to `"internal"`, `thread-memory.mjs:1196-1204`)
+  — this is the same shipped mechanism `RSK-MEMOS-09` already documents
+  for a `receipt_id` collision. Stage 2 adds exactly one new typed throw
+  (a dedicated `AgentNotCurrentError` with `.code = 'agent_not_current'`)
+  inside the reconciliation attempt itself, covering both the
+  departed-agent and the `NULL`-agent case identically; that error flows
+  through the *existing* `error_code` field the exact same way
+  `'conflict'`/`'internal'` already do. A later drain attempt (the next
+  matching inbound, or a future reconciliation sweep) tries again from
+  scratch — a legacy `NULL`-agent row stays permanently un-drainable
+  under stage 2's rules unless something backfills its agent identity,
+  which this design does not attempt.
+- **Speaker id, both paths, stated precisely (RKOI stage-2 review round
+  2, finding 3) — there is no hard-coded `'zuri-line-agent'` label
+  anywhere in this specification, on either path.** The **resolved
+  path**'s internal `appendMessage` call uses `speakerId: grant.agentId`
+  — the calling agent's own id at the moment of the call, exactly like
+  every other `AGENT`-kind append (§8.2's `speaker_id === grant.agentId`
+  rule applies here identically, since a delivery-record call's internal
+  append is still an `AGENT`-kind message). The **drain path**'s
+  internal `appendMessage` call uses `speakerId:` the **stored**
+  `agent_id` from the pending row — the agent that queued the delivery,
+  not whichever agent (if any) happens to be current when the drain
+  attempt actually runs, since drain can happen long after the original
+  call returned and no caller is left to supply a fresh `grant.agentId`.
+  Both paths write a real, attributable agent id; neither ever writes a
+  fixed string.
 
 ### 8.3 Worker identity — `DEC-MEMOS-18`, revised (RKOI stage-2 review round 1), adopted default pending owner confirmation
 
@@ -1123,6 +1177,27 @@ claim about what "revocation" means (below).
   sign as a normal attached agent. Rejected because it duplicates a
   mechanism this design already needs for every other tool, for no
   proven benefit.
+- **Worker resolve inputs, new — RKOI stage-2 review round 2, finding 6,
+  ruling.** Attaching via `assertAgents` means the worker must actually
+  call `msp_thread_resolve`, whose **required** request fields include
+  `thread_kind` and `channel_type` (§13) — fields `msp_session_sweep`'s
+  job metadata does not carry today, leaving the worker with no way to
+  construct a valid resolve call for a given job's room. **Ruling:
+  `msp_session_sweep`'s per-job metadata gains `thread_kind` and
+  `channel_type` as additive response fields.** Both are non-sensitive
+  (they name a room's *kind* and channel *type*, never its content),
+  already room-scoped by the sweep grant itself, and the response
+  already carries no `sources` for a worker to leak in the first place —
+  adding two more room-identity fields changes nothing about what a
+  compromised worker could already learn from being handed the job at
+  all. **The worker's own resolve-time grant carries its `audienceKind`
+  from the same source as its room claims — its Tier-1 room
+  configuration** (whatever process configures the worker with a room's
+  `channelAccountId`/`externalRoomRef` also configures its
+  `thread_kind`/`audienceKind` for that room), not from `sweep`'s
+  response — `sweep`'s new fields tell the worker what to *send* on its
+  own subsequent resolve request; they do not themselves populate the
+  worker's grant.
 
 **This decision widens nothing, stated plainly (RKOI's own framing).**
 The worker signs with the tenant's own service key (`MSP_THREAD_SERVICE_KEY`
@@ -1285,7 +1360,13 @@ completeness rather than as a correction:
 - `trg_thread_pending_deliveries_update_guard` permits exactly two
   transitions: `pending → reconciled` (every other column pinned via
   `IS`), or the one-way tombstone (`text → ''`, every other column
-  including `reconcile_state` pinned). `DELETE` is forbidden.
+  including `reconcile_state` pinned). `DELETE` is forbidden. **Stage 2,
+  unstarted (§12.2, RKOI stage-2 review round 2, finding 2): this
+  trigger is dropped and recreated to also pin the new `agent_id`/
+  `workspace_id` columns in both permitted transitions** — without this,
+  a reconcile `UPDATE` could rewrite the very agent id the drain-time
+  currency re-check (§8.2) depends on, defeating that check by moving
+  the value it reads out from under it.
 - **Room-scoped reconciliation is already enforced**:
   `ThreadMemoryStore#drainDeliveries` joins a pending row to a newly-arrived
   inbound message's thread on `tenant_id`, `business_id`,
@@ -1512,24 +1593,47 @@ these two spots:
   agents — they structurally cannot (each supplies its own `agentId`),
   so this collision cannot recur for a genuinely `AGENT`-visibility
   record.
-- **Supersession.** The `supersedesRecordId` ownership check is
-  `old.asserted_by_speaker_id !== speaker || old.subject_person_id !==
-  person || old.status !== 'ACTIVE'` (`thread-memory.mjs:833`) — it
-  never compares `agent_id` at all. Since `asserted_by_speaker_id` is
-  the HUMAN principal, not the recording agent (§9.4's own distinction,
-  above), **agent B can supersede agent A's `AGENT`-visibility record
-  merely by asserting on the same principal's thread**, closing A's
-  record (`status → SUPERSEDED`) without ever having been allowed to
-  read it. **Fix: superseding a record whose `agent_id` differs from the
-  calling agent's own `grant.agentId` is refused `thread_scope_denied`
-  — deliberately the *same* code and message shape an unknown
-  `supersedes_record_id` already gets** (`ThreadMemoryValidationError`
-  today; the stage-2 check is folded into the same guard condition, not
-  a distinguishable branch), so a caller cannot use the response to tell
-  "that record exists but belongs to a different agent" apart from
-  "that id does not exist at all" — the same existence-oracle discipline
-  this schema already applies to `receipt_id`/`exchange_id`/`message_id`
-  collisions (`RSK-MEMOS-09`).
+- **Supersession, corrected again — RKOI stage-2 review round 2
+  (commit `72e593f`), owner-direction ruling.** Stage 1 already gives
+  **two different answers** for a bad `supersedes_record_id`: an
+  unknown id is `validation_failed` (`ThreadMemoryValidationError`,
+  `thread-memory.mjs:800`), and a known id the caller cannot supersede
+  (wrong speaker, wrong subject, or not `ACTIVE`) is `conflict`
+  (`ThreadMemoryConflictError`, `thread-memory.mjs:801`). **The prior
+  revision of this design added a *third* answer, `thread_scope_denied`,
+  for the new cross-agent case — RKOI found that a third, distinct code
+  is itself an oracle**: an agent could tell "this id exists and belongs
+  to a different agent" (`thread_scope_denied`) apart from "this id
+  exists but I can't supersede it for an ordinary stage-1 reason"
+  (`conflict`) apart from "this id doesn't exist" (`validation_failed`)
+  — three distinguishable outcomes is three bits of leaked information,
+  not the flat "no" every other existence-sensitive check in this schema
+  gives. **Ruling: one identical answer, same code and the same fixed
+  message, for all three cases** — unknown id, another agent's
+  `AGENT`-visibility record, and a record the caller cannot supersede
+  under the existing stage-1 rules (wrong speaker, wrong subject, or not
+  `ACTIVE`):
+  ```text
+  validation_failed: "supersedes_record_id does not name a record this
+  caller can supersede"
+  ```
+  **Check order, exact**: existence and other-agent `AGENT`-visibility
+  are checked first (an id naming no row, or naming an `AGENT`-visibility
+  row whose `agent_id` differs from the calling agent's own
+  `grant.agentId`, both fail here); only if both pass does the existing
+  stage-1 ownership/status check run (`asserted_by_speaker_id`/
+  `subject_person_id`/`status`) — and it too now returns the identical
+  `validation_failed`/fixed-message answer, not its old `conflict`. Every
+  one of these branches produces byte-identical output; there is no
+  branch a caller could distinguish by code, message, or shape.
+  **The cross-agent refusal is scoped to `AGENT`-visibility records
+  only.** A `THREAD`-visibility record, or a legacy row with `agent_id
+  IS NULL`, remains supersedable by any agent under exactly the
+  pre-existing stage-1 rules (same speaker, same subject, `ACTIVE`
+  status) — visibility governs *reading*, and this decision does not
+  extend it to *superseding* THREAD-shared facts, only to protecting
+  AGENT-private ones from being closed by an agent that could never have
+  read them.
 - **§13's tool-surface row for `msp_thread_memory_record` drops the
   "idempotent by construction, no nonce needed" wording** — it is no
   longer true unqualified once `agent_id` is part of the hash: dedup is
@@ -2109,10 +2213,12 @@ ALTER TABLE protected_memory_records ADD COLUMN visibility TEXT NOT NULL DEFAULT
 -- ALTERed in place (SQLite triggers are immutable once created) -- it
 -- must be dropped and recreated so both of its permitted UPDATE shapes
 -- (supersession, tombstone) also pin the two new columns, exactly as
--- every column that trigger already protects. This is the ONLY
--- drop+recreate in this migration; every other 0008 trigger is
--- untouched because no other trigger's pinned-column list is affected
--- by an ADD COLUMN on this table.
+-- every column that trigger already protects. CORRECTED (RKOI stage-2
+-- review round 2, `72e593f`): this is NOT the only drop+recreate in this
+-- migration -- trg_thread_pending_deliveries_update_guard below needs
+-- the identical treatment, for the identical reason, once
+-- thread_pending_deliveries also gains two columns whose pinned-column
+-- list this trigger governs.
 DROP TRIGGER trg_protected_memory_records_update_guard;
 CREATE TRIGGER trg_protected_memory_records_update_guard
 BEFORE UPDATE ON protected_memory_records
@@ -2163,6 +2269,40 @@ END;
 -- neither -- but required by the stage-2 handler on every new insert.
 ALTER TABLE thread_pending_deliveries ADD COLUMN agent_id TEXT;
 ALTER TABLE thread_pending_deliveries ADD COLUMN workspace_id TEXT;
+
+-- REQUIRED, NEW (RKOI stage-2 review round 2, finding 2): without this,
+-- a reconcile UPDATE (or any other write reaching this trigger) could
+-- silently rewrite the stored agent_id/workspace_id between the moment
+-- a pending delivery is queued and the moment it drains, defeating the
+-- drain-time agent re-check (design §8.2) by rewriting the very value
+-- that check reads. Same drop+recreate shape as
+-- trg_protected_memory_records_update_guard above, same reason: SQLite
+-- triggers cannot be ALTERed in place, and both of this trigger's
+-- existing permitted UPDATE shapes (reconcile, tombstone) must now also
+-- pin the two new columns.
+DROP TRIGGER trg_thread_pending_deliveries_update_guard;
+CREATE TRIGGER trg_thread_pending_deliveries_update_guard
+BEFORE UPDATE ON thread_pending_deliveries
+BEGIN
+  SELECT CASE WHEN NOT (
+    (
+      OLD.reconcile_state = 'pending' AND NEW.reconcile_state = 'reconciled' AND NEW.redaction_state IS OLD.redaction_state
+      AND NEW.receipt_id IS OLD.receipt_id AND NEW.inbound_message_id IS OLD.inbound_message_id AND NEW.source_event_id IS OLD.source_event_id
+      AND NEW.tenant_id IS OLD.tenant_id AND NEW.business_id IS OLD.business_id AND NEW.channel_account_id IS OLD.channel_account_id
+      AND NEW.external_room_ref_hmac IS OLD.external_room_ref_hmac AND NEW.outcome IS OLD.outcome AND NEW.text IS OLD.text
+      AND NEW.provider_ref IS OLD.provider_ref AND NEW.recorded_at IS OLD.recorded_at
+      AND NEW.agent_id IS OLD.agent_id AND NEW.workspace_id IS OLD.workspace_id
+    ) OR (
+      OLD.redaction_state = 'none' AND NEW.redaction_state = 'tombstoned' AND NEW.text = '' AND NEW.reconcile_state IS OLD.reconcile_state
+      AND NEW.receipt_id IS OLD.receipt_id AND NEW.inbound_message_id IS OLD.inbound_message_id AND NEW.source_event_id IS OLD.source_event_id
+      AND NEW.tenant_id IS OLD.tenant_id AND NEW.business_id IS OLD.business_id AND NEW.channel_account_id IS OLD.channel_account_id
+      AND NEW.external_room_ref_hmac IS OLD.external_room_ref_hmac AND NEW.outcome IS OLD.outcome
+      AND NEW.provider_ref IS OLD.provider_ref AND NEW.recorded_at IS OLD.recorded_at
+      AND NEW.agent_id IS OLD.agent_id AND NEW.workspace_id IS OLD.workspace_id
+    )
+  ) THEN RAISE(ABORT, 'thread_pending_deliveries rows permit only a pending -> reconciled transition or a tombstone redaction')
+  END;
+END;
 ```
 
 **`ThreadRegistry#findThreadByRoom` (new, `msp-core`)**, used by the
@@ -2269,10 +2409,10 @@ handler**, not reconstructed from prose.
 |---|---|---|---|---|
 | `msp_thread_resolve` | `thread_kind`, `channel_type`, `channel_account_id`, `external_room_ref`, `tenant_id`, `access`; **grant's `audienceKind` required** | `audience_kind`, `business_id`, `actor`, `now` | Stage 1: `{ thread: { threadId, threadKind, channelType, channelAccountId, externalRoomRef, tenantId, businessId, audienceKind, status }, created }`. **Stage 2 adds `agentAttached: boolean`** — `true` when *this* call caused a new `thread_agents` row (auto-attach or a successful `assertAgents` self-assert), `false` when the calling agent was already current; a caller can tell "I just attached" apart from "I was already here" without a separate lookup | HMAC key required. Mint requires `thread_kind === grant.audienceKind` and (if sent) `audience_kind === thread_kind`, else `thread_audience_mismatch`. A grant with no `audienceKind` at all is refused, not silently unchecked. **Stage 1: resolving an existing thread just returns `created: false` — no agent concept applies at all.** **Stage 2, unstarted (§8): grant's `agentId`/`workspaceId`/`nonce` required (§6.1.1); on a new thread the calling agent auto-attaches, but only after this call's own thread `INSERT` actually wins the mint race (§8.1) — a worker-only grant (`operator`, no reader/writer flags) never mints, `not_found` if the room has no `ACTIVE` thread (`DEC-MEMOS-18`); on an existing thread, current or `assertAgents === true`, else `agent_not_current`.** |
 | `msp_thread_message_append` | `thread_id`, `speaker_id`, `speaker_kind`, `identity_assurance`, `direction`, `text`, `source_event_id`, `access`; **grant's `audienceKind` required** | `session_id`, `exchange_id`, `person_id`, `occurred_at`, `received_at`, `reply_to_message_id`, `delivery_state`, `idle_timeout_minutes`, `policy_revision`, `message_id`, `now` | `{ message: { messageId, exchangeId, sequence }, session: { sessionId }, deduplicated }` | First `HUMAN` append with `speaker_id === grant.principalId` creates the membership (`DEC-MEMOS-12`, §7 rule 2, confirmed by the owner 2026-09-14); a self-upgrade under `DEC-MEMOS-15`'s four conditions (confirmed by the owner) needs no claim; every other participant change needs `assertParticipants`. Idempotent on `(thread_id, source_event_id)`; a content-mismatched replay is `conflict`. `direction` is `INBOUND`/`OUTBOUND`. **Stage 2, unstarted (§8.2): grant's `agentId`/`workspaceId` required, no `nonce` (this tool is exempt — `source_event_id` already covers replay); the calling agent must be current on the thread; an `AGENT`-kind message's `speaker_id` must equal `grant.agentId`.** |
-| `msp_thread_memory_record` | `thread_id`, `kind`, `asserted_by_speaker_id`, `body`, `source_message_refs`, `access`; **grant's `audienceKind` required** | `session_id`, `subject_person_id`, `scope`, `supersedes_record_id`, `status`, `verification_state`, `now` | Stage 1: `{ recordId, threadId, assertedBySpeakerId, sourceMessageRefs, verificationState, ... }`. **Stage 2 adds `agentId` and `visibility` to the response**, mirroring the two new stored columns (§9.4) | Requires `writePrivate` and `thread.audienceKind === 'DIRECT'`. `asserted_by_speaker_id` must equal `grant.principalId`. `verification_state: 'CONFIRMED'` requires `confirmMemory`. `record_id` is content-derived (§6.1). **Corrected (RKOI stage-2 review round 1, CRITICAL 2): "idempotent by construction, no nonce needed" is no longer true unqualified once stage 2 ships** — the content hash must also include `agent_id`/`visibility` (§9.4), so dedup is idempotent *per agent*, not globally; two different agents asserting identical content now get two distinct records by design. Superseding a record whose `agent_id` differs from the calling agent's own is refused `thread_scope_denied` — the same code and message shape an unknown `supersedes_record_id` already gets, so the response cannot be used as an existence oracle across agents. Stage 2 still requires the `nonce` claim itself as defense in depth regardless of dedup (§6.1.1). **Stage 2, unstarted (§8.2, §9.4): grant's `agentId`/`workspaceId`/`nonce` required; the calling agent must be current; new optional request field `visibility` (`AGENT`\|`THREAD`, default `THREAD`); `agent_id` on the stored row is `grant.agentId`.** |
+| `msp_thread_memory_record` | `thread_id`, `kind`, `asserted_by_speaker_id`, `body`, `source_message_refs`, `access`; **grant's `audienceKind` required** | `session_id`, `subject_person_id`, `scope`, `supersedes_record_id`, `status`, `verification_state`, `now` | Stage 1: `{ recordId, threadId, assertedBySpeakerId, sourceMessageRefs, verificationState, ... }`. **Stage 2 adds `agentId` and `visibility` to the response**, mirroring the two new stored columns (§9.4) | Requires `writePrivate` and `thread.audienceKind === 'DIRECT'`. `asserted_by_speaker_id` must equal `grant.principalId`. `verification_state: 'CONFIRMED'` requires `confirmMemory`. `record_id` is content-derived (§6.1). **Corrected (RKOI stage-2 review round 1, CRITICAL 2): "idempotent by construction, no nonce needed" is no longer true unqualified once stage 2 ships** — the content hash must also include `agent_id`/`visibility` (§9.4), so dedup is idempotent *per agent*, not globally; two different agents asserting identical content now get two distinct records by design. **Corrected again (RKOI stage-2 review round 2, owner-direction ruling): superseding an unknown id, another agent's `AGENT`-visibility record, or a record failing the existing stage-1 ownership/status check are all now the identical `validation_failed` with a single fixed message** — the round-1 fix's own `thread_scope_denied` answer was itself a third, distinguishable oracle value; unifying to one code and message removes it. `THREAD`-visibility and legacy `agent_id IS NULL` records stay supersedable under the stage-1 rules alone. Stage 2 still requires the `nonce` claim itself as defense in depth regardless of dedup (§6.1.1). **Stage 2, unstarted (§8.2, §9.4): grant's `agentId`/`workspaceId`/`nonce` required; the calling agent must be current; new optional request field `visibility` (`AGENT`\|`THREAD`, default `THREAD`); `agent_id` on the stored row is `grant.agentId`.** |
 | `msp_thread_context` | `thread_id`, `access`; **grant's `audienceKind` required** | `recent_exchange_count`, `current_exchange_id`, `now` | `{ thread, recentExchanges, threadSummaries, protectedRecords, participants, coverageGap }` | Requires `readPrivate` and `thread.audienceKind === 'DIRECT'`; grant principal must be the current `VERIFIED` `HUMAN` participant (§7 rule 5). **Stage 2, unstarted (§8.2, §9.4): grant's `agentId`/`workspaceId` required, no `nonce` (read-only); the calling agent must be current, on top of the existing HUMAN private-read gate; `protectedRecords` additionally filtered by `AGENT`/`THREAD` visibility against `requesterAgentId`.** |
 | `msp_thread_injection_record` | `thread_id`, `exchange_id`, `injection_id`, `packet_hash`, `policy_revision`, `model_ref`, `state`, `access`; **grant's `audienceKind` required** | `now` | `{ injectionId, state, version }` | Requires `readPrivate` and `DIRECT`. State machine per §9.3; same-state calls are a no-op, not an error. **Stage 2, unstarted (§8.2): grant's `agentId`/`workspaceId`/`nonce` required; the calling agent must be current.** |
-| `msp_thread_delivery_record` | `source_event_id`, `receipt_id`, `outcome`, `text`, `inbound_message_id`, `access`; **the one tool whose grant carries no `audienceKind` at all — this is the only exemption, not a general "check when present" rule** | `provider_ref`, `now` | `{ receiptId, ... }` (pending, or reconciled with `messageId`) | Requires `deliveryWriter` and the grant's `tenantId`/`businessId`/`channelAccountId`/`externalRoomRef` scope, plus the room hash (§6.2/§6.3). Scope comes from the inbound message's own thread and the room hash, never from `audienceKind`; if a delivery grant ever does carry one anyway it is still checked, never ignored. **Stage 2, unstarted (§8.2, corrected CRITICAL 1): grant's `agentId`/`workspaceId`/`nonce` required on both paths.** Resolved path (inbound message exists): the delivery-writing agent must be current on that message's own thread. **Pending path (inbound message not yet arrived): the agent must be current on the room's `ACTIVE` thread, found via `ThreadRegistry#findThreadByRoom` (§12.2); `not_found` if the room has no `ACTIVE` thread.** `thread_pending_deliveries` stores the agent/workspace id; at drain time the stored agent is re-checked, and a departed agent leaves the row unreconciled — the already-shipped `msp_thread_message_append.reconcile_skipped` journal entry (`RSK-MEMOS-09`) records `error_code: 'agent_not_current'`, no new journal shape — rather than minting the `OUTBOUND` message under a fixed label. |
+| `msp_thread_delivery_record` | `source_event_id`, `receipt_id`, `outcome`, `text`, `inbound_message_id`, `access`; **the one tool whose grant carries no `audienceKind` at all — this is the only exemption, not a general "check when present" rule** | `provider_ref`, `now` | `{ receiptId, ... }` (pending, or reconciled with `messageId`) | Requires `deliveryWriter` and the grant's `tenantId`/`businessId`/`channelAccountId`/`externalRoomRef` scope, plus the room hash (§6.2/§6.3). Scope comes from the inbound message's own thread and the room hash, never from `audienceKind`; if a delivery grant ever does carry one anyway it is still checked, never ignored. **Stage 2, unstarted (§8.2, corrected CRITICAL 1): grant's `agentId`/`workspaceId`/`nonce` required on both paths.** Resolved path (inbound message exists): the delivery-writing agent must be current on that message's own thread. **Pending path (inbound message not yet arrived): the agent must be current on the room's `ACTIVE` thread, found via `ThreadRegistry#findThreadByRoom` (§12.2); `not_found` if the room has no `ACTIVE` thread.** `thread_pending_deliveries` stores the agent/workspace id, immutable once written (§12.2's recreated update guard); at drain time the stored agent is re-checked for currency **on the inbound message's own thread, not a freshly re-derived room `ACTIVE` thread** (RKOI stage-2 review round 2, finding 4), and a departed or `NULL` stored agent leaves the row unreconciled — the already-shipped `msp_thread_message_append.reconcile_skipped` journal entry (`RSK-MEMOS-09`) records `error_code: 'agent_not_current'`, no new journal shape. The resolved path's internal append uses `speakerId: grant.agentId`; the drain path's uses the stored `agent_id` — neither ever writes a fixed label (finding 3). |
 
 ### The four worker tools
 
@@ -2281,7 +2421,7 @@ handler**, not reconstructed from prose.
 
 | Tool | Required request fields | Response (as the worker actually reads it) | Rule |
 |---|---|---|---|
-| `msp_session_sweep` | `access` | `{ jobs: [{ jobId, sessionId, sourceStartSequence, sourceEndSequence, sourceDigest, leaseToken, ... }], closed }` | Requires `operator`; every scope field (`tenant_id`, `business_id`, `channel_account_id`, `external_room_ref`) is **overwritten from the grant**, never trusted from the request body. Optional `limit`, test-only `now`. **Stage 2, unstarted (§8.2, §8.3, `DEC-MEMOS-18`): grant's `agentId`/`workspaceId`/`nonce` required and present, but the calling agent need not be "current" on anything — sweep precedes thread resolution.** |
+| `msp_session_sweep` | `access` | Stage 1: `{ jobs: [{ jobId, sessionId, sourceStartSequence, sourceEndSequence, sourceDigest, leaseToken, ... }], closed }`. **Stage 2 adds `thread_kind` and `channel_type` to each job's metadata** (RKOI stage-2 review round 2, finding 6, ruling) — non-sensitive, room-scoped, still no `sources`; the worker needs both to construct its own subsequent `msp_thread_resolve` call for that job's room, since `resolve` requires them | Requires `operator`; every scope field (`tenant_id`, `business_id`, `channel_account_id`, `external_room_ref`) is **overwritten from the grant**, never trusted from the request body. Optional `limit`, test-only `now`. **Stage 2, unstarted (§8.2, §8.3, `DEC-MEMOS-18`): grant's `agentId`/`workspaceId`/`nonce` required and present, but the calling agent need not be "current" on anything — sweep precedes thread resolution.** The worker's own subsequent resolve grant carries `audienceKind` from its Tier-1 room configuration, the same source as its room claims, not from `sweep`'s response. |
 | `msp_session_compaction_claim` | `job_id`, `worker_id`, `access` | Job fields including `sources` (message evidence only — **never `protectedRecords`**, §0.3 item 9), `sourceStartSequence`, `sourceEndSequence`, `sourceDigest`, `sessionId`, `jobId`, `leaseToken` | Requires `operator`. Optional `lease_seconds` (1–300, default 120). **Stage 2, unstarted (§8.3): grant's `agentId`/`workspaceId`/`nonce` required; once `job_id` resolves to a thread, the claiming agent must be current on it, or `agent_not_current`.** |
 | `msp_session_compaction_commit` | `session_id`, `job_id`, `source_start_sequence`, `source_end_sequence`, `summary`, `policy_revision`, `summarizer_version`, `invocation_state`, `lease_token`, `source_digest`, `access` | commit result | Requires `operator`. `invocation_state` must be the literal `"TERMINAL"`. Presence of `lease_token` and `source_digest` is checked before any job lookup (RKOI review item 11: refused the same way whether or not `job_id` happens to resolve). **Stage 2, unstarted (§8.3): same agent-currency requirement as `claim`, via the same job's thread; grant's `agentId`/`workspaceId`/`nonce` required.** |
 | `msp_session_compaction_retry` | `job_id`, `error`, `lease_token`, `access` | `{ status: 'RETRYABLE', ... }` | Requires `operator`. Lease token presence checked before lookup, same as commit. **Stage 2, unstarted (§8.3): same agent-currency requirement as `claim`; grant's `agentId`/`workspaceId`/`nonce` required.** |
@@ -2313,7 +2453,7 @@ is transcribed, not reconstructed.
 | `record_subject_mismatch` | `RecordSubjectMismatchError` | A protected-record insert violates the subject-binding trigger |
 | `compaction_lease_conflict` | `CompactionLeaseConflictError` | A claim/commit/retry named a lease token or range that does not match the currently-leased job, or whose lease has expired |
 | `validation_failed` | `ThreadValidationError` | Domain-layer shape/business-rule validation failure |
-| `conflict` | `ThreadConflictError` | An append replay with mismatched content; an invalid injection-state transition; other concurrent-write conflicts |
+| `conflict` | `ThreadConflictError` | An append replay with mismatched content; an invalid injection-state transition; other concurrent-write conflicts. **Stage 1 also raises this for a `supersedes_record_id` the caller cannot supersede for an ownership/status reason** (`thread-memory.mjs:801`) — **stage 2 changes this one case to `validation_failed`** (§9.4, RKOI stage-2 review round 2, owner-direction ruling), unifying it with the unknown-id and cross-agent-`AGENT`-visibility cases into one identical answer. **Verified this is safe against a real caller**: the local `zuri-ai` checkout (`apps/server/src/modules/agent/*`, `server-line-runtime.js`) never sends `supersedes_record_id` on any `msp_thread_memory_record` call, and `agent-msp-thread-memory.test.js`'s own stub for that tool returns only `{ recordId }` with no branch on the response's error code at all — zuri-ai does not distinguish `conflict` from `validation_failed` today because it never reaches either path. **Caveat, stated plainly**: this was checked against the local `zuri-ai` working checkout, not `origin/main` directly — ATHER has no git access to fetch a fresh extract, and the sibling-repo notes warn the local checkout can lag `origin/main`; `BL-MEMOS-033`'s stage-1 code review (and the equivalent stage-2 item) should re-confirm against a current `origin/main` extract before this ships |
 | `not_found` | `ThreadNotFoundError` | No matching thread/session/job/record |
 | `identity_hmac_unconfigured` | `IdentityHmacUnconfiguredError` | No `MSP_IDENTITY_HMAC_KEY` configured for a call that must hash a channel reference |
 | `payload_too_large` | `ThreadPayloadTooLargeError` | A text/body/scope payload exceeded its bound |
@@ -2363,8 +2503,8 @@ is the umbrella file for every stage-1 case below.
 | **Keyring, RKOI-approved (`fd8095f`), corrected suite (warning 1) — moved out of `thread-agent-scoping.security.mjs`, since keyring correctness is orthogonal to the agent gate.** A grant signed under tenant A's key never verifies against tenant B's key, even when both are configured simultaneously; a tenant absent from a *valid* keyring is `grant_unconfigured` at grant-verification time, never falling back to `MSP_THREAD_SERVICE_KEY`'s single default once a keyring exists; every startup-invalid case (malformed JSON, empty object, a duplicate — including escaped-equivalent — tenant id, a tenant id differing from its own trimmed form including non-ASCII whitespace/an escaped tab, a whitespace-only or padded or under-32-character key value) refuses the server to start with `thread_keyring_config_invalid`, naming only the failing entry's 1-based position and never a `cause`, parsed before the database opens; an empty env value is treated as unset, not an error; the keyring map has no prototype (`Object.create(null)`) and lookup is own-property only, so `__proto__`/`constructor`/`toString` and similar are accepted and honoured as ordinary tenant ids — final, not pending (§6.1.1) | `tests/security/thread-service-keyring.security.mjs` (9 cases) plus `tests/contract/thread-service-keyring.test.mjs` — **not** `thread-agent-scoping.security.mjs` |
 | **Worker gate (`DEC-MEMOS-18`)**: `msp_session_compaction_claim`/`commit`/`retry` refuse `agent_not_current` unless the worker's own `grant.agentId` is a current agent of the job's resolved thread; `msp_session_sweep` itself is never refused for "not being current" on anything, since it precedes any single thread's resolution, but is still refused `grant_signature_invalid` if `agentId`/`workspaceId` are absent (§8.3) | `thread-agent-scoping.security.mjs` |
 | **Legacy-record visibility**: every `protected_memory_records` row inserted before stage 2 existed (`agent_id IS NULL`) is visible to any current agent once stage 2 ships, identically to a new `visibility: 'THREAD'` row — confirms the backfill produces no silent access change for old data and no row becomes newly hidden by the migration itself (§9.4) | `thread-agent-scoping.security.mjs` |
-| **CRITICAL 1, corrected (RKOI stage-2 review round 1): the delivery pending path is agent-gated on both ends.** An agent not current on a room's `ACTIVE` thread cannot queue a pending delivery for it (refused `agent_not_current`, or `not_found` if the room has no `ACTIVE` thread at all); a delivery-writer that *was* current when it queued the pending row, but has since departed, produces a drain attempt that leaves the row unreconciled (`reconcile_state` stays `'pending'`; the already-shipped `msp_thread_message_append.reconcile_skipped` journal entry, `RSK-MEMOS-09`, records `error_code: 'agent_not_current'` — no new journal shape) rather than minting the `OUTBOUND` reply; a successfully drained message's `speaker_id` is the stored `agent_id`, never `'zuri-line-agent'` or any other fixed label (§8.2) | `thread-agent-scoping.security.mjs` |
-| **CRITICAL 2, corrected (RKOI stage-2 review round 1): `AGENT`-visibility records cannot leak through dedup or supersession.** Agent A recording an `AGENT`-visibility fact, followed by agent B asserting byte-identical content, produces **two** distinct records, not one shared one — `record_id`'s hash includes `agent_id`/`visibility` (§9.4); agent B naming agent A's `AGENT`-visibility record as `supersedes_record_id` is refused `thread_scope_denied`, indistinguishable in code and message from naming an id that does not exist at all (no existence oracle across agents) | `thread-agent-scoping.security.mjs` |
+| **CRITICAL 1, corrected (RKOI stage-2 review round 1), re-targeted (RKOI stage-2 review round 2, findings 2–4): the delivery pending path is agent-gated on both ends, and the check runs against the right thread.** An agent not current on a room's `ACTIVE` thread cannot queue a pending delivery for it (refused `agent_not_current`, or `not_found` if the room has no `ACTIVE` thread at all); at drain time the stored `(agent_id, workspace_id)` is re-checked for currency on the **inbound message's own thread** (not a freshly re-derived room `ACTIVE` thread, which could have changed since queue time) — a delivery-writer that *was* current when it queued the pending row, but has since departed, or a legacy pending row with a `NULL` stored agent, both leave the row unreconciled (`reconcile_state` stays `'pending'`; the already-shipped `msp_thread_message_append.reconcile_skipped` journal entry, `RSK-MEMOS-09`, records `error_code: 'agent_not_current'` — no new journal shape) rather than minting the `OUTBOUND` reply. A reconcile `UPDATE` that changes the stored `agent_id`/`workspace_id` is refused by the recreated `trg_thread_pending_deliveries_update_guard` (§12.2). A resolved-path delivery's internal append uses `speakerId: grant.agentId`; a drained message's uses the stored `agent_id` — neither path ever writes a fixed label (§8.2) | `thread-agent-scoping.security.mjs` |
+| **CRITICAL 2, corrected (RKOI stage-2 review round 1), then unified (RKOI stage-2 review round 2, `72e593f`): `AGENT`-visibility records cannot leak through dedup or supersession.** Agent A recording an `AGENT`-visibility fact, followed by agent B asserting byte-identical content, produces **two** distinct records, not one shared one — `record_id`'s hash includes `agent_id`/`visibility` (§9.4). Superseding agent A's `AGENT`-visibility record as agent B, superseding an id that does not exist, and superseding a record that fails the pre-existing stage-1 ownership/status check are **one identical answer**: `validation_failed` with the single fixed message "supersedes_record_id does not name a record this caller can supersede" — not three distinguishable codes, and not stage 1's own `conflict` for the ownership/status case either, which stage 2 folds into the same unified answer. `THREAD`-visibility and legacy `agent_id IS NULL` records stay supersedable by any agent under the stage-1 rules alone | `thread-agent-scoping.security.mjs` |
 | **Mint-race**: two concurrent `msp_thread_resolve` calls for the same room, from two different agents, produce exactly one minted thread and exactly one auto-attached agent (the `INSERT` winner) — the race's loser is refused, or falls through to the existing-thread gate (current-or-`assertAgents`), never auto-attaching merely because its own lookup ran before the winner's `INSERT` committed (§8.1) | `thread-agent-scoping.security.mjs` |
 | **`requesterAgentId` absent in stage 2 sees `THREAD` records only** — corrected from an earlier draft's vacuous-pass bug (§9.4): a stage-2 `msp_thread_context` call that somehow reaches the record-visibility filter with no `requesterAgentId` at all never sees any `AGENT`-visibility record, only `THREAD`-visibility ones | `thread-agent-scoping.security.mjs` |
 | Provenance ids (`instance_id`/`thread_id`/`session_id` inside an access context) never widen vault scope | `provenance-ids-are-not-owners.security.mjs` (restored — dropped from an earlier revision's §15 by mistake; the plan and `GATE-MEMOS-5` both still name it) |
@@ -2535,6 +2675,14 @@ New items this round (stage-2 scoping, v0.4.0b):
   dependent on a separate retention tick. The ≥ 128-random-bit floor is
   what keeps agents sharing one tenant from colliding into a spurious
   `grant_replayed` refusal by generating short or low-entropy nonces.
+- **`DEC-MEMOS-21`, `agentId`/`workspaceId` bound — new, adopted
+  default, pending owner confirmation** (§6.1.1, promoted from
+  unnumbered prose, RKOI stage-2 review round 2, finding 8): both claims
+  are non-empty strings bounded at 128 characters, with no further
+  charset constraint — MSP has no agent/workspace identity registry of
+  its own, mirroring `principalId`'s existing treatment as an opaque
+  Tier-1-owned string; the bound exists only to cap storage and
+  `payloadHash` cost.
 - **Confirm identity-key rotation remaining unimplemented is still
   acceptable** for stage 1 and stage 2 alike (§6.2) — unrelated to
   `DEC-MEMOS-01..16`'s confirmation, this open question is unchanged by
@@ -2577,6 +2725,7 @@ have been fixed. Nothing past stage 1 is implemented.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.4.2b | 2026-09-15 | proposed | **Folds RKOI's stage-2 review round 2 warnings after APPROVAL at commit `72e593f` (0 critical).** **Finding 1, supersession unified**: round 1's own `thread_scope_denied` fix for the cross-agent case was itself a third, distinguishable oracle value alongside stage-1's existing `validation_failed` (unknown id) and `conflict` (not-yours); owner-direction ruling collapses all three into one identical `validation_failed` with the fixed message "supersedes_record_id does not name a record this caller can supersede," checked existence-and-cross-agent-`AGENT`-visibility first, then the pre-existing ownership/status check; scoped to `AGENT`-visibility records only — `THREAD` and legacy `NULL`-agent records stay supersedable under stage-1 rules alone (§9.4, §13, §14, §15). Verified against the local `zuri-ai` checkout (not `origin/main` — no git access) that no caller sends `supersedes_record_id` and the test stub never branches on the response code. **Finding 2**: `trg_thread_pending_deliveries_update_guard` is now also dropped and recreated to pin `agent_id`/`workspace_id`, correcting the migration comment that wrongly called the records guard the only drop+recreate (§9.2, §12.2); a reconcile `UPDATE` that rewrites the stored agent is now refused (§15). **Finding 3**: stated precisely that neither delivery path ever writes a fixed `speakerId` — the resolved path's internal append uses `grant.agentId`, the drain path's uses the stored `agent_id` (§8.2, §9.2, §13, §15). **Finding 4**: the drain-time re-check targets the inbound message's own thread, not a freshly re-derived room `ACTIVE` thread; a legacy `NULL`-agent pending row fails closed, never drained, via the same `agent_not_current`/`reconcile_skipped` journal shape (§8.2, §13, §15). **Finding 5**: `resolve`'s nonce is consumed on every outcome — mint, `assertAgents` attach, and no-op — not only the mint path (§6.1.1). **Finding 6**: withdrew the wrong "no per-condition message variety" claim about the keyring — the code gives a distinct per-rule message, it just never names an id or key (§6.1.1); ruled that `msp_session_sweep`'s per-job metadata gains `thread_kind`/`channel_type` so the worker can construct its own resolve call, with `audienceKind` sourced from the worker's own Tier-1 room configuration (§8.3, §13). **Finding 7**: `GATE-MEMOS-2` (plan) now states the `test:cross-zuri` pre-/post-`BL-MEMOS-107` flip explicitly, matching `GATE-MEMOS-3`. **Finding 8**: promoted `agentId`/`workspaceId`'s 128-character bound to **`DEC-MEMOS-21`**, a new adopted default pending owner confirmation (§6.1.1, §19). No id renumbered or reused. | working-tree | ATHER |
 | 0.4.1b | 2026-09-15 | proposed | **Answers RKOI's stage-2 review round 1 on commit `f74ad0d` (NEEDS REVISION, 2 critical).** §12.2's schema itself passed — applies fresh/populated, no table rebuilt, every `0008` trigger kept. **CRITICAL 1**: the delivery pending path stored no agent, so `#drainDeliveries` could mint an `OUTBOUND` `AGENT` message under a hard-coded `speakerId: 'zuri-line-agent'` (`thread-memory.mjs:1131`) for any delivery-writer of the room. Fixed (§8.2, §12.2): `thread_pending_deliveries` gains `agent_id`/`workspace_id`; the pending path requires the agent be current on the room's `ACTIVE` thread (new `ThreadRegistry#findThreadByRoom`), `not_found` if none exists; drain re-checks the stored agent and leaves a non-current agent's row unreconciled — the already-shipped `msp_thread_message_append.reconcile_skipped` journal entry (`RSK-MEMOS-09`) records `error_code: 'agent_not_current'`, no new journal shape — rather than minting under a fixed label; the drained message's `speaker_id` is the stored agent id. **CRITICAL 2**: `record_id`'s dedup hash excluded `agent_id`/`visibility` (`thread-memory.mjs:795`), so agent B recording identical content got back agent A's `AGENT`-visibility row; supersession checked only `asserted_by_speaker_id` (`:833`), so B could supersede A's record. Fixed (§9.4): both columns join the hash; cross-agent supersession is refused `thread_scope_denied`, indistinguishable from an unknown id (no oracle); §13 drops "idempotent by construction" for an unqualified claim. **Keyring rewritten to match the code, RKOI-approved at `fd8095f`** (warning 1): JSON object only, no file-path form; malformed configuration refuses to start with new code `thread_keyring_config_invalid` (§14), parsed before the database opens, naming only the failing entry's 1-based position and never an id, a key or a `cause`; duplicate (including escaped-equivalent) tenant ids, a tenant id differing from its own trimmed form (including non-ASCII whitespace and an escaped tab), an empty `{}`, and whitespace-only, padded, or sub-32-char keys all refused at start; empty env value treated as unset; the keyring map has no prototype (`Object.create(null)`) with own-property-only lookup — **RKOI's final ruling: `__proto__`/`constructor`/`toString` and similar are accepted and honoured as ordinary tenant ids, not refused**, superseding this revision's own earlier "refuse prototype-chain keys" draft, because refusing them only in keyring mode would reject tenants single-key mode already serves; tests cited: `tests/security/thread-service-keyring.security.mjs` (9 cases) plus `tests/contract/thread-service-keyring.test.mjs`, out of `thread-agent-scoping.security.mjs`; new `RSK-MEMOS-11` (keyring-membership visible from `grant_unconfigured` vs `grant_signature_invalid`, accepted — stdio trust boundary); new open owner question for §19, not a decision: whether to restrict tenant ids to a safe character set in both modes, default no restriction. **Nonce transaction corrected** (warning 2): the guard's handlers are `async` and better-sqlite3 refuses an async transaction, so the nonce insert moves into each store method's own synchronous transaction alongside its mutation; delivery's pending insert (previously unwrapped) is now transactional too; pruning always uses the server clock, never `MSP_TEST_CLOCK`. **Revocation wording withdrawn** (warning 3): "ending a `thread_agents` row" is not revocation — detach is self-only and reversible via `assertAgents`; real revocation is Tier 1 withholding grants or a key rotation (§8.3, §19, ADR decision 18). **`DEC-MEMOS-18` revised** (warning 4): the worker attaches via `assertAgents`, never mints from a worker-only grant (`not_found` if the room has no thread), and widens nothing (a compromised worker key already broke the whole tenant, `RSK-MEMOS-05`). **`requesterAgentId` absent now sees `THREAD` records only** (warning 5), correcting a vacuous-pass bug that would have shown every `AGENT` record. **`DEC-MEMOS-17` cross-test wording tightened, and its cross-repo item added directly** (warning 6): the wrapped-port case is labelled "proves MSP accepts the shape" only; `GATE-MEMOS-2`/`3` name the pre-/post-`BL-MEMOS-107` flip explicitly; a missing cross-repo item added (zuri-ai's `speakerId: 'zuri-line-agent'` outbound append needs a matching `agentId` under §8.2's AGENT-speaker rule). **§19 self-contradiction fixed** (warning 7): removed the leftover "confirm the nonce gap/DEC-15/DEC-16" asks now that `01..16` are confirmed; promoted **`DEC-MEMOS-19`** (default visibility `THREAD`) and **`DEC-MEMOS-20`** (nonce: ≥128 random bits, ≤128 chars, `(tenant_id, nonce)` key, 200-row bounded prune) from unnumbered prose. **Defense in depth** (item 9): a new `protected_memory_records` trigger refuses `visibility='AGENT'` with a `NULL agent_id`, and refuses an `agent_id` that never attached to the record's thread (a `CHECK` cannot express this — SQLite has no `ADD CONSTRAINT`); the mint-race rule states auto-attach fires only after this call's own thread `INSERT` wins, never merely "no row found before"; new stage-2 response fields named (`msp_thread_resolve`'s `agentAttached`, `msp_thread_memory_record`'s `agentId`/`visibility`). No id renumbered or reused. | working-tree | ATHER |
 | 0.4.0b | 2026-09-15 | proposed | **PH-MEMOS-3 stage-2 (multi-agent) spec, scoped in full for the first time** (owner direction 2026-09-14: proceed with the next planned work), based on `feat/memos-002-thread-memory` at `707406d`. §6.1.1 (new): the stage-2 grant additions table (`agentId`/`workspaceId` required on all ten tools, extending `verifyThreadGrant`'s existing required-claim check and reusing `grant_signature_invalid`; `nonce` required on every mutating tool except `msp_thread_message_append`, two new codes `grant_nonce_required`/`grant_replayed`; `assertAgents`, resolve-only) and the `MSP_THREAD_SERVICE_KEYRING` format (`BL-MEMOS-049`: JSON object or file path, ≥32-char values, no fallback to the single default once configured, fail-closed per tenant). §8 rewritten in full: `thread_agents` attachment rules (§8.1, auto-attach on `created: true` or `assertAgents` on an existing thread, the *only* two paths); the agent gate stated per tool (§8.2); **`DEC-MEMOS-18`, new adopted default** — the worker signs as the thread's own agent, `claim`/`commit`/`retry` require agent-currency on the job's thread, `sweep` is exempt from "current" but still requires the claims present (§8.3); the journal actor becomes `grant.agentId` in plain text for agent-driven entries, replacing the `workspaceId` placeholder already shipped as `job.tenant_id` (§8.4, not a W5 regression). §9.4 (new): `protected_memory_records` gains `agent_id`/`visibility` (`AGENT`\|`THREAD`, default `THREAD`) via `ALTER TABLE`, no rebuild; legacy rows backfill to `agent_id NULL`/`visibility THREAD`, readable by any current agent; the read-time filter layers on top of, not instead of, the existing HUMAN private-read filter; summaries need no equivalent column since the agent gate itself already fully gates `msp_thread_context`. §12.2 (new): full DDL for `thread_agents` and `grant_nonces`, the `protected_memory_records` `ALTER TABLE` pair, and the required drop+recreate of `trg_protected_memory_records_update_guard` (SQLite triggers cannot be altered in place) to pin the two new columns; nonce insert/replay/bounded-opportunistic-pruning (200 rows, subquery-`LIMIT` form, no `SQLITE_ENABLE_UPDATE_DELETE_LIMIT` dependency) specified exactly. §11.1 gains `thread_agents`/`grant_nonces` erasure rows (both untouched — no principal content). §13 and §14 updated per tool/per code. §15 gains one invariant row per `GATE-MEMOS-3` bullet plus nonce replay, keyring cross-tenant, worker gate and legacy-record visibility, all pointing at `thread-agent-scoping.security.mjs`. §16 gains `MSP_THREAD_SERVICE_KEYRING` in `MSP_RUNTIME_ENV_NAMES`. §19 gains `DEC-MEMOS-17` (no zuri-ai compatibility flag — activation is already gated behind `BL-MEMOS-090`) and `DEC-MEMOS-18`, both adopted defaults pending owner confirmation; every citation of `DEC-MEMOS-01..16` in this round's new text reflects the owner's 2026-09-14 confirmation (`214a7d2`), not pending status. No id renumbered or reused. | working-tree | ATHER |
 | 0.3.6b | 2026-09-14 | proposed | Records the owner's confirmation of DEC-MEMOS-01..16 (2026-09-14) in §6.2 (DEC-MEMOS-16) and §19; RKOI's four rulings and the other §19 owner questions stay open. | working-tree | COORD |
