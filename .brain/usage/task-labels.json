@@ -265,8 +265,7 @@
           "task_ids": [
             "BL-MEMOS-033"
           ],
-          "label": "Stage 1 follow-ups: best-effort delivery reconcile on append, RSK-09 pointer",
-          "status": "open"
+          "label": "Stage 1 follow-ups: best-effort delivery reconcile on append, RSK-09 pointer (467d6ba..3d5ea92)"
         }
       }
     },
@@ -296,6 +295,13 @@
             "BL-MEMOS-033"
           ],
           "label": "Stage 1 code re-review, round 3 (APPROVED, 0 critical)"
+        },
+        "5": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1 follow-up confirmation (3d5ea92)",
+          "status": "open"
         }
       }
     }
