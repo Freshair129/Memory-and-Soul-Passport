@@ -260,6 +260,13 @@
             "BL-MEMOS-102"
           ],
           "label": "Stage 1 revision round 3: required room claim, DEC-MEMOS-16, 0008 nits, output-schema contract test (95629e2..467d6ba)"
+        },
+        "4": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1 follow-ups: best-effort delivery reconcile on append, RSK-09 pointer",
+          "status": "open"
         }
       }
     },
@@ -288,8 +295,7 @@
           "task_ids": [
             "BL-MEMOS-033"
           ],
-          "label": "Stage 1 code re-review, round 3 (467d6ba)",
-          "status": "open"
+          "label": "Stage 1 code re-review, round 3 (APPROVED, 0 critical)"
         }
       }
     }
