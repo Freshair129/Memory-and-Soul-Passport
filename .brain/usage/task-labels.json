@@ -629,6 +629,12 @@
         "BL-MEMOS-087"
       ],
       "label": "Record owner confirmation of DEC-MEMOS-17..21 (docs 8737285)"
+    },
+    "32": {
+      "task_ids": [
+        "BL-MEMOS-087"
+      ],
+      "label": "Record owner confirmation of RKOI rulings 1-4 (docs ace74fc)"
     }
   }
 }
