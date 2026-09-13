@@ -15,6 +15,8 @@
 // The two transports share no framing code path.
 import readline from "node:readline";
 
+import { containsEscapedObjectKey } from "./escaped-object-key-scan.mjs";
+
 function encodeLine(payload) {
   return `${JSON.stringify(payload)}\n`;
 }
@@ -104,6 +106,17 @@ export function createStdioJsonRpcServer({
   rl.on("line", (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
+
+    // RKOI ruling (merge-blocking): refuse, before the real JSON.parse ever
+    // runs, any line whose object keys (at any nesting depth) contain a
+    // backslash escape sequence -- see escaped-object-key-scan.mjs's header
+    // comment for the V8 JSON.parse engine bug this defends against. There
+    // is no id to correlate a response to yet (mirrors the malformed-JSON
+    // case just below), and the message never echoes any key content.
+    if (containsEscapedObjectKey(trimmed)) {
+      failure(null, "invalid_request: object keys must not contain escape sequences.", -32600);
+      return;
+    }
 
     let message;
     try {

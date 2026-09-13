@@ -1,5 +1,5 @@
 ---
-version: "0.2.3b"
+version: "0.2.4b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
 last_update: "2026-09-15T00:10:00+07:00,KIN"
 status: "beta"
@@ -218,7 +218,56 @@ the final tree, green every time.
 
 Found by GHOST while fuzzing `apps/msp-server/src/config/thread-service-keyring.mjs`
 (BL-MEMOS-049's optional per-tenant `MSP_THREAD_SERVICE_KEYRING`). Recorded
-2026-09-15 on Windows 11, Node v24.19.0.
+2026-09-15 on Windows 11, Node v24.19.0. RKOI then bisected the regression
+and ruled it merge-blocking for TASK-MEMOS-002 stage 2 -- see "RKOI's
+bisection and the transport-level rule" below for the runtime-wide fix.
+
+### RKOI's bisection and the transport-level rule
+
+RKOI traced the regression to a specific V8 range and assessed it across
+the whole runtime, not just the keyring:
+
+| Engine | Affected? |
+|---|---|
+| Node <= 22.23 (V8 <= 12.4-era) | Clean |
+| Node 23 through at least 26.8 (V8 12.4-12.9 regression), including this workspace's Node 24.19.0 | Affected |
+
+RKOI's characterization narrowed the trigger precisely: only a **non-first**
+object key that contains an escape sequence, parsed AFTER an earlier parse
+in the same process shared the same leading key(s), where that earlier key
+was `X\` (i.e. the priming key itself ends in a backslash). The corrupted
+key always comes back as that same `X\` -- literally, it always ends in a
+backslash. Values, and a key in first position, are never affected.
+
+**There is no isolation or authentication bypass.** Every scope decision
+in this runtime reads VALUES, never a key, for its authorization check; a
+corrupted key can never become a clean, matching identifier; and grant
+corruption fails closed as an HMAC/signature mismatch. It still does real
+damage, though: RKOI proved it on the real server (not just the keyring)
+-- tenant A's `msp_memory_upsert` with `body_json {"-":K,"\\":K}` corrupts
+a LATER, unrelated tenant B's own `msp_memory_upsert` with
+`body_json {"-":K,"\"":K}`. The corrupted key (`\` instead of `"`) is what
+gets PERSISTED and read back, inside tenant B's own vault -- a real,
+if silent, data-corruption bug, and it also causes spurious grant and ajv
+validation rejections wherever a corrupted key trips a schema or signature
+check downstream.
+
+**The rule.** Since the trigger cannot be reliably predicted or detected
+after the fact (the "priming" parse can be any earlier, unrelated request
+in the same long-lived process), the only reliable, engine-independent
+mitigation is to never hand this engine's `JSON.parse` an object key that
+needed an escape sequence at all, anywhere, regardless of position. Both
+`apps/msp-server/src/transport/stdio-jsonrpc-server.mjs` (every inbound
+request, every tool) and `packages/msp-client-js/src/msp-stdio-transport.mjs`
+(every inbound response) now run a small, pure, engine-independent scanner
+(`escaped-object-key-scan.mjs`, duplicated verbatim in the client package
+so it stays dependency-free) over the RAW text and refuse, before the real
+`JSON.parse` ever runs, any line whose object keys -- at any nesting depth
+-- contain a backslash escape. Escapes inside VALUES remain fully allowed;
+a literal, unescaped non-ASCII character in a key (Thai, emoji, anything
+JSON never requires escaping) is not a "backslash escape" and is also
+accepted, since `JSON.stringify` does not escape those by default and
+ordinary user data must keep working.
 
 V8's own `JSON.parse` has a real, reproducible engine bug: after one object
 has been parsed, a LATER, differently-escaped object parsed in the SAME
@@ -269,6 +318,7 @@ the current one) for the full detail and proof.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.4b | 2026-09-15 | beta | RKOI ruling (merge-blocking), fixed on `feat/memos-002-stage2-multi-agent`: bisected the V8 `JSON.parse` non-first-key corruption to a real engine regression (V8 12.4-12.9; Node <=22.23 clean, Node 23 through at least 26.8 affected) and proved it reaches real storage on the real server (one tenant's `msp_memory_upsert` body can corrupt a later, unrelated tenant's own upsert body, persisted and read back inside that tenant's own vault). Added a transport-level, engine-independent raw-text scanner refusing any inbound line whose object keys (any depth, every tool) contain an escape sequence, before the real `JSON.parse` runs -- `apps/msp-server/src/transport/stdio-jsonrpc-server.mjs` on the server and `packages/msp-client-js/src/msp-stdio-transport.mjs` on the client (duplicated scanner, client stays dependency-free). See "RKOI's bisection and the transport-level rule" above. | working-tree | KIN |
 | 0.2.3b | 2026-09-15 | beta | GHOST QA finding, fixed on `feat/memos-002-stage2-multi-agent`: V8's `JSON.parse` has a real engine bug on Node v24.19.0 (a later, differently-escaped object parsed in the same process can come back with a corrupted non-first key name; values are unaffected). `thread-service-keyring.mjs`'s `parseThreadServiceKeyring` used to read a value via `parsed[tenantId]` on the native `JSON.parse` result, which a corrupted key made miss silently, false-refusing an otherwise-valid keyring (149/20,000 in GHOST's fuzz) -- always fail-closed, never a wrong key. The keyring no longer depends on native `JSON.parse` key OR value content at all; see "V8 `JSON.parse` non-first-key corruption on Node v24.19.0" above. | working-tree | KIN |
 | 0.2.2b | 2026-09-14 | beta | RKOI code review round 2 revision (`feat/memos-002-thread-memory`): corrects the 0.2.1b row below -- under this workspace's non-strict npm 11.17, neither `npm approve-scripts` nor an interactive `npm install` prompt is "the actual gate"; an unlisted package's install script simply runs with a notice, nothing blocks it. Also closed the round-2 CRITICAL (a signed grant omitting `externalRoomRef` skipped the room-hash check entirely instead of being refused), added DEC-MEMOS-16 (a resolve naming a different `channel_type` than an existing ACTIVE thread's binding is a typed conflict, never the other channel's thread), and folded further schema/error-text fixes into the still-unshipped `migrations/0008_thread_memory.sql`. | working-tree | KIN |
 | 0.2.1b | 2026-09-14 | beta | Removed root `package.json`'s `allowScripts.better-sqlite3@13.0.3` entry (added earlier in this same stage to unblock a local `npm install`): npm 10 on Node 22 ignores `allowScripts` entirely, and this workspace's npm 11.17 treats it as non-strict (an unlisted package's script still runs with a warning, it does not block); the pinned-version key also goes stale the next time `better-sqlite3` bumps a patch. `npm approve-scripts` or an interactive `npm install` prompt remains the actual gate — corrected in 0.2.2b below: this claim is false under this workspace's npm. | working-tree | JANUS |

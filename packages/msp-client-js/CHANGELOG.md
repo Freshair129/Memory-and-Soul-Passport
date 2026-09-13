@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.4
+
+- Refuses, before parsing, any inbound MSP response whose object keys (at
+  any nesting depth) contain a backslash escape sequence -- both the raw
+  response line and the `content[].text` JSON.parse fallback used when
+  `structuredContent` is absent. RKOI ruling (merge-blocking): V8's own
+  `JSON.parse` has a real engine bug (Node 23 through at least 26.8,
+  including this workspace's 24.19) that can hand a caller a corrupted
+  non-first object key after an earlier parse in the same long-lived
+  process shared the same leading key(s). Escapes inside VALUES, and a
+  literal (unescaped) non-ASCII character in a key, are unaffected and
+  remain accepted. See `docs/NOTES.md` for the finding and
+  `apps/msp-server/src/transport/escaped-object-key-scan.mjs`'s header
+  comment (this package carries a deliberate, byte-for-byte duplicate --
+  see `src/escaped-object-key-scan.mjs` -- to stay dependency-free).
+
 ## 0.2.3
 
 - `MSP_THREAD_SERVICE_KEYRING` is forwarded to the MSP child (added to

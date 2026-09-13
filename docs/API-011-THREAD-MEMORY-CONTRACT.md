@@ -1,6 +1,6 @@
 ---
 doc_id: "API-011-THREAD-MEMORY-CONTRACT"
-version: "0.3.2b"
+version: "0.3.3b"
 status: "beta"
 created_at: "2026-09-08T00:25:00+07:00,RWANG"
 last_update: "2026-09-15T00:00:00+07:00,KIN"
@@ -259,6 +259,17 @@ evaluated: `grant_unconfigured` (no key resolves for the grant's tenant),
 `grant_signature_invalid`, `grant_expired`, `grant_payload_mismatch`. No
 error message embeds a raw `external_room_ref` or person id.
 
+Beneath all of the above, every thread tool -- like every other tool in
+this runtime -- is also subject to the transport-level escaped-object-key
+refusal (RKOI ruling, merge-blocking): `apps/msp-server/src/transport/
+stdio-jsonrpc-server.mjs` refuses, before the real `JSON.parse` ever runs,
+any inbound line whose object keys (at any nesting depth) contain a
+backslash escape sequence, defending against a real V8 `JSON.parse` engine
+bug (see `docs/API-009-Persistent-Memory-Contract.md` §6 and
+`docs/NOTES.md` for the full finding). This is a transport-boundary check,
+not a thread-scope decision, and answers a JSON-RPC `invalid_request`
+error with `id: null`, never the `grant_*`/`thread_*` vocabulary above.
+
 ### Journaling (W5)
 
 Every journal entry's `actor` field is the HMAC of the raw speaker id under
@@ -452,6 +463,7 @@ GKS-as-DNA meaning is not imported into Zuri's GKS knowledge authority.
 
 | Version | Date | Status | Summary | Agent |
 |---|---|---|---|---|
+| 0.3.3b | 2026-09-15 | beta | RKOI ruling (merge-blocking, TASK-MEMOS-002 stage 2): documented the transport-level escaped-object-key refusal that now applies to every thread tool (a real V8 `JSON.parse` engine bug -- see `docs/API-009-Persistent-Memory-Contract.md` §6 and `docs/NOTES.md`); this is a transport-boundary `invalid_request` refusal, distinct from the `grant_*`/`thread_*` error vocabulary above. | KIN |
 | 0.3.2b | 2026-09-15 | beta | TASK-MEMOS-002 stage 2, BL-MEMOS-049: optional per-tenant `MSP_THREAD_SERVICE_KEYRING` (opt-in, no fallback once configured, parsed/validated once at server start before the database is even opened); RKOI code review round 1 CRITICAL closed -- no rejection ever quotes anything read out of the keyring, only an entry's 1-based position, closing a path where an inverted `{key: tenantId}` map could echo the key through the startup crash into both the server's stderr and the calling application's own error | KIN |
 | 0.3.1b | 2026-09-14 | beta | RKOI review revision (2 CRITICALs, multiple WARNINGs, 4 rounds against zuri-ai `origin/main`): dropped `channel_type` from the room hash and removed `channelType` from the delivery grant (CRITICAL 1, zuri-ai's real delivery grant never sent one); added DEC-MEMOS-15's self-upgrade exception plus its stored-`person_id` tightening (CRITICAL 2); added the per-tool audience requirement (required on every tool except delivery) and the room-hash cross-check on every thread-bound tool including compaction claim/commit/retry; `person_id` constrained to `{null, principalId}` unconditionally; tenant-scoped uniqueness extended to `thread_injection_receipts`/`thread_summary_invalidations`/cross-references between messages, jobs, summaries and their sessions; `chat_sessions` uniqueness narrowed to "at most one OPEN" only (a schema-level "one CLOSING" constraint was tried and dropped -- late-delivery reconciliation legitimately produces two); tombstone-then-INSERT and `IS NOT`-safe tenant triggers; `ON CONFLICT DO NOTHING` replacing `INSERT OR IGNORE` where it could swallow a NOT NULL violation; output-contract validation removed (ran only after commit); typed grant-verification errors (`grant_unconfigured`/`grant_signature_invalid`/`grant_expired`/`grant_payload_mismatch`) | KIN |
 | 0.3.0b | 2026-09-13 | beta | TASK-MEMOS-002 stage 1: renamed API-010 -> API-011, tenant-scoped uniqueness, HMAC room refs, append-only participants with the one-human-per-DIRECT-thread invariant, `msp-contracts` decoupled from storage, required `source_event_id`, typed errors, test-only clock | KIN |

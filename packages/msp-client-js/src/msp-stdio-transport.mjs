@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+import { containsEscapedObjectKey } from "./escaped-object-key-scan.mjs";
+
 function encode(payload) {
   return Buffer.from(`${JSON.stringify(payload)}\n`, "utf8");
 }
@@ -124,6 +126,20 @@ export function createMspStdioCaller({ command, args = [], cwd, env = process.en
       buffer = buffer.subarray(newline + 1);
       if (!line.trim()) continue;
 
+      // RKOI ruling (merge-blocking): the same V8 JSON.parse engine bug
+      // that can corrupt an object key on the server side (see
+      // escaped-object-key-scan.mjs's header comment) applies equally to
+      // this long-lived client process parsing the server's own
+      // responses. Refuse before the real JSON.parse ever runs, for every
+      // pending request -- there is no way to know, without parsing, which
+      // request this response was even for.
+      if (containsEscapedObjectKey(line)) {
+        const scanError = new Error("MSP returned a response whose object keys contain escape sequences (refused before parsing).");
+        failPending(scanError);
+        child.kill();
+        return;
+      }
+
       let message;
       try {
         message = JSON.parse(line);
@@ -182,6 +198,16 @@ export function createMspStdioCaller({ command, args = [], cwd, env = process.en
     const result = await request("tools/call", { name, arguments: input });
     const text = result?.content?.find((item) => item.type === "text")?.text;
     if (result?.isError) throw new Error(text ?? `${name} failed.`);
+    if (result?.structuredContent === undefined && text) {
+      // The same pre-scan as the inbound-line check above, applied to this
+      // SEPARATE JSON.parse call on the embedded `content[].text` fallback
+      // -- `structuredContent` (already covered, since it is part of the
+      // one line already scanned in the `child.stdout` handler above) is
+      // absent here, so this text is about to be parsed independently.
+      if (containsEscapedObjectKey(text)) {
+        throw new Error(`${name} response text contains object keys with escape sequences (refused before parsing).`);
+      }
+    }
     return result?.structuredContent ?? (text ? JSON.parse(text) : {});
   };
 
