@@ -400,7 +400,14 @@
       "task_ids": [
         "OPS-MEMOS-002"
       ],
-      "label": "Task usage ledger",
+      "label": "Task usage ledger"
+    },
+    "27": {
+      "task_ids": [
+        "BL-MEMOS-033",
+        "BL-MEMOS-012"
+      ],
+      "label": "Triage stage-1 code review and docs round 3; dispatch KIN revision and ATHER round 4",
       "status": "open"
     }
   }
