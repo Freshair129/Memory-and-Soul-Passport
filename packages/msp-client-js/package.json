@@ -10,9 +10,11 @@
     "./authority": "./src/authority-enforcement.mjs"
   },
   "files": [
-    "src"
+    "src",
+    "README.md",
+    "CHANGELOG.md"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

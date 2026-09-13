@@ -1,7 +1,7 @@
 ---
-version: "0.2.3b"
+version: "0.2.4b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-13T12:00:00+07:00,KIN"
+last_update: "2026-09-13T18:00:00+07:00,KIN"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -104,3 +104,4 @@ Risk is HIGH because code crosses package and repository boundaries and migratio
 | 0.2.0b | 2026-09-08 | beta | Documented the GenesisRAG17 Tier 2 relay composition, exact grant boundary, Tier 4 query route and fail-closed invariants. | working-tree | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
 | 0.1.0b | 2026-08-12 | beta | Initial extraction architecture and dependency rules. | 394a176 | ATHER |
+| 0.2.4b | 2026-09-13 | beta | Release hygiene for the publishable client after two behaviour changes: `NODE_EXTRA_CA_CERTS` is forwarded to the MSP child (its absence degraded vector search to FTS-only silently behind a private CA), the package ships a README and CHANGELOG so a consumer upgrading past 0.2.0 sees the allowlist change, the client Node floor matches the server at 22, and the local runbook says its `env: process.env` is filtered. | docs/client-release-notes-and-ca-certs | KIN |

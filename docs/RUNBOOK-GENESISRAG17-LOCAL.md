@@ -171,6 +171,8 @@ const call = createMspStdioCaller({
   command: process.execPath,
   args: [path.resolve(process.cwd(), 'apps/msp-server/bin/msp-server.mjs')],
   cwd: process.cwd(),
+  // Filtered, not forwarded: the client hands the MSP child only the names it
+  // reads, the GKS_* namespace and OS basics. See packages/msp-client-js/README.md.
   env: process.env,
 })
 
