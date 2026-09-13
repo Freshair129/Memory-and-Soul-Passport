@@ -224,6 +224,14 @@
             "BL-MEMOS-011"
           ],
           "label": "Docs round 5: fold RKOI round-4 warnings (design v0.3.4b, commit 36b6211)"
+        },
+        "6": {
+          "task_ids": [
+            "BL-MEMOS-010",
+            "BL-MEMOS-011"
+          ],
+          "label": "Docs round 6: required room claim, DEC-MEMOS-16, room-scoped sweep (design v0.3.5b)",
+          "status": "open"
         }
       }
     },
@@ -245,6 +253,15 @@
             "BL-MEMOS-111"
           ],
           "label": "Stage 1 revision: delivery/HMAC, DEC-MEMOS-15, room check, per-tool audience, schema integrity (0508b8b..95629e2)"
+        },
+        "3": {
+          "task_ids": [
+            "BL-MEMOS-033",
+            "BL-MEMOS-111",
+            "BL-MEMOS-102"
+          ],
+          "label": "Stage 1 revision round 3: required room claim, DEC-MEMOS-16, 0008 nits, output-schema contract test",
+          "status": "open"
         }
       }
     },
@@ -267,8 +284,7 @@
           "task_ids": [
             "BL-MEMOS-033"
           ],
-          "label": "Stage 1 code re-review, round 2 (95629e2)",
-          "status": "open"
+          "label": "Stage 1 code re-review, round 2 (1 critical: room check skipped without externalRoomRef)"
         }
       }
     }
