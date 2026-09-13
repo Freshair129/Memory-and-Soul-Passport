@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3
+
+- `MSP_THREAD_SERVICE_KEYRING` is forwarded to the MSP child (added to
+  `MSP_RUNTIME_ENV_NAMES`; BL-MEMOS-049, stage 2). It is optional and
+  opt-in: unset, thread-tool grants keep verifying against the single
+  `MSP_THREAD_SERVICE_KEY` exactly as before. Once set (a JSON object of
+  `{"<tenantId>": "<key>"}`, every key >= 32 characters), the single key is
+  disabled for every tenant with no fallback -- a grant for a tenant
+  missing from the keyring fails closed with `grant_unconfigured`, the same
+  as an unresolvable single key. Never journaled or echoed back to a
+  caller, same as the other two thread-memory secrets.
+
 ## 0.2.2
 
 - `MSP_THREAD_SERVICE_KEY` and `MSP_IDENTITY_HMAC_KEY` are forwarded to the

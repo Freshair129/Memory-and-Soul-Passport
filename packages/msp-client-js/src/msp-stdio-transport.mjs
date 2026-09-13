@@ -12,15 +12,19 @@ function encode(payload) {
  *                                  apps/msp-server/src/transport/handlers/pipeline-handlers.mjs
  *   OLLAMA_BASE_URL                packages/msp-retrieval/src/retrieval/vector.mjs
  *   MSP_THREAD_SERVICE_KEY         apps/msp-server/src/server.mjs (API-011 thread-tool grant HMAC)
+ *   MSP_THREAD_SERVICE_KEYRING     apps/msp-server/src/config/thread-service-keyring.mjs (BL-MEMOS-049,
+ *                                  optional per-tenant grant HMAC keys; disables MSP_THREAD_SERVICE_KEY
+ *                                  entirely for every tenant once set)
  *   MSP_IDENTITY_HMAC_KEY          apps/msp-server/src/server.mjs (API-011 room-ref/journal-actor HMAC)
  *   MSP_THREAD_IDLE_TIMEOUT_MINUTES, MSP_THREAD_RECENT_EXCHANGES
  *                                  apps/msp-server/src/server.mjs (API-011 per-deployment ceilings)
  *
- * Neither MSP_THREAD_SERVICE_KEY nor MSP_IDENTITY_HMAC_KEY is ever journaled
- * or echoed back to a caller (see docs/API-011-THREAD-MEMORY-CONTRACT.md).
- * MSP_TEST_CLOCK is deliberately NOT in this list -- it is read only at
- * apps/msp-server/src/server.mjs's own composition root, never by a
- * client-spawned child's caller (RKOI review, WARNING 6 / item 12).
+ * Neither MSP_THREAD_SERVICE_KEY, MSP_THREAD_SERVICE_KEYRING, nor
+ * MSP_IDENTITY_HMAC_KEY is ever journaled or echoed back to a caller (see
+ * docs/API-011-THREAD-MEMORY-CONTRACT.md). MSP_TEST_CLOCK is deliberately
+ * NOT in this list -- it is read only at apps/msp-server/src/server.mjs's
+ * own composition root, never by a client-spawned child's caller (RKOI
+ * review, WARNING 6 / item 12).
  */
 export const MSP_RUNTIME_ENV_NAMES = Object.freeze([
   "MSP_DB_PATH",
@@ -33,6 +37,7 @@ export const MSP_RUNTIME_ENV_NAMES = Object.freeze([
   "MSP_PIPELINE_WORKER_TOKEN",
   "OLLAMA_BASE_URL",
   "MSP_THREAD_SERVICE_KEY",
+  "MSP_THREAD_SERVICE_KEYRING",
   "MSP_IDENTITY_HMAC_KEY",
   "MSP_THREAD_IDLE_TIMEOUT_MINUTES",
   "MSP_THREAD_RECENT_EXCHANGES",
