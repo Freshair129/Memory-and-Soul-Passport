@@ -93,6 +93,13 @@
             "BL-MEMOS-012"
           ],
           "label": "TASK-MEMOS-001 docs review, round 3 (1 critical: delivery grant channelType)"
+        },
+        "16": {
+          "task_ids": [
+            "BL-MEMOS-012"
+          ],
+          "label": "TASK-MEMOS-001 docs review, round 4 (1c4a62f)",
+          "status": "open"
         }
       }
     },
@@ -204,8 +211,7 @@
             "BL-MEMOS-010",
             "BL-MEMOS-011"
           ],
-          "label": "Docs revision round 4: delivery claim set, room hash, DEC-MEMOS-15, schema consistency (design v0.3.3b)",
-          "status": "open"
+          "label": "Docs revision round 4: delivery claim set, room hash, DEC-MEMOS-15, schema consistency (design v0.3.3b, commit 1c4a62f)"
         }
       }
     },
