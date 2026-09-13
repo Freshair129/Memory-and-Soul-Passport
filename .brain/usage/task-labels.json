@@ -343,6 +343,13 @@
           ],
           "label": "Keyring parser: decode values in scanner, not via native JSON.parse keys (V8 bug)",
           "status": "open"
+        },
+        "10": {
+          "task_ids": [
+            "BL-MEMOS-040..049"
+          ],
+          "label": "Transport escaped-key pre-scan (server + client), queued after keyring fix",
+          "status": "open"
         }
       }
     },
@@ -412,8 +419,7 @@
             "BL-MEMOS-033",
             "BL-MEMOS-040..049"
           ],
-          "label": "Assess V8 JSON.parse bug blast radius across MSP",
-          "status": "open"
+          "label": "V8 JSON.parse blast radius: 0 critical, transport pre-scan and CI assertion required"
         }
       }
     }
