@@ -230,8 +230,7 @@
             "BL-MEMOS-010",
             "BL-MEMOS-011"
           ],
-          "label": "Docs round 6: required room claim, DEC-MEMOS-16, room-scoped sweep (design v0.3.5b)",
-          "status": "open"
+          "label": "Docs round 6: required room claim, DEC-MEMOS-16, room-scoped sweep (design v0.3.5b, commits b822901, c6e2820)"
         }
       }
     },
