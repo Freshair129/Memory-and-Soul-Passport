@@ -259,8 +259,7 @@
             "BL-MEMOS-111",
             "BL-MEMOS-102"
           ],
-          "label": "Stage 1 revision round 3: required room claim, DEC-MEMOS-16, 0008 nits, output-schema contract test",
-          "status": "open"
+          "label": "Stage 1 revision round 3: required room claim, DEC-MEMOS-16, 0008 nits, output-schema contract test (95629e2..467d6ba)"
         }
       }
     },
@@ -284,6 +283,13 @@
             "BL-MEMOS-033"
           ],
           "label": "Stage 1 code re-review, round 2 (1 critical: room check skipped without externalRoomRef)"
+        },
+        "4": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1 code re-review, round 3 (467d6ba)",
+          "status": "open"
         }
       }
     }
