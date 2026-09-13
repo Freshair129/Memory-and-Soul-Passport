@@ -1181,12 +1181,25 @@ export class ThreadMemoryStore {
         // own transaction rolled back before ever reaching the
         // reconcile_state='reconciled' UPDATE) for a later drain attempt --
         // this append's caller still sees its own successful result.
+        //
+        // RKOI's confirmation pass: absorbing every error here means an
+        // operator reading this journal entry could not tell a receipt_id
+        // collision apart from a real storage fault -- record a STABLE
+        // code, never the free-text message (which can vary run to run and
+        // is not part of any typed vocabulary). Our own typed errors
+        // (ThreadConflictError et al, thrown by recordDelivery/
+        // translateTriggerError) always set `.code` to one of the fixed
+        // reason strings in errors.mjs (e.g. "conflict"); a raw driver
+        // error (e.g. better-sqlite3's SqliteError) sets `.code` to its own
+        // fixed string too (e.g. "SQLITE_BUSY"). Anything without a
+        // string `.code` at all falls back to the fixed "internal" label.
+        const errorCode = typeof error?.code === "string" && error.code ? error.code : "internal";
         this.#journalAppend({
           actor: "msp:delivery-drain",
           toolName: "msp_thread_message_append.reconcile_skipped",
           ref: inboundId,
           workspaceId: row.tenant_id,
-          payload: { receipt_id: row.receipt_id, reconciled: false },
+          payload: { receipt_id: row.receipt_id, reconciled: false, error_code: errorCode },
           policyDecision: "allow",
         });
       }

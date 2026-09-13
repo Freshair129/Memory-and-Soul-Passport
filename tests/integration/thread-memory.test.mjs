@@ -537,12 +537,16 @@ describe("unified thread, speaker and session memory", () => {
     // The skipped reconcile is journaled, scoped to tenant 2, with no raw
     // ids beyond the usual application refs -- once for the original
     // append and once more for the replay, since each independently
-    // retries (and again fails) the same reconcile.
+    // retries (and again fails) the same reconcile. RKOI's confirmation
+    // pass: the payload also carries a STABLE error_code (never the
+    // free-text message), so an operator can tell a receipt_id collision
+    // (ThreadConflictError's own "conflict" code) apart from a real
+    // storage fault.
     const skipped = server.db.prepare("SELECT ref, workspace_id, payload_json FROM journal WHERE tool_name = 'msp_thread_message_append.reconcile_skipped'").all();
     expect(skipped).toHaveLength(2);
     for (const entry of skipped) {
       expect(entry).toMatchObject({ ref: "zed-future", workspace_id: "tenant-drain-2" });
-      expect(JSON.parse(entry.payload_json)).toMatchObject({ receipt_id: "crm-delivered-alice", reconciled: false });
+      expect(JSON.parse(entry.payload_json)).toMatchObject({ receipt_id: "crm-delivered-alice", reconciled: false, error_code: "conflict" });
     }
   });
 });
