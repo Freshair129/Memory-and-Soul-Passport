@@ -24,7 +24,7 @@ async function fixture(run) {
   });
   let time = '2026-09-08T00:00:00.000Z';
   const claims = { tenantId: 'tenant', businessId: 'business', channelAccountId: 'oa', externalRoomRef: 'dm',
-    channelType: 'LINE', principalId: 'alice', policyRevision: 'v1', audienceKind: 'DIRECT', operator: true,
+    principalId: 'alice', policyRevision: 'v1', audienceKind: 'DIRECT', operator: true,
     readPrivate: true, deliveryWriter: true };
   const call = async (name, input = {}, scope = claims) => (await server.toolRegistry.dispatch(name,
     signThreadRequest(name, { ...input, now: time }, scope, key))).structuredContent;
@@ -91,6 +91,13 @@ describe('authorized durable thread summary worker', () => {
     expect(server.db.prepare('SELECT status FROM chat_sessions').get().status).toBe('CLOSING');
     expect((await call('msp_thread_context', { thread_id: thread.threadId })).threadSummaries).toHaveLength(0);
     expect(server.db.prepare('SELECT COUNT(*) AS n FROM session_summaries').get().n).toBe(1);
+    // RKOI review (docs round 4), item 2: the invalidation write must not
+    // silently no-op -- assert the row actually exists, with the right
+    // tenant, not just that context() stopped surfacing the old summary.
+    const invalidation = server.db.prepare('SELECT * FROM thread_summary_invalidations').get();
+    expect(invalidation).toBeTruthy();
+    expect(invalidation.reason).toBe('DELIVERY_RECONCILED');
+    expect(invalidation.tenant_id).toBe('tenant');
     const next = await runThreadSummarySweep({ call, workerId: 'worker', policyRevision: 'v1', summarizerVersion: 'test',
       summarize: async ({ sources }) => { expect(sources[1].text).toBe('late fallback'); return { invocationState: 'TERMINAL', summary: summary() }; } });
     expect(next.results[0].status).toBe('COMMITTED');

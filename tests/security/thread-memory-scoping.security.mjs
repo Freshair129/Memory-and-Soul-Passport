@@ -58,7 +58,7 @@ function signed(name, input, claims) {
 
 // Grant claims are camelCase (ROOM); wire request bodies are snake_case
 // (ROOM_REQUEST) -- the two are never interchangeable.
-const ROOM = { channelType: "LINE", channelAccountId: "oa-scoping", tenantId: "tenant-scoping" };
+const ROOM = { channelAccountId: "oa-scoping", tenantId: "tenant-scoping" };
 const ROOM_REQUEST = { channel_type: "LINE", channel_account_id: "oa-scoping", tenant_id: "tenant-scoping" };
 
 test("C-1a: bob can never join alice's DIRECT thread as a second HUMAN participant, even asserting himself explicitly", async () => {
@@ -147,34 +147,92 @@ test("C-1b: an UNKNOWN-kind append never mints a readable participant -- 'carol'
   }
 });
 
-test("C-1c: a PENDING speaker can never self-upgrade to VERIFIED without an explicit assertParticipants claim", async () => {
-  const { dbPath, cleanup } = tempDbPath("c1c");
+// RKOI review (2nd round), CRITICAL 2 / DEC-MEMOS-15: zuri-ai sends
+// identity_assurance: VERIFIED and person_id = principalId once a user
+// verifies (server-line-answer.js), with NO assertParticipants claim -- the
+// grant principal upgrading their OWN participant row must always succeed,
+// or a DIRECT thread would lock up permanently the moment its user
+// verifies. This replaces the ORIGINAL (wrong) C-1c expectation, which
+// required assertParticipants for exactly this case.
+test("CRITICAL 2 / DEC-MEMOS-15: the grant principal can self-upgrade PENDING -> VERIFIED with no assertParticipants claim, and keep talking and reading afterward", async () => {
+  const { dbPath, cleanup } = tempDbPath("dec-memos-15");
   const call = spawnRuntime(dbPath);
   try {
-    const claims = { ...ROOM, externalRoomRef: "dm-c1c", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1" };
+    const claims = { ...ROOM, externalRoomRef: "dm-dec-memos-15", audienceKind: "DIRECT", principalId: "dave", policyRevision: "v1", readPrivate: true };
     const { thread } = await call(
       "msp_thread_resolve",
-      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-c1c" }, claims),
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-dec-memos-15" }, claims),
     );
     await call(
       "msp_thread_message_append",
       signed(
         "msp_thread_message_append",
-        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "PENDING", direction: "INBOUND", text: "hello" },
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "dave", speaker_kind: "HUMAN", identity_assurance: "PENDING", direction: "INBOUND", text: "turn1" },
         claims,
       ),
     );
+    // PENDING -> VERIFIED, person_id = principalId, no assertParticipants:
+    // must succeed (this is exactly what locked up permanently before the fix).
+    const upgraded = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-2", speaker_id: "dave", speaker_kind: "HUMAN", person_id: "dave", identity_assurance: "VERIFIED", direction: "INBOUND", text: "turn2 now verified" },
+        claims,
+      ),
+    );
+    assert.equal(upgraded.deduplicated, false);
+    // A further, routine append must keep succeeding (the thread is not locked).
+    const turn3 = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-3", speaker_id: "dave", speaker_kind: "HUMAN", person_id: "dave", identity_assurance: "VERIFIED", direction: "INBOUND", text: "turn3" },
+        claims,
+      ),
+    );
+    assert.equal(turn3.deduplicated, false);
+    // A private read by the now-verified principal succeeds.
+    const context = await call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, claims));
+    assert.equal(context.thread.threadId, thread.threadId);
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("CRITICAL 2 / DEC-MEMOS-15: a DIFFERENT speaker's assurance upgrade is still refused without assertParticipants", async () => {
+  const { dbPath, cleanup } = tempDbPath("dec-memos-15-foreign");
+  const call = spawnRuntime(dbPath);
+  try {
+    const groupClaims = { ...ROOM, externalRoomRef: "group-dec-memos-15", audienceKind: "GROUP", policyRevision: "v1" };
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "GROUP", audience_kind: "GROUP", ...ROOM_REQUEST, external_room_ref: "group-dec-memos-15" }, { ...groupClaims, principalId: "dave" }),
+    );
+    // charlie joins the GROUP thread under HIS OWN grant -- a legitimate
+    // first membership, bound to himself.
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "charlie-1", speaker_id: "charlie", speaker_kind: "HUMAN", identity_assurance: "PENDING", direction: "INBOUND", text: "hi from charlie" },
+        { ...groupClaims, principalId: "charlie" },
+      ),
+    );
+    // dave's grant (a different principal, no assertParticipants) must
+    // never be able to upgrade CHARLIE's assurance.
     await assert.rejects(
       call(
         "msp_thread_message_append",
         signed(
           "msp_thread_message_append",
-          { thread_id: thread.threadId, source_event_id: "in-2", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "trust me now" },
-          claims,
+          { thread_id: thread.threadId, source_event_id: "charlie-2", speaker_id: "charlie", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "charlie upgraded under dave's grant" },
+          { ...groupClaims, principalId: "dave" },
         ),
       ),
       /thread_scope_denied/,
-      "FAIL-CLOSED VIOLATION: a PENDING speaker self-upgraded to VERIFIED with no assertParticipants claim",
+      "FAIL-CLOSED VIOLATION: a different speaker's assurance upgrade was accepted with no assertParticipants claim",
     );
   } finally {
     await call.close();
@@ -245,8 +303,8 @@ test("W6: tenant A's grant can never resolve, append to, or sweep tenant B's thr
   const { dbPath, cleanup } = tempDbPath("w6");
   const call = spawnRuntime(dbPath);
   try {
-    const claimsA = { channelType: "LINE", channelAccountId: "oa-shared", tenantId: "tenant-a", externalRoomRef: "dm-shared", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1" };
-    const claimsB = { channelType: "LINE", channelAccountId: "oa-shared", tenantId: "tenant-b", externalRoomRef: "dm-shared", audienceKind: "DIRECT", principalId: "carol", policyRevision: "v1" };
+    const claimsA = { channelAccountId: "oa-shared", tenantId: "tenant-a", externalRoomRef: "dm-shared", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1" };
+    const claimsB = { channelAccountId: "oa-shared", tenantId: "tenant-b", externalRoomRef: "dm-shared", audienceKind: "DIRECT", principalId: "carol", policyRevision: "v1" };
     const { thread: threadA } = await call(
       "msp_thread_resolve",
       signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa-shared", external_room_ref: "dm-shared", tenant_id: "tenant-a" }, claimsA),
@@ -345,6 +403,101 @@ test("RKOI item 1: the grant's audienceKind must match the thread's own kind, on
       /thread_audience_mismatch/,
       "FAIL-CLOSED VIOLATION: a grant claiming the wrong audienceKind was accepted against an existing DIRECT thread",
     );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+// RKOI review (docs round 4), item 1: replaces the earlier "skip when
+// audienceKind is absent" rule -- audienceKind is REQUIRED on every thread
+// tool except msp_thread_delivery_record (zuri-ai sends it on the other
+// five). Only msp_thread_delivery_record's grant may omit it.
+test("RKOI review (docs round 4), item 1: a MISSING audienceKind is refused for context/append/memory_record/injection/resolve, but delivery using zuri's exact (audienceKind-less) claims is accepted", async () => {
+  const { dbPath, cleanup } = tempDbPath("audience-required-per-tool");
+  const call = spawnRuntime(dbPath);
+  try {
+    const withAudience = { ...ROOM, externalRoomRef: "dm-audience-required", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1", readPrivate: true, writePrivate: true };
+    const { audienceKind: _drop, ...noAudience } = withAudience;
+
+    await assert.rejects(
+      call(
+        "msp_thread_resolve",
+        signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-audience-required" }, noAudience),
+      ),
+      /thread_audience_mismatch/,
+      "FAIL-CLOSED VIOLATION: msp_thread_resolve was accepted with no audienceKind claim",
+    );
+
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-audience-required" }, withAudience),
+    );
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi" },
+        withAudience,
+      ),
+    );
+
+    await assert.rejects(
+      call(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          { thread_id: thread.threadId, source_event_id: "in-2", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi again" },
+          noAudience,
+        ),
+      ),
+      /thread_audience_mismatch/,
+      "FAIL-CLOSED VIOLATION: msp_thread_message_append was accepted with no audienceKind claim",
+    );
+    await assert.rejects(
+      call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, noAudience)),
+      /thread_audience_mismatch/,
+      "FAIL-CLOSED VIOLATION: msp_thread_context was accepted with no audienceKind claim",
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_memory_record",
+        signed(
+          "msp_thread_memory_record",
+          { thread_id: thread.threadId, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", body: { text: "x" }, source_message_refs: [inbound.message.messageId] },
+          noAudience,
+        ),
+      ),
+      /thread_audience_mismatch/,
+      "FAIL-CLOSED VIOLATION: msp_thread_memory_record was accepted with no audienceKind claim",
+    );
+    const context = await call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, withAudience));
+    await assert.rejects(
+      call(
+        "msp_thread_injection_record",
+        signed(
+          "msp_thread_injection_record",
+          { thread_id: thread.threadId, exchange_id: context.recentExchanges[0].exchangeId, injection_id: "inj-no-audience", packet_hash: "a".repeat(64), policy_revision: "p", model_ref: "m", state: "RESOLVED" },
+          noAudience,
+        ),
+      ),
+      /thread_audience_mismatch/,
+      "FAIL-CLOSED VIOLATION: msp_thread_injection_record was accepted with no audienceKind claim",
+    );
+
+    // Delivery, using zuri's EXACT claim set (never an audienceKind claim
+    // at all), must still succeed.
+    const delivery = await call(
+      "msp_thread_delivery_record",
+      signed(
+        "msp_thread_delivery_record",
+        { inbound_message_id: (await call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, withAudience))).recentExchanges[0].messages[0].messageId,
+          source_event_id: `${(await call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, withAudience))).recentExchanges[0].messages[0].messageId}:assistant`,
+          receipt_id: "receipt-no-audience", outcome: "ACCEPTED", text: "reply" },
+        { tenantId: withAudience.tenantId, businessId: withAudience.businessId, channelAccountId: withAudience.channelAccountId, externalRoomRef: withAudience.externalRoomRef, principalId: "zuri-line-agent", policyRevision: "line-delivery-v1", deliveryWriter: true },
+      ),
+    );
+    assert.equal(delivery.deduplicated, false);
   } finally {
     await call.close();
     cleanup();
@@ -488,6 +641,271 @@ test("RKOI item 6: a delivery receipt that arrives before its inbound message is
       ),
     );
     assert.equal(replay.deduplicated, true);
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("RKOI review (2nd round), WARNING 1: an operator grant scoped to a DIFFERENT room can never claim, commit or retry another room's compaction job", async () => {
+  const { dbPath, cleanup } = tempDbPath("room-check-job");
+  // MSP_TEST_CLOCK is deliberately not in the client's env allowlist (W1 /
+  // item 12), so a spawned child never honors a synthetic `now` -- this
+  // test needs a REAL due session, so it uses the smallest real idle
+  // timeout (1 minute) and waits on the real wall clock instead.
+  const call = spawnRuntime(dbPath);
+  try {
+    const claimsA = { ...ROOM, externalRoomRef: "dm-a-room-check", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1", operator: true };
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-a-room-check" }, claimsA),
+    );
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi", idle_timeout_minutes: 1 },
+        claimsA,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 65_000));
+    const sweepA = await call("msp_session_sweep", signed("msp_session_sweep", {}, claimsA));
+    assert.equal(sweepA.jobs.length, 1);
+    const jobId = sweepA.jobs[0].jobId;
+
+    // An operator grant scoped to a DIFFERENT room (dm-b), but the SAME
+    // tenant and channel account, must never be able to claim room A's job
+    // -- channel_account_id equality alone is not enough.
+    const claimsB = { ...ROOM, externalRoomRef: "dm-b-room-check", audienceKind: "DIRECT", principalId: "bob", policyRevision: "v1", operator: true };
+    await assert.rejects(
+      call("msp_session_compaction_claim", signed("msp_session_compaction_claim", { job_id: jobId, worker_id: "worker-b" }, claimsB)),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: an operator grant for a DIFFERENT room claimed another room's compaction job",
+    );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("RKOI review (2nd round), WARNING 1: a grant for one room can never append to or read a DIFFERENT room's thread under the same channel account", async () => {
+  const { dbPath, cleanup } = tempDbPath("room-check-append");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claimsAlice = { ...ROOM, externalRoomRef: "dm-alice-room-check", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1", readPrivate: true };
+    const { thread: threadAlice } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-alice-room-check" }, claimsAlice),
+    );
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: threadAlice.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "alice's private message" },
+        claimsAlice,
+      ),
+    );
+
+    // bob's own grant is scoped to a DIFFERENT room (dm-bob), same channel
+    // account and tenant, but he names ALICE's thread_id directly.
+    const claimsBob = { ...ROOM, externalRoomRef: "dm-bob-room-check", audienceKind: "DIRECT", principalId: "bob", policyRevision: "v1", readPrivate: true };
+    await assert.rejects(
+      call(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          { thread_id: threadAlice.threadId, source_event_id: "bob-1", speaker_id: "bob", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "bob appends as alice" },
+          claimsBob,
+        ),
+      ),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: bob's grant for a different room appended to alice's thread",
+    );
+    await assert.rejects(
+      call("msp_thread_context", signed("msp_thread_context", { thread_id: threadAlice.threadId }, claimsBob)),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: bob's grant for a different room read alice's thread",
+    );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("RKOI review (2nd round), WARNING 2: person_id can never name anyone but the grant principal, even at first membership", async () => {
+  const { dbPath, cleanup } = tempDbPath("person-id-mismatch");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = { ...ROOM, externalRoomRef: "dm-person-id-mismatch", audienceKind: "DIRECT", principalId: "erin", policyRevision: "v1" };
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-person-id-mismatch" }, claims),
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "erin", speaker_kind: "HUMAN", person_id: "bob", identity_assurance: "VERIFIED", direction: "INBOUND", text: "erin claims to be bob" },
+          claims,
+        ),
+      ),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: person_id=bob was minted under principal erin (probe A9c)",
+    );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("RKOI review (2nd round), WARNING 3 (W6 leftover): a caller-supplied message_id/receipt_id/injection_id collision across tenants is a generic conflict, never a raw or tenant-naming error", async () => {
+  const { dbPath, cleanup } = tempDbPath("global-id-collision");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claimsA = { ...ROOM, externalRoomRef: "dm-collision-a", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1", tenantId: "tenant-collision-a" };
+    const claimsB = { ...ROOM, externalRoomRef: "dm-collision-b", audienceKind: "DIRECT", principalId: "carol", policyRevision: "v1", tenantId: "tenant-collision-b" };
+    const { thread: threadA } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-collision-a", tenant_id: "tenant-collision-a" }, claimsA),
+    );
+    const { thread: threadB } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-collision-b", tenant_id: "tenant-collision-b" }, claimsB),
+    );
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: threadA.threadId, message_id: "shared-message-id", source_event_id: "a-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "tenant A's message" },
+        claimsA,
+      ),
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          { thread_id: threadB.threadId, message_id: "shared-message-id", source_event_id: "b-1", speaker_id: "carol", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "tenant B's message" },
+          claimsB,
+        ),
+      ),
+      (error) => {
+        assert.match(error.message, /conflict/i);
+        assert.doesNotMatch(error.message, /tenant-collision-a/);
+        assert.doesNotMatch(error.message, /alice/);
+        return true;
+      },
+      "FAIL-CLOSED VIOLATION: a cross-tenant message_id collision leaked tenant A's identity or was not a typed conflict",
+    );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("RKOI review (3rd round addendum), item 1: a delivery reconciled after its session has already closed still succeeds", async () => {
+  const { dbPath, cleanup } = tempDbPath("reconcile-after-close");
+  // Real wall clock, same reasoning as the WARNING 1 job-scope test above.
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = { ...ROOM, externalRoomRef: "dm-reconcile-after-close", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1", operator: true, deliveryWriter: true };
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-reconcile-after-close" }, claims),
+    );
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi", idle_timeout_minutes: 1 },
+        claims,
+      ),
+    );
+    // Two independent real-clock waits gate this: the 1-minute idle
+    // deadline (for sweep to find the session due) AND ThreadMemoryStore's
+    // own fixed 120-second reply-receipt grace (claimCompaction refuses to
+    // lease a session with an unanswered inbound message any sooner) --
+    // both measured from the same message, so one wait past the larger of
+    // the two covers both.
+    await new Promise((resolve) => setTimeout(resolve, 130_000));
+    const sweep = await call("msp_session_sweep", signed("msp_session_sweep", {}, claims));
+    assert.equal(sweep.jobs.length, 1);
+    const claim = await call("msp_session_compaction_claim", signed("msp_session_compaction_claim", { job_id: sweep.jobs[0].jobId, worker_id: "worker" }, claims));
+    const committed = await call(
+      "msp_session_compaction_commit",
+      signed(
+        "msp_session_compaction_commit",
+        {
+          session_id: inbound.session.sessionId, job_id: claim.jobId, source_start_sequence: claim.sourceStartSequence,
+          source_end_sequence: claim.sourceEndSequence, source_digest: claim.sourceDigest, lease_token: claim.leaseToken,
+          invocation_state: "TERMINAL", policy_revision: "v1", summarizer_version: "test",
+          summary: { topics: [], decisions: [], openQuestions: [], pendingActions: [], corrections: [], outcomes: [], participants: [] },
+        },
+        claims,
+      ),
+    );
+    assert.ok(committed.summary.summaryId);
+    // The session is now CLOSED. A late delivery receipt for its inbound
+    // message must still be accepted and reconciled, not refused.
+    const delivery = await call(
+      "msp_thread_delivery_record",
+      signed(
+        "msp_thread_delivery_record",
+        { inbound_message_id: inbound.message.messageId, source_event_id: `${inbound.message.messageId}:assistant`, receipt_id: "late-receipt", outcome: "ACCEPTED", text: "late reply" },
+        claims,
+      ),
+    );
+    assert.equal(delivery.deduplicated, false);
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("RKOI review (docs round 4), item 3: a self-upgrade is refused when the STORED participant row is already linked to a different person", async () => {
+  const { dbPath, cleanup } = tempDbPath("dec-memos-15-stored-person");
+  const call = spawnRuntime(dbPath);
+  try {
+    const groupClaims = { ...ROOM, externalRoomRef: "group-stored-person", audienceKind: "GROUP", policyRevision: "v1" };
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "GROUP", audience_kind: "GROUP", ...ROOM_REQUEST, external_room_ref: "group-stored-person" }, { ...groupClaims, principalId: "dave" }),
+    );
+    // dave joins first, self-bound, no person_id.
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "dave-1", speaker_id: "dave", speaker_kind: "HUMAN", identity_assurance: "PENDING", direction: "INBOUND", text: "hi from dave" },
+        { ...groupClaims, principalId: "dave" },
+      ),
+    );
+    // An administrative grant (a different principal, with assertParticipants)
+    // legitimately re-links dave's STORED row to ITS OWN principal id.
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "dave-relink", speaker_id: "dave", speaker_kind: "HUMAN", person_id: "admin-x", identity_assurance: "PENDING", direction: "INBOUND", text: "administratively relinked" },
+        { ...groupClaims, principalId: "admin-x", assertParticipants: true },
+      ),
+    );
+    // dave's OWN grant, no assertParticipants, now attempts its normal
+    // self-upgrade (PENDING -> VERIFIED, no person_id sent) -- this must be
+    // refused, because the STORED person_id ("admin-x") is not {null, dave}.
+    await assert.rejects(
+      call(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          { thread_id: thread.threadId, source_event_id: "dave-upgrade", speaker_id: "dave", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "dave tries to self-upgrade" },
+          { ...groupClaims, principalId: "dave" },
+        ),
+      ),
+      /thread_scope_denied/,
+      "FAIL-CLOSED VIOLATION: a self-upgrade was accepted even though the stored participant row was linked to a different person",
+    );
   } finally {
     await call.close();
     cleanup();
