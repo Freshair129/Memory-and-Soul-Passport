@@ -1,5 +1,5 @@
 ---
-version: "0.1.9b"
+version: "0.1.10b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
 last_update: "2026-09-15T09:00:00+07:00,ATHER"
 status: "proposed"
@@ -18,7 +18,7 @@ Proposed. Nothing here is merged and no code changes. This ADR records ten
 reconciliation decisions between two pieces of prior work that did not know
 about each other, adopts RKOI's recommended default for each, and specifies
 the multi-user/multi-agent model neither piece of prior work fully covered.
-**The owner confirmed decisions 1–16 (DEC-MEMOS-01..16) on 2026-09-14** (see the
+**The owner confirmed decisions 1–21 (DEC-MEMOS-01..21) on 2026-09-14** (see the
 checklist below). RKOI's four rulings on the judgement calls are still pending
 owner confirmation. This ADR authorizes design work, not a merge.
 
@@ -259,7 +259,7 @@ and marks every one of them explicitly overturnable.
 
 ## Decision
 
-### The sixteen decisions
+### The twenty-one decisions
 
 Each began as an adopted default. **The owner confirmed all sixteen on
 2026-09-14.**
@@ -394,9 +394,8 @@ Each began as an adopted default. **The owner confirmed all sixteen on
 
 **Decisions 1 through 16 above were confirmed by the owner on
 2026-09-14** ("ยืนยัน"), recorded on this branch at commit `214a7d2`.
-Decisions 17 and 18 immediately below are new (v0.1.7b, PH-MEMOS-3
-stage-2 scoping) and remain adopted defaults pending owner confirmation
-— confirming 1–16 does not pre-confirm a decision made after that date.
+Decisions 17–21 below were added during stage-2 scoping (v0.1.7b–v0.1.9b).
+**DEC-MEMOS-17..21 were confirmed by the owner on 2026-09-14** in a separate, later answer ("ยืนยัน DEC 17-21").
 
 17. **DEC-MEMOS-17, no zuri-ai compatibility flag for stage 2.** Stage
     2's grant additions (`agentId`/`workspaceId` required on all ten
@@ -413,8 +412,7 @@ stage-2 scoping) and remain adopted defaults pending owner confirmation
     grant error (`grant_signature_invalid`, extending the existing
     required-claim check rather than a new code), and zuri-ai's port
     wrapped with the stage-2 fields added, proving the shapes line up
-    once `BL-MEMOS-107` lands. — *adopted default, pending owner
-    confirmation.*
+    once `BL-MEMOS-107` lands. — *confirmed by the owner, 2026-09-14.*
 18. **DEC-MEMOS-18, revised (RKOI stage-2 review round 1, commit
     `f74ad0d`) — the worker acts under its own `agentId`; it never
     impersonates the serving agent.** Two shapes were considered for
@@ -455,8 +453,7 @@ stage-2 scoping) and remain adopted defaults pending owner confirmation
     build**: Tier 1 stops issuing that agent's grants, or the tenant's
     service key (or keyring entry, design §6.1.1) is rotated, which
     invalidates every grant signed under the old key regardless of
-    which agent it names. — *adopted default, pending owner
-    confirmation.*
+    which agent it names. — *confirmed by the owner, 2026-09-14.*
 19. **DEC-MEMOS-19, the default record `visibility` is `THREAD`.**
     Promoted from unnumbered design prose (RKOI stage-2 review round 1,
     warning 7) — a recorded fact is shared with every other current
@@ -464,7 +461,7 @@ stage-2 scoping) and remain adopted defaults pending owner confirmation
     for `AGENT`-only visibility. Keeps stage-1's existing single-
     visibility behaviour intact for the common single-agent-per-thread
     case, and matches what every legacy stage-1 row backfills to
-    (design §9.4). — *adopted default, pending owner confirmation.*
+    (design §9.4). — *confirmed by the owner, 2026-09-14.*
 20. **DEC-MEMOS-20, nonce rules.** Promoted from unnumbered design prose
     (RKOI stage-2 review round 1, warning 7): a signed nonce carries at
     least 128 random bits and at most 128 characters on the wire; the
@@ -474,7 +471,7 @@ stage-2 scoping) and remain adopted defaults pending owner confirmation
     tick (design §6.1.1, §12.2). The random-bit floor is a signer-side
     requirement stated directly against `BL-MEMOS-107` so agents sharing
     one tenant cannot collide into a spurious `grant_replayed` refusal.
-    — *adopted default, pending owner confirmation.*
+    — *confirmed by the owner, 2026-09-14.*
 21. **DEC-MEMOS-21, `agentId`/`workspaceId` bound.** Promoted from
     unnumbered design prose (RKOI stage-2 review round 2, finding 8):
     both claims are non-empty strings bounded at 128 characters, with no
@@ -482,8 +479,7 @@ stage-2 scoping) and remain adopted defaults pending owner confirmation
     registry of its own, mirroring `principalId`'s existing treatment as
     an opaque Tier-1-owned string MSP never validates against a
     directory; the bound exists only to cap storage and `payloadHash`
-    cost (design §6.1.1). — *adopted default, pending owner
-    confirmation.*
+    cost (design §6.1.1). — *confirmed by the owner, 2026-09-14.*
 
 ### The multi-user model
 
@@ -696,7 +692,7 @@ instruction that every cross-repo change be listed in both places:
 
 ## Owner confirmation checklist
 
-Items 1–16 were confirmed by the owner on 2026-09-14. Item 7's migration
+Items 1–16 were confirmed by the owner on 2026-09-14, and items 17–21 later the same day. Item 7's migration
 numbering is read as corrected by DEC-MEMOS-14: later migrations are
 numbered in merge order. RKOI rulings 1–4 are still open.
 
@@ -716,11 +712,11 @@ numbered in merge order. RKOI rulings 1–4 are still open.
 - [x] 14. Agent fields and `grant_nonces` ship in stage 2, not `0008`; migration numbers are assigned in merge order (DEC-MEMOS-14).
 - [x] 15. A PENDING→VERIFIED self-upgrade on a later append needs no `assertParticipants` when the stated conditions hold on both the incoming request and the stored row, closing the old row and inserting a new one in one transaction; VERIFIED→PENDING is silently ignored, and MSP's own state does not implement revocation as a result (DEC-MEMOS-15).
 - [x] 16. A `channel_type` mismatch against an existing ACTIVE thread's stored value is refused `conflict`, never a silent cross-channel hit, so a second channel type can never get its own thread for the same account and room ref; the room hash stays three segments (DEC-MEMOS-16).
-- [ ] 17. Stage 2 has no zuri-ai compatibility flag; zuri-ai's current grant fails closed the moment stage-2 verification ships, since activation is already gated behind BL-MEMOS-090 (DEC-MEMOS-17).
-- [ ] 18. The worker attaches via `assertAgents`, never mints from a worker-only grant (`not_found` if the room has no thread), and requires agent-currency on the job's thread for `claim`/`commit`/`retry`; `sweep` alone is exempt from "current" but still requires `agentId`/`workspaceId` present; "departed agent denied" is a per-call property, not a revocation control (DEC-MEMOS-18).
-- [ ] 19. The default protected-record `visibility` is `THREAD` (DEC-MEMOS-19).
-- [ ] 20. A nonce carries ≥128 random bits and ≤128 characters, keyed `(tenant_id, nonce)`, pruned in bounded batches of 200 on insert (DEC-MEMOS-20).
-- [ ] 21. `agentId`/`workspaceId` are non-empty strings bounded at 128 characters, with no further charset constraint (DEC-MEMOS-21).
+- [x] 17. Stage 2 has no zuri-ai compatibility flag; zuri-ai's current grant fails closed the moment stage-2 verification ships, since activation is already gated behind BL-MEMOS-090 (DEC-MEMOS-17).
+- [x] 18. The worker attaches via `assertAgents`, never mints from a worker-only grant (`not_found` if the room has no thread), and requires agent-currency on the job's thread for `claim`/`commit`/`retry`; `sweep` alone is exempt from "current" but still requires `agentId`/`workspaceId` present; "departed agent denied" is a per-call property, not a revocation control (DEC-MEMOS-18).
+- [x] 19. The default protected-record `visibility` is `THREAD` (DEC-MEMOS-19).
+- [x] 20. A nonce carries ≥128 random bits and ≤128 characters, keyed `(tenant_id, nonce)`, pruned in bounded batches of 200 on insert (DEC-MEMOS-20).
+- [x] 21. `agentId`/`workspaceId` are non-empty strings bounded at 128 characters, with no further charset constraint (DEC-MEMOS-21).
 - [ ] RKOI ruling 1: grant capability growth is additive-only; new required/nested/re-encoded fields are cross-repo.
 - [ ] RKOI ruling 2: per-tenant keyring, with the stated selection/fallback/rotation/defense-in-depth conditions.
 - [ ] RKOI ruling 3: nonce required on every mutating tool except append, with the stated transaction/conflict/pruning conditions, and the named stage-1 gap.
@@ -744,6 +740,7 @@ mapping table (§3.1).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.10b | 2026-09-14 | proposed | Records the owner's confirmation of DEC-MEMOS-17..21 (2026-09-14): decision markers, the decisions heading and status line, and checklist items 17–21. RKOI rulings 1–4 stay pending. | working-tree | COORD |
 | 0.1.9b | 2026-09-15 | proposed | **Folds RKOI's stage-2 review round 2 warnings after APPROVAL at commit `72e593f` (0 critical).** **Supersession unified**: round 1's own `thread_scope_denied` fix for the cross-agent case was itself a third oracle value; owner-direction ruling collapses unknown id / cross-agent `AGENT`-visibility / stage-1 ownership-status failure (previously `conflict`) into one identical `validation_failed` answer with a single fixed message. Added **`DEC-MEMOS-21`** (`agentId`/`workspaceId` bounded at 128 characters, no further charset constraint), promoted from unnumbered design prose. Extended the checklist with item 21 and reworded item 18's wording is unchanged from 0.1.8b (no further correction needed there this round). Every other round-2 finding (pending delivery's now-immutable stored agent; the drain re-check's corrected target thread; both delivery paths' real `speaker_id`; the nonce recorded on every resolve outcome; two wording corrections; `msp_session_sweep`'s new response fields; the `GATE-MEMOS-2`/`3` cross-zuri flip) is design/plan-level only, with no further ADR decision attached. Pointed every design-version reference at v0.4.2b. | working-tree | ATHER |
 | 0.1.8b | 2026-09-15 | proposed | **Answers RKOI's stage-2 review round 1 on commit `f74ad0d` (NEEDS REVISION, 2 critical).** §12.2's schema itself passed unchanged. **`DEC-MEMOS-18` revised**: the worker attaches via `assertAgents` (never mints from a worker-only grant — `not_found` if the room has no thread) rather than being exempt from the agent gate; withdrew the wrong claim that "ending a `thread_agents` row" is revocation — detach is self-only and reversible, real revocation is Tier 1 withholding grants or a key rotation; stated plainly that the decision widens nothing (a compromised worker key already broke the whole tenant, `RSK-MEMOS-05`). Added **`DEC-MEMOS-19`** (default record `visibility` is `THREAD`) and **`DEC-MEMOS-20`** (nonce: ≥128 random bits, ≤128 chars, `(tenant_id, nonce)` key, 200-row bounded prune), both promoted from unnumbered design prose. Extended the cross-repo change list with the 128-random-bit nonce requirement on its own item and a new item: zuri-ai's outbound append's `agentId` must match the `speakerId: 'zuri-line-agent'` it already sends. Extended the owner confirmation checklist with items 19–20 and reworded item 18. Pointed every design-version reference at v0.4.1b, which carries both criticals' actual fixes (delivery's pending-path agent gate; dedup/supersession's `agent_id`/`visibility` inclusion) — this ADR records only the decision-level changes, per its own "what this ADR does not decide" boundary. | working-tree | ATHER |
 | 0.1.7b | 2026-09-15 | proposed | **PH-MEMOS-3 stage-2 (multi-agent) spec** (owner direction 2026-09-14: proceed with the next planned work). Added **`DEC-MEMOS-17`** (no zuri-ai compatibility flag for stage 2 — the current grant fails closed once stage-2 verification ships, since activation is already gated behind `BL-MEMOS-090`) and **`DEC-MEMOS-18`** (the worker signs as the thread's own agent for `claim`/`commit`/`retry`, requiring agent-currency on the job's thread; `sweep` alone is exempt from "current" but still requires `agentId`/`workspaceId` present — rejecting a dedicated gate-exempt worker role as a duplicate mechanism), both adopted defaults pending owner confirmation. Extended the owner confirmation checklist with items 17–18 and the cross-repo change list with `DEC-MEMOS-17`'s note directly on the `agentId`/`workspaceId`/`nonce` items it qualifies. Pointed every design-version reference at v0.4.0b, which carries the actual grant/DDL/tool-surface/error-code specification for stage 2 (§6.1.1, §8, §9.4, §12.2, §13, §14, §15) — this ADR records only the two new owner-facing decisions, per its own "what this ADR does not decide" boundary. Every citation of `DEC-MEMOS-01..16` in this revision's new text reflects the owner's 2026-09-14 confirmation ("ยืนยัน", commit `214a7d2`), not pending status. | working-tree | ATHER |

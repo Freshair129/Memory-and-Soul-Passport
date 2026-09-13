@@ -1,5 +1,5 @@
 ---
-version: "0.4.3b"
+version: "0.4.4b"
 created_at: "2026-09-13T21:00:00+07:00,Claude Fable 5.1,working-tree"
 last_update: "2026-09-15T09:00:00+07:00,ATHER"
 status: "proposed"
@@ -61,12 +61,12 @@ store เอง (เพราะ handler เป็น async), ถอนคำอ
 `msp_thread_message_append`) พร้อม error code ใหม่สองตัว
 `grant_nonce_required`/`grant_replayed`; ตาราง `thread_agents` (โครงสร้าง
 เดียวกับ `thread_participants`) กำหนดว่า agent ไหน "current" บน thread
-ไหน; **`DEC-MEMOS-18` (ใหม่)**: worker เซ็นชื่อในฐานะ agent ของ thread
-นั้นเอง ไม่ใช่ role พิเศษที่ยกเว้นการเช็ค; `protected_memory_records`
+ไหน; **`DEC-MEMOS-18`**: worker ใช้ `agentId` ของตัวเอง เข้าร่วม thread ผ่าน
+`assertAgents` และ resolve จาก grant ของ worker สร้าง thread ใหม่ไม่ได้; `protected_memory_records`
 เพิ่มคอลัมน์ `agent_id`/`visibility` (`AGENT`/`THREAD`) ผ่าน `ALTER TABLE`
 เท่านั้น ไม่ rebuild ตาราง; **`DEC-MEMOS-18`** และ **`DEC-MEMOS-17`**
 (stage 2 ไม่มี compatibility flag ให้ zuri-ai เพราะ activation ถูกกัน
-ด้วย `BL-MEMOS-090` อยู่แล้ว) เป็น adopted default ที่รอเจ้าของยืนยัน
+ด้วย `BL-MEMOS-090` อยู่แล้ว) เจ้าของยืนยัน `DEC-MEMOS-17..21` แล้วเมื่อ 2026-09-14
 ส่วน `DEC-MEMOS-01..16` เจ้าของยืนยันแล้วเมื่อ 2026-09-14 ("ยืนยัน") บันทึก
 ไว้ที่ commit `214a7d2` บนสาขาเดิม
 
@@ -573,7 +573,7 @@ codes where they fit"):**
   apart from "you're not this thread's *current agent*," since the fix
   differs (attach via `assertAgents`, vs. a scope problem entirely).
 
-**`DEC-MEMOS-21`, new adopted default, pending owner confirmation
+**`DEC-MEMOS-21`, confirmed by the owner, 2026-09-14
 (promoted from unnumbered prose, RKOI stage-2 review round 2, finding
 8): `agentId`/`workspaceId` length and charset are unconstrained beyond
 a 128-character bound and non-emptiness** — MSP has no agent/workspace
@@ -977,8 +977,8 @@ about which agent is calling changes that response or gates anything else.
 implement `BL-MEMOS-040..046`, `048` and `049` against, and for RKOI to
 review, without needing a second pass to fill in gaps.** Every citation of
 `DEC-MEMOS-01..16` below refers to decisions the owner confirmed on
-2026-09-14; `DEC-MEMOS-17` and `DEC-MEMOS-18` (this section, §19) are new
-and remain adopted defaults pending owner confirmation.
+2026-09-14, and `DEC-MEMOS-17`..`21` (this section, §6.1.1, §9.4, §12.2, §19)
+were confirmed by the owner later the same day.
 
 ### 8.1 `thread_agents` — attachment, in one sentence
 
@@ -1133,7 +1133,7 @@ still current.
   Both paths write a real, attributable agent id; neither ever writes a
   fixed string.
 
-### 8.3 Worker identity — `DEC-MEMOS-18`, revised (RKOI stage-2 review round 1), adopted default pending owner confirmation
+### 8.3 Worker identity — `DEC-MEMOS-18`, revised (RKOI stage-2 review round 1), confirmed by the owner 2026-09-14
 
 **Revised: the worker acts under its own `agentId`. It never
 impersonates the serving agent.** Two reasonable shapes exist; this
@@ -1494,8 +1494,7 @@ constraint, or a foreign key with retroactive-validation concerns):
   restrictions directly (the column has no `PRIMARY KEY`/`UNIQUE`
   constraint, and its own default, `'THREAD'`, trivially satisfies its
   own `CHECK`), so this is a single, ordinary statement in the stage-2
-  migration, not a rebuild. **`DEC-MEMOS-19`, adopted default, pending
-  owner confirmation: `THREAD` is the default visibility**, not `AGENT` —
+  migration, not a rebuild. **`DEC-MEMOS-19`, confirmed by the owner 2026-09-14: `THREAD` is the default visibility**, not `AGENT` —
   a recorded fact is shared with every other current agent serving the
   same thread unless the recording agent explicitly opts into `AGENT`
   (a new optional `visibility` request field on `msp_thread_memory_record`,
@@ -2370,7 +2369,7 @@ naming convention rather than inlining a fifth ad hoc query.
   nonce-consuming call to a constant 200-row scan of the expiry index,
   regardless of how large `grant_nonces` has grown.
 
-**`DEC-MEMOS-20`, new adopted default, pending owner confirmation —
+**`DEC-MEMOS-20`, confirmed by the owner, 2026-09-14 —
 nonce rules, formalized** (promoted from unnumbered prose, RKOI stage-2
 review round 1, item 7): a signed nonce must carry **at least 128
 random bits** and be **at most 128 characters** on the wire; the
@@ -2613,16 +2612,11 @@ on, describes a confirmed decision, not a pending one. RKOI's rulings on
 ATHER's four prior judgement calls (grant capability growth, per-tenant
 keyring, nonce split, single `thread_kind`) remain separately pending,
 since those are RKOI's own review rulings, not owner decisions, and
-were not part of the 2026-09-14 confirmation. **This round's two new
-items, `DEC-MEMOS-17` and `DEC-MEMOS-18` (§8.3, §19 below), are adopted
-defaults pending owner confirmation, exactly as `01..16` were before
-2026-09-14** — confirming the first sixteen does not pre-confirm any
-decision made after that date.
+were not part of the 2026-09-14 confirmation. **DEC-MEMOS-17..21 were confirmed by the owner on 2026-09-14** in a separate, later answer ("ยืนยัน DEC 17-21"). The rulings and the open questions below are not covered by either confirmation.
 
 New items this round (stage-2 scoping, v0.4.0b):
 
-- **`DEC-MEMOS-17`, no zuri-ai compatibility flag for stage 2 — new,
-  adopted default, pending owner confirmation** (§8, ADR, plan
+- **`DEC-MEMOS-17`, no zuri-ai compatibility flag for stage 2 — confirmed by the owner, 2026-09-14** (§8, ADR, plan
   `RSK-MEMOS-01`/`BL-MEMOS-090`): stage 2's `agentId`/`workspaceId`/
   `nonce` requirements (§6.1.1) make zuri-ai's *current* grant shape
   fail closed the moment stage-2 verification ships, with no
@@ -2639,7 +2633,7 @@ New items this round (stage-2 scoping, v0.4.0b):
   adopts `BL-MEMOS-107`.
 - **`DEC-MEMOS-18`, revised (RKOI stage-2 review round 1) — the worker
   acts under its own `agentId`; it never impersonates the serving
-  agent — new, adopted default, pending owner confirmation** (§8.3):
+  agent — confirmed by the owner, 2026-09-14** (§8.3):
   the worker attaches through `msp_thread_resolve` with `assertAgents:
   true`, using its own grant's room claims — the same self-assert path
   every other agent uses, not a special worker-only one. A worker-only
@@ -2662,14 +2656,12 @@ New items this round (stage-2 scoping, v0.4.0b):
   agent out permanently. Real revocation means Tier 1 stops issuing that
   agent's grants, or the tenant's service key (or keyring entry) is
   rotated — neither of which this design builds.
-- **`DEC-MEMOS-19`, the default record `visibility` is `THREAD` — new,
-  adopted default, pending owner confirmation** (§9.4, promoted from
+- **`DEC-MEMOS-19`, the default record `visibility` is `THREAD` — confirmed by the owner, 2026-09-14** (§9.4, promoted from
   unnumbered prose, RKOI stage-2 review round 1, item 7): keeps stage-1's
   existing single-visibility behaviour intact for the common
   single-agent-per-thread case, and matches what every legacy stage-1
   row backfills to.
-- **`DEC-MEMOS-20`, nonce rules — new, adopted default, pending owner
-  confirmation** (§6.1.1, §12.2, promoted from unnumbered prose, RKOI
+- **`DEC-MEMOS-20`, nonce rules — confirmed by the owner, 2026-09-14** (§6.1.1, §12.2, promoted from unnumbered prose, RKOI
   stage-2 review round 1, item 7): a signed nonce carries at least 128
   random bits and at most 128 characters on the wire; the anti-replay
   key is `(tenant_id, nonce)`, not global; the opportunistic prune batch
@@ -2677,8 +2669,7 @@ New items this round (stage-2 scoping, v0.4.0b):
   dependent on a separate retention tick. The ≥ 128-random-bit floor is
   what keeps agents sharing one tenant from colliding into a spurious
   `grant_replayed` refusal by generating short or low-entropy nonces.
-- **`DEC-MEMOS-21`, `agentId`/`workspaceId` bound — new, adopted
-  default, pending owner confirmation** (§6.1.1, promoted from
+- **`DEC-MEMOS-21`, `agentId`/`workspaceId` bound — confirmed by the owner, 2026-09-14** (§6.1.1, promoted from
   unnumbered prose, RKOI stage-2 review round 2, finding 8): both claims
   are non-empty strings bounded at 128 characters, with no further
   charset constraint — MSP has no agent/workspace identity registry of
@@ -2727,6 +2718,7 @@ have been fixed. Nothing past stage 1 is implemented.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.4.4b | 2026-09-14 | proposed | Records the owner's confirmation of DEC-MEMOS-17..21 (2026-09-14) in §6.1.1, §8, §8.3, §9.4, §12.2, §19 and the Thai summary, whose stale DEC-18 description is also corrected. | working-tree | COORD |
 | 0.4.3b | 2026-09-14 | proposed | Closure-check follow-ups from RKOI (APPROVED at `0f3f15a`): §14's `conflict` caveat now records RKOI's re-verification at zuri-ai `origin/main` `3994f934`, and the race-time supersession `conflict` joins the single `validation_failed` answer; §9.4 states that `AGENT` record ownership is by `agent_id` alone across workspaces. | working-tree | COORD |
 | 0.4.2b | 2026-09-15 | proposed | **Folds RKOI's stage-2 review round 2 warnings after APPROVAL at commit `72e593f` (0 critical).** **Finding 1, supersession unified**: round 1's own `thread_scope_denied` fix for the cross-agent case was itself a third, distinguishable oracle value alongside stage-1's existing `validation_failed` (unknown id) and `conflict` (not-yours); owner-direction ruling collapses all three into one identical `validation_failed` with the fixed message "supersedes_record_id does not name a record this caller can supersede," checked existence-and-cross-agent-`AGENT`-visibility first, then the pre-existing ownership/status check; scoped to `AGENT`-visibility records only — `THREAD` and legacy `NULL`-agent records stay supersedable under stage-1 rules alone (§9.4, §13, §14, §15). Verified against the local `zuri-ai` checkout (not `origin/main` — no git access) that no caller sends `supersedes_record_id` and the test stub never branches on the response code. **Finding 2**: `trg_thread_pending_deliveries_update_guard` is now also dropped and recreated to pin `agent_id`/`workspace_id`, correcting the migration comment that wrongly called the records guard the only drop+recreate (§9.2, §12.2); a reconcile `UPDATE` that rewrites the stored agent is now refused (§15). **Finding 3**: stated precisely that neither delivery path ever writes a fixed `speakerId` — the resolved path's internal append uses `grant.agentId`, the drain path's uses the stored `agent_id` (§8.2, §9.2, §13, §15). **Finding 4**: the drain-time re-check targets the inbound message's own thread, not a freshly re-derived room `ACTIVE` thread; a legacy `NULL`-agent pending row fails closed, never drained, via the same `agent_not_current`/`reconcile_skipped` journal shape (§8.2, §13, §15). **Finding 5**: `resolve`'s nonce is consumed on every outcome — mint, `assertAgents` attach, and no-op — not only the mint path (§6.1.1). **Finding 6**: withdrew the wrong "no per-condition message variety" claim about the keyring — the code gives a distinct per-rule message, it just never names an id or key (§6.1.1); ruled that `msp_session_sweep`'s per-job metadata gains `thread_kind`/`channel_type` so the worker can construct its own resolve call, with `audienceKind` sourced from the worker's own Tier-1 room configuration (§8.3, §13). **Finding 7**: `GATE-MEMOS-2` (plan) now states the `test:cross-zuri` pre-/post-`BL-MEMOS-107` flip explicitly, matching `GATE-MEMOS-3`. **Finding 8**: promoted `agentId`/`workspaceId`'s 128-character bound to **`DEC-MEMOS-21`**, a new adopted default pending owner confirmation (§6.1.1, §19). No id renumbered or reused. | working-tree | ATHER |
 | 0.4.1b | 2026-09-15 | proposed | **Answers RKOI's stage-2 review round 1 on commit `f74ad0d` (NEEDS REVISION, 2 critical).** §12.2's schema itself passed — applies fresh/populated, no table rebuilt, every `0008` trigger kept. **CRITICAL 1**: the delivery pending path stored no agent, so `#drainDeliveries` could mint an `OUTBOUND` `AGENT` message under a hard-coded `speakerId: 'zuri-line-agent'` (`thread-memory.mjs:1131`) for any delivery-writer of the room. Fixed (§8.2, §12.2): `thread_pending_deliveries` gains `agent_id`/`workspace_id`; the pending path requires the agent be current on the room's `ACTIVE` thread (new `ThreadRegistry#findThreadByRoom`), `not_found` if none exists; drain re-checks the stored agent and leaves a non-current agent's row unreconciled — the already-shipped `msp_thread_message_append.reconcile_skipped` journal entry (`RSK-MEMOS-09`) records `error_code: 'agent_not_current'`, no new journal shape — rather than minting under a fixed label; the drained message's `speaker_id` is the stored agent id. **CRITICAL 2**: `record_id`'s dedup hash excluded `agent_id`/`visibility` (`thread-memory.mjs:795`), so agent B recording identical content got back agent A's `AGENT`-visibility row; supersession checked only `asserted_by_speaker_id` (`:833`), so B could supersede A's record. Fixed (§9.4): both columns join the hash; cross-agent supersession is refused `thread_scope_denied`, indistinguishable from an unknown id (no oracle); §13 drops "idempotent by construction" for an unqualified claim. **Keyring rewritten to match the code, RKOI-approved at `fd8095f`** (warning 1): JSON object only, no file-path form; malformed configuration refuses to start with new code `thread_keyring_config_invalid` (§14), parsed before the database opens, naming only the failing entry's 1-based position and never an id, a key or a `cause`; duplicate (including escaped-equivalent) tenant ids, a tenant id differing from its own trimmed form (including non-ASCII whitespace and an escaped tab), an empty `{}`, and whitespace-only, padded, or sub-32-char keys all refused at start; empty env value treated as unset; the keyring map has no prototype (`Object.create(null)`) with own-property-only lookup — **RKOI's final ruling: `__proto__`/`constructor`/`toString` and similar are accepted and honoured as ordinary tenant ids, not refused**, superseding this revision's own earlier "refuse prototype-chain keys" draft, because refusing them only in keyring mode would reject tenants single-key mode already serves; tests cited: `tests/security/thread-service-keyring.security.mjs` (9 cases) plus `tests/contract/thread-service-keyring.test.mjs`, out of `thread-agent-scoping.security.mjs`; new `RSK-MEMOS-11` (keyring-membership visible from `grant_unconfigured` vs `grant_signature_invalid`, accepted — stdio trust boundary); new open owner question for §19, not a decision: whether to restrict tenant ids to a safe character set in both modes, default no restriction. **Nonce transaction corrected** (warning 2): the guard's handlers are `async` and better-sqlite3 refuses an async transaction, so the nonce insert moves into each store method's own synchronous transaction alongside its mutation; delivery's pending insert (previously unwrapped) is now transactional too; pruning always uses the server clock, never `MSP_TEST_CLOCK`. **Revocation wording withdrawn** (warning 3): "ending a `thread_agents` row" is not revocation — detach is self-only and reversible via `assertAgents`; real revocation is Tier 1 withholding grants or a key rotation (§8.3, §19, ADR decision 18). **`DEC-MEMOS-18` revised** (warning 4): the worker attaches via `assertAgents`, never mints from a worker-only grant (`not_found` if the room has no thread), and widens nothing (a compromised worker key already broke the whole tenant, `RSK-MEMOS-05`). **`requesterAgentId` absent now sees `THREAD` records only** (warning 5), correcting a vacuous-pass bug that would have shown every `AGENT` record. **`DEC-MEMOS-17` cross-test wording tightened, and its cross-repo item added directly** (warning 6): the wrapped-port case is labelled "proves MSP accepts the shape" only; `GATE-MEMOS-2`/`3` name the pre-/post-`BL-MEMOS-107` flip explicitly; a missing cross-repo item added (zuri-ai's `speakerId: 'zuri-line-agent'` outbound append needs a matching `agentId` under §8.2's AGENT-speaker rule). **§19 self-contradiction fixed** (warning 7): removed the leftover "confirm the nonce gap/DEC-15/DEC-16" asks now that `01..16` are confirmed; promoted **`DEC-MEMOS-19`** (default visibility `THREAD`) and **`DEC-MEMOS-20`** (nonce: ≥128 random bits, ≤128 chars, `(tenant_id, nonce)` key, 200-row bounded prune) from unnumbered prose. **Defense in depth** (item 9): a new `protected_memory_records` trigger refuses `visibility='AGENT'` with a `NULL agent_id`, and refuses an `agent_id` that never attached to the record's thread (a `CHECK` cannot express this — SQLite has no `ADD CONSTRAINT`); the mint-race rule states auto-attach fires only after this call's own thread `INSERT` wins, never merely "no row found before"; new stage-2 response fields named (`msp_thread_resolve`'s `agentAttached`, `msp_thread_memory_record`'s `agentId`/`visibility`). No id renumbered or reused. | working-tree | ATHER |
