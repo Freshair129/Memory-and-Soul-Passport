@@ -266,6 +266,13 @@
             "BL-MEMOS-033"
           ],
           "label": "Stage 1 follow-ups: best-effort delivery reconcile on append, RSK-09 pointer (467d6ba..3d5ea92)"
+        },
+        "5": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1: error code in reconcile_skipped journal entry",
+          "status": "open"
         }
       }
     },
@@ -300,8 +307,7 @@
           "task_ids": [
             "BL-MEMOS-033"
           ],
-          "label": "Stage 1 follow-up confirmation (3d5ea92)",
-          "status": "open"
+          "label": "Stage 1 follow-up confirmation (APPROVED, 3d5ea92)"
         }
       }
     }

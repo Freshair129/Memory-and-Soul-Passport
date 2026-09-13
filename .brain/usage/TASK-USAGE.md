@@ -12,7 +12,7 @@ A segment whose status is `open` was still running when the ledger was generated
 
 | Segments | Requests | Input (total) | input_tokens | Cache write | Cache read | Output |
 |---:|---:|---:|---:|---:|---:|---:|
-| 67 | 2,322 | 994,208,442 | 5,852 | 22,162,731 | 972,039,859 | 2,900,902 |
+| 68 | 2,331 | 997,636,172 | 5,872 | 22,963,179 | 974,667,121 | 2,911,522 |
 
 ## Per task id
 
@@ -26,9 +26,9 @@ A segment whose status is `open` was still running when the ledger was generated
 | BL-MEMOS-006 | 4 | 2026-09-13T18:58:09+07:00 | 2026-09-13T22:12:14+07:00 | 76 | 55,158,394 | 81,424 |
 | BL-MEMOS-010 | 9 | 2026-09-13T18:35:45+07:00 | 2026-09-14T02:03:13+07:00 | 477 | 291,113,536 | 570,654 |
 | BL-MEMOS-011 | 6 | 2026-09-13T23:06:39+07:00 | 2026-09-14T02:03:13+07:00 | 438 | 265,584,104 | 469,791 |
-| BL-MEMOS-012 | 7 | 2026-09-13T23:17:36+07:00 | 2026-09-14T02:50:25+07:00 | 143 | 53,069,270 | 270,489 |
+| BL-MEMOS-012 | 7 | 2026-09-13T23:17:36+07:00 | 2026-09-14T02:56:11+07:00 | 145 | 53,552,564 | 273,648 |
 | BL-MEMOS-020..032 | 1 | 2026-09-13T23:07:39+07:00 | 2026-09-14T00:06:19+07:00 | 278 | 97,571,170 | 314,980 |
-| BL-MEMOS-033 | 8 | 2026-09-14T00:07:42+07:00 | 2026-09-14T02:50:25+07:00 | 673 | 313,205,615 | 567,374 |
+| BL-MEMOS-033 | 9 | 2026-09-14T00:07:42+07:00 | 2026-09-14T02:56:13+07:00 | 682 | 316,633,345 | 577,994 |
 | BL-MEMOS-102 | 2 | 2026-09-14T00:29:57+07:00 | 2026-09-14T02:22:25+07:00 | 437 | 252,069,710 | 295,076 |
 | BL-MEMOS-108 | 1 | 2026-09-14T00:29:57+07:00 | 2026-09-14T01:30:43+07:00 | 274 | 222,020,711 | 188,540 |
 | BL-MEMOS-109 | 1 | 2026-09-14T00:29:57+07:00 | 2026-09-14T01:30:43+07:00 | 274 | 222,020,711 | 188,540 |
@@ -97,7 +97,7 @@ A segment whose status is `open` was still running when the ledger was generated
 | 54 | BL-MEMOS-010, BL-MEMOS-011 | ather `a2d9519` | 3 | Docs revision round 3: frozen wire values, aligned to stage-1 code (design v0.3.2b) | done | 2026-09-14T00:09:11+07:00 | 2026-09-14T00:25:38+07:00 | 16m27s | 55 | 27,082,919 | 110 | 995,101 | 26,087,708 | 89,263 |
 | 55 | BL-MEMOS-012 | rkoi `a7cf259` | 15 | TASK-MEMOS-001 docs review, round 3 (1 critical: delivery grant channelType) | done | 2026-09-14T00:26:23+07:00 | 2026-09-14T00:38:59+07:00 | 12m36s | 20 | 4,513,305 | 42 | 1,079,511 | 3,433,752 | 33,955 |
 | 56 | BL-MEMOS-033, BL-MEMOS-102, BL-MEMOS-108, BL-MEMOS-109, BL-MEMOS-111 | kin `ab508b7` | 2 | Stage 1 revision: delivery/HMAC, DEC-MEMOS-15, room check, per-tool audience, schema integrity (0508b8b..95629e2) | done | 2026-09-14T00:29:57+07:00 | 2026-09-14T01:30:43+07:00 | 1h00m | 274 | 222,020,711 | 548 | 951,265 | 221,068,898 | 188,540 |
-| 57 | BL-MEMOS-033, BL-MEMOS-012 | coordinator | 27 | Triage reviews; dispatch KIN/ATHER; commit docs rounds 4-5 and closure edits; dispatch code re-review | open | 2026-09-14T00:32:27+07:00 | 2026-09-14T02:50:25+07:00 | 2h17m | 55 | 9,524,500 | 132 | 188,823 | 9,335,545 | 61,836 |
+| 57 | BL-MEMOS-033, BL-MEMOS-012 | coordinator | 27 | Triage reviews; dispatch KIN/ATHER; commit docs rounds 4-5 and closure edits; dispatch code re-review | open | 2026-09-14T00:32:27+07:00 | 2026-09-14T02:56:11+07:00 | 2h23m | 57 | 10,007,794 | 138 | 193,693 | 9,813,963 | 64,995 |
 | 58 | BL-MEMOS-010, BL-MEMOS-011 | ather `a2d9519` | 4 | Docs revision round 4: delivery claim set, room hash, DEC-MEMOS-15, schema consistency (design v0.3.3b, commit 1c4a62f) | done | 2026-09-14T00:40:00+07:00 | 2026-09-14T00:56:08+07:00 | 16m08s | 108 | 69,180,350 | 216 | 715,417 | 68,464,717 | 72,989 |
 | 59 | BL-MEMOS-012 | rkoi `a7cf259` | 16 | TASK-MEMOS-001 docs review, round 4 (approved, 9 warnings) | done | 2026-09-14T00:56:51+07:00 | 2026-09-14T01:04:44+07:00 | 7m52s | 14 | 2,600,570 | 30 | 225,723 | 2,374,817 | 34,258 |
 | 60 | BL-MEMOS-010, BL-MEMOS-011 | ather `a2d9519` | 5 | Docs round 5: fold RKOI round-4 warnings (design v0.3.4b, commit 36b6211) | done | 2026-09-14T01:05:32+07:00 | 2026-09-14T01:25:43+07:00 | 20m10s | 118 | 95,899,562 | 236 | 899,981 | 94,999,345 | 92,612 |
@@ -107,4 +107,5 @@ A segment whose status is `open` was still running when the ledger was generated
 | 64 | BL-MEMOS-010, BL-MEMOS-011 | ather `a2d9519` | 6 | Docs round 6: required room claim, DEC-MEMOS-16, room-scoped sweep (design v0.3.5b, commits b822901, c6e2820) | done | 2026-09-14T01:45:25+07:00 | 2026-09-14T02:03:13+07:00 | 17m48s | 104 | 58,680,676 | 208 | 1,070,381 | 57,610,087 | 50,680 |
 | 65 | BL-MEMOS-033 | rkoi `afd6aa2` | 3 | Stage 1 code re-review, round 2 (1 critical: room check skipped without externalRoomRef) | done | 2026-09-14T02:23:54+07:00 | 2026-09-14T02:30:03+07:00 | 6m09s | 17 | 7,309,939 | 34 | 444,730 | 6,865,175 | 22,504 |
 | 66 | BL-MEMOS-033 | kin `ab508b7` | 4 | Stage 1 follow-ups: best-effort delivery reconcile on append, RSK-09 pointer (467d6ba..3d5ea92) | done | 2026-09-14T02:30:28+07:00 | 2026-09-14T02:49:51+07:00 | 19m23s | 68 | 20,848,385 | 136 | 333,507 | 20,514,742 | 35,457 |
-| 67 | BL-MEMOS-033 | rkoi `afd6aa2` | 4 | Stage 1 code re-review, round 3 (APPROVED, 0 critical) | done | 2026-09-14T02:50:21+07:00 | 2026-09-14T02:50:21+07:00 | 0m00s | 0 | 0 | 0 | 0 | 0 | 0 |
+| 67 | BL-MEMOS-033 | rkoi `afd6aa2` | 4 | Stage 1 code re-review, round 3 (APPROVED, 0 critical) | done | 2026-09-14T02:50:21+07:00 | 2026-09-14T02:55:44+07:00 | 5m23s | 5 | 2,273,511 | 10 | 459,897 | 1,813,604 | 7,234 |
+| 68 | BL-MEMOS-033 | kin `ab508b7` | 5 | Stage 1: error code in reconcile_skipped journal entry | open | 2026-09-14T02:56:01+07:00 | 2026-09-14T02:56:13+07:00 | 0m12s | 2 | 670,925 | 4 | 335,681 | 335,240 | 227 |
