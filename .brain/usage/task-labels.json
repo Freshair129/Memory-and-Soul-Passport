@@ -105,6 +105,13 @@
             "BL-MEMOS-012"
           ],
           "label": "TASK-MEMOS-001 docs closure check (7/9 closed; line edits applied by coordinator in 445bd90)"
+        },
+        "18": {
+          "task_ids": [
+            "BL-MEMOS-040..049"
+          ],
+          "label": "Stage 2 spec review, round 1 (f74ad0d)",
+          "status": "open"
         }
       }
     },
@@ -243,8 +250,7 @@
             "BL-MEMOS-048",
             "BL-MEMOS-049"
           ],
-          "label": "Stage 2 multi-agent spec (design v0.4.0b)",
-          "status": "open"
+          "label": "Stage 2 multi-agent spec (design v0.4.0b, f74ad0d)"
         }
       }
     },
