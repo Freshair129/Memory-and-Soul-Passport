@@ -92,6 +92,25 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
             "thread_kind, audience_kind and the grant's audienceKind must all agree on msp_thread_resolve.",
           );
         }
+        // PH-MEMOS-3 stage 2 (BL-MEMOS-041, §8.1/§8.3): the guard decides
+        // whether this grant may ever MINT a thread -- a worker-only grant
+        // (operator, with none of the reader/writer capability flags) may
+        // never bring a room's first thread into existence (DEC-MEMOS-18).
+        // The mint-race-safe attach/currency decision itself is the
+        // domain layer's job (ThreadMemoryStore#resolveThread's own
+        // transaction); this guard only ever passes down verified grant
+        // claims and this one derived capability flag, exactly like
+        // input.delivery_scope below.
+        const workerOnlyGrant =
+          grant.operator === true &&
+          grant.readPrivate !== true &&
+          grant.writePrivate !== true &&
+          grant.confirmMemory !== true &&
+          grant.deliveryWriter !== true;
+        input.grant_agent_id = grant.agentId;
+        input.grant_workspace_id = grant.workspaceId;
+        input.grant_assert_agents = grant.assertAgents === true;
+        input.grant_may_mint = !workerOnlyGrant;
       } else if (thread) {
         assertThreadScope(
           thread.status === "ACTIVE" &&

@@ -16,13 +16,29 @@ import { createServer } from "../../apps/msp-server/src/server.mjs";
 const roots = [];
 const servers = [];
 
+// PH-MEMOS-3 stage 2 (BL-MEMOS-041): agentId/workspaceId are now required,
+// domain-layer fields on msp_thread_resolve (§6.1.1) -- this file exercises
+// schema/journal invariants through the UNGUARDED handler map, which reads
+// them off grant_agent_id/grant_workspace_id (the exact keys
+// thread-guard.mjs injects from a verified grant). A stable, shared
+// agent/workspace pair is supplied by default so no individual call site
+// below needs to change.
+function withDefaultGrantFields(server) {
+  const original = server.threadHandlers.msp_thread_resolve;
+  server.threadHandlers.msp_thread_resolve = (args = {}) =>
+    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, ...args });
+  return server;
+}
+
 function makeServer() {
   const root = mkdtempSync(path.join(tmpdir(), "msp-thread-schema-invariants-"));
   roots.push(root);
-  const server = createServer({
-    dbPath: path.join(root, "msp.sqlite3"),
-    env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: "c".repeat(40) },
-  });
+  const server = withDefaultGrantFields(
+    createServer({
+      dbPath: path.join(root, "msp.sqlite3"),
+      env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: "c".repeat(40) },
+    }),
+  );
   servers.push(server);
   return server;
 }

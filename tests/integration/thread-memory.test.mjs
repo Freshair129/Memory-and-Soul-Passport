@@ -34,16 +34,34 @@ function summary() {
   };
 }
 
+// PH-MEMOS-3 stage 2 (BL-MEMOS-041): agentId/workspaceId are now required,
+// domain-layer fields on msp_thread_resolve (§6.1.1), not merely a
+// guard/auth concern -- this file exercises ThreadMemoryStore business
+// logic through the UNGUARDED handler map, which reads them off
+// grant_agent_id/grant_workspace_id (the exact keys thread-guard.mjs
+// injects from a verified grant). Every test below gets a stable, shared
+// agent/workspace pair by default via this one wrapper, exactly as it
+// already hand-supplies delivery_scope for the delivery tool -- no
+// individual call site needs to change.
+function withDefaultGrantFields(server) {
+  const original = server.threadHandlers.msp_thread_resolve;
+  server.threadHandlers.msp_thread_resolve = (args = {}) =>
+    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, ...args });
+  return server;
+}
+
 function makeServer() {
   const root = mkdtempSync(path.join(tmpdir(), "msp-thread-memory-test-"));
   roots.push(root);
   // W1: server.threadHandlers still routes through createThreadHandlers'
   // `now(args)` gate -- MSP_TEST_CLOCK=1 is required for the synthetic
   // `now:` values below to reach the domain layer at all.
-  const server = createServer({
-    dbPath: path.join(root, "msp.sqlite3"),
-    env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: "a".repeat(40) },
-  });
+  const server = withDefaultGrantFields(
+    createServer({
+      dbPath: path.join(root, "msp.sqlite3"),
+      env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: "a".repeat(40) },
+    }),
+  );
   servers.push(server);
   return server;
 }
@@ -353,7 +371,9 @@ describe("unified thread, speaker and session memory", () => {
   it("resolves to the current thread when the caller has no identity key configured -- fails closed with identity_hmac_unconfigured", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "msp-thread-memory-no-key-test-"));
     roots.push(root);
-    const server = createServer({ dbPath: path.join(root, "msp.sqlite3"), env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: undefined } });
+    const server = withDefaultGrantFields(
+      createServer({ dbPath: path.join(root, "msp.sqlite3"), env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: undefined } }),
+    );
     servers.push(server);
     await expect(
       server.threadHandlers.msp_thread_resolve({

@@ -665,7 +665,12 @@ test("RKOI review (2nd round), WARNING 1: an operator grant scoped to a DIFFEREN
   // timeout (1 minute) and waits on the real wall clock instead.
   const call = spawnRuntime(dbPath);
   try {
-    const claimsA = { ...ROOM, externalRoomRef: "dm-a-room-check", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1", operator: true };
+    // PH-MEMOS-3 stage 2 (DEC-MEMOS-18): alice is not a worker-only grant
+    // here -- she is a normal caller (she appends as herself below) who
+    // also happens to hold operator rights for her own sweep/claim below,
+    // so readPrivate keeps her resolve out of the worker-only-never-mints
+    // rule, which is about a grant with NO reader/writer capability at all.
+    const claimsA = { ...ROOM, externalRoomRef: "dm-a-room-check", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1", operator: true, readPrivate: true };
     const { thread } = await call(
       "msp_thread_resolve",
       signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-a-room-check" }, claimsA),

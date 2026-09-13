@@ -407,6 +407,35 @@ export class ThreadRegistry {
       .get(threadId);
     return row ? rowParticipant(row) : null;
   }
+
+  // §8.1/§8.2 (PH-MEMOS-3 stage 2): the agent gate's read-only currency
+  // check for every thread-bound tool OTHER than msp_thread_resolve
+  // (whose mint-race-safe attach/currency logic lives inside
+  // ThreadMemoryStore#resolveThread's own transaction instead, since it
+  // may need to WRITE a new attachment, not merely read one). Returns a
+  // boolean, not a row -- callers only ever need "is this agent current."
+  findCurrentAgent(threadId, agentId, workspaceId) {
+    if (!threadId || !agentId || !workspaceId) return false;
+    const row = this.#db
+      .prepare("SELECT 1 FROM thread_agents WHERE thread_id = ? AND agent_id = ? AND workspace_id = ? AND left_at IS NULL")
+      .get(threadId, agentId, workspaceId);
+    return !!row;
+  }
+
+  // §8.2/§12.2 (PH-MEMOS-3 stage 2): msp_thread_delivery_record's PENDING
+  // path has no thread_id or inbound message yet to resolve a thread
+  // through -- its only handle on "which thread" is the room binding
+  // itself, the exact same triple idx_threads_active_binding uniques on.
+  // externalRoomRefHmac is the CALLER's job (hmacRoomRef, identity key is
+  // apps/msp-server's concern, not msp-core's ThreadRegistry).
+  findThreadByRoom({ tenantId, channelAccountId, externalRoomRefHmac } = {}) {
+    if (!tenantId || !channelAccountId || !externalRoomRefHmac) return null;
+    return rowThread(
+      this.#db
+        .prepare("SELECT * FROM threads WHERE tenant_id = ? AND channel_account_id = ? AND external_room_ref_hmac = ? AND status = 'ACTIVE'")
+        .get(tenantId, channelAccountId, externalRoomRefHmac),
+    );
+  }
 }
 
 export class ThreadMemoryStore {
@@ -445,6 +474,10 @@ export class ThreadMemoryStore {
     tenantId,
     businessId = null,
     audienceKind,
+    agentId,
+    workspaceId,
+    assertAgents = false,
+    mayMint = true,
     now,
   } = {}) {
     const kind = enumValue(threadKind, THREAD_KINDS, "thread_kind");
@@ -459,6 +492,13 @@ export class ThreadMemoryStore {
     const room = requiredString(externalRoomRef, "external_room_ref");
     const tenant = requiredString(tenantId, "tenant_id");
     const business = optionalString(businessId, "business_id");
+    // PH-MEMOS-3 stage 2 (BL-MEMOS-041, DEC-MEMOS-21): agentId/workspaceId
+    // are validated here too, not only by the guard's own
+    // verifyThreadGrant check -- the domain layer never trusts a caller's
+    // claim about its own required fields, matching every other required
+    // field in this method.
+    const agent = requiredString(agentId, "agentId");
+    const workspace = requiredString(workspaceId, "workspaceId");
     const timestamp = iso(now);
     // Fail closed BEFORE any lookup or write: no thread is ever created, and
     // no existing binding is ever compared, under a fabricated or absent key.
@@ -490,30 +530,58 @@ export class ThreadMemoryStore {
         throw new ThreadMemoryConflictError("The channel binding already belongs to a different thread scope.");
       }
       this.#db.prepare("UPDATE threads SET updated_at = ? WHERE thread_id = ?").run(timestamp, existing.thread_id);
-      return { thread: rowThread({ ...existing, updated_at: timestamp }), created: false };
+      const thread = rowThread({ ...existing, updated_at: timestamp });
+      // §8.1: this call did not just mint the thread, so it goes through
+      // the ordinary current-or-assertAgents gate, exactly like a mint-race
+      // loser below.
+      const agentAttached = this.#resolveAgentCurrency(thread.threadId, tenant, agent, workspace, assertAgents, timestamp);
+      return { thread, created: false, agentAttached };
+    }
+
+    // §8.1/§8.3, DEC-MEMOS-18: a worker-only grant (operator, with no
+    // reader/writer flags) never mints a thread -- the guard computes
+    // mayMint from the grant's own capability flags and passes it down
+    // here; a room with no ACTIVE thread yet is refused not_found for such
+    // a grant, never created:true.
+    if (!mayMint) {
+      throw new ThreadMemoryNotFoundError("No ACTIVE thread exists for this room, and this grant may not mint one.");
     }
 
     const threadId = ref("thread");
     try {
-      this.#db
-        .prepare(`
-          INSERT INTO threads
-            (thread_id, thread_kind, channel_type, channel_account_id, external_room_ref_hmac,
-             tenant_id, business_id, status, created_at, updated_at)
-          VALUES (@thread_id, @thread_kind, @channel_type, @channel_account_id, @external_room_ref_hmac,
-             @tenant_id, @business_id, 'ACTIVE', @created_at, @updated_at)
-        `)
-        .run({
-          thread_id: threadId,
-          thread_kind: kind,
-          channel_type: channel,
-          channel_account_id: account,
-          external_room_ref_hmac: roomHmac,
-          tenant_id: tenant,
-          business_id: business,
-          created_at: timestamp,
-          updated_at: timestamp,
-        });
+      // Mint-race rule (RKOI stage-2 review round 1, defense in depth):
+      // auto-attach happens only after THIS call's own INSERT INTO threads
+      // actually wins -- the thread insert and the minting agent's
+      // thread_agents row are written in the same transaction, so a crash
+      // or a losing race between the two INSERTs can never leave a minted
+      // thread with no agent attached, or an attached agent with no thread.
+      this.#db.transaction(() => {
+        this.#db
+          .prepare(`
+            INSERT INTO threads
+              (thread_id, thread_kind, channel_type, channel_account_id, external_room_ref_hmac,
+               tenant_id, business_id, status, created_at, updated_at)
+            VALUES (@thread_id, @thread_kind, @channel_type, @channel_account_id, @external_room_ref_hmac,
+               @tenant_id, @business_id, 'ACTIVE', @created_at, @updated_at)
+          `)
+          .run({
+            thread_id: threadId,
+            thread_kind: kind,
+            channel_type: channel,
+            channel_account_id: account,
+            external_room_ref_hmac: roomHmac,
+            tenant_id: tenant,
+            business_id: business,
+            created_at: timestamp,
+            updated_at: timestamp,
+          });
+        this.#db
+          .prepare(`
+            INSERT INTO thread_agents (agent_attachment_id, tenant_id, thread_id, agent_id, workspace_id, joined_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `)
+          .run(ref("agent-attachment"), tenant, threadId, agent, workspace, timestamp);
+      })();
     } catch (error) {
       if (!String(error?.message).includes("UNIQUE")) throw error;
       const raced = this.#db
@@ -525,7 +593,14 @@ export class ThreadMemoryStore {
       if (raced.business_id !== business || raced.thread_kind !== kind || raced.channel_type !== channel) {
         throw new ThreadMemoryConflictError("The channel binding already belongs to a different thread scope.");
       }
-      return { thread: rowThread(raced), created: false };
+      const thread = rowThread(raced);
+      // §8.1 mint-race rule: this call LOST the race -- it is not the
+      // minting agent, and does not auto-attach merely because its own
+      // lookup ran before the winner's INSERT committed. It goes through
+      // the ordinary existing-thread gate like any other caller resolving
+      // a thread it did not create.
+      const agentAttached = this.#resolveAgentCurrency(thread.threadId, tenant, agent, workspace, assertAgents, timestamp);
+      return { thread, created: false, agentAttached };
     }
 
     const created = rowThread(this.#db.prepare("SELECT * FROM threads WHERE thread_id = ?").get(threadId));
@@ -537,7 +612,42 @@ export class ThreadMemoryStore {
       payload: { thread_id: threadId, created: true, channel_type: channel },
       policyDecision: "allow",
     });
-    return { thread: created, created: true };
+    return { thread: created, created: true, agentAttached: true };
+  }
+
+  // §8.1: an agent is "current" on a thread exactly when a thread_agents
+  // row for (thread_id, agent_id, workspace_id) exists with left_at IS
+  // NULL. Used by resolveThread's existing-thread gate (including a
+  // mint-race loser, which reaches this exact same path): an already-
+  // current agent is a no-op (agentAttached: false); a non-current agent
+  // needs assertAgents to attach (agentAttached: true) and is otherwise
+  // refused agent_not_current. Returns whether THIS call caused a new
+  // attachment.
+  #resolveAgentCurrency(threadId, tenantId, agentId, workspaceId, assertAgents, timestamp) {
+    const current = this.#db
+      .prepare("SELECT 1 FROM thread_agents WHERE thread_id = ? AND agent_id = ? AND workspace_id = ? AND left_at IS NULL")
+      .get(threadId, agentId, workspaceId);
+    if (current) return false;
+    if (!assertAgents) {
+      throw new AgentNotCurrentError();
+    }
+    try {
+      this.#db
+        .prepare(`
+          INSERT INTO thread_agents (agent_attachment_id, tenant_id, thread_id, agent_id, workspace_id, joined_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `)
+        .run(ref("agent-attachment"), tenantId, threadId, agentId, workspaceId, timestamp);
+    } catch (error) {
+      // A concurrent self-assert race for the identical (thread_id,
+      // agent_id, workspace_id) triple: the partial UNIQUE index
+      // (left_at IS NULL) allows only one open row, so the loser here is
+      // already current the instant the winner's INSERT commits -- this is
+      // success, not a failure.
+      if (!String(error?.message).includes("UNIQUE")) throw error;
+      return false;
+    }
+    return true;
   }
 
   appendMessage({

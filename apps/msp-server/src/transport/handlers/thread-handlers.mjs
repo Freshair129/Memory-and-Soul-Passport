@@ -40,6 +40,13 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         tenantId: args.tenant_id,
         businessId: args.business_id,
         audienceKind: args.audience_kind,
+        // PH-MEMOS-3 stage 2 (BL-MEMOS-041): thread-guard.mjs verifies and
+        // injects these from the grant -- this handler never reads a raw
+        // agentId/workspaceId/assertAgents claim off the wire directly.
+        agentId: args.grant_agent_id,
+        workspaceId: args.grant_workspace_id,
+        assertAgents: args.grant_assert_agents,
+        mayMint: args.grant_may_mint,
         now: now(args),
       });
     },
