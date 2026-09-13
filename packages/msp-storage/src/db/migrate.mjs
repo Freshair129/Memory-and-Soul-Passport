@@ -98,13 +98,61 @@
 // virtual table and its shadow tables. An already-applied migration never
 // re-runs this check (or any other guard below), so a database that is
 // fully migrated today boots exactly as it did before this change.
-// Because the structural check is now load-bearing on the plain path too,
-// `isKeyColumnSet` (below) was tightened to match what SQLite itself
-// accepts as a foreign-key parent key: a partial UNIQUE index is ignored
-// (`PRAGMA index_list` reports `partial = 1`), and an index whose declared
-// collation for a column (`PRAGMA index_xinfo`) does not match that
-// column's own declared collation (parsed from its `CREATE TABLE` text,
-// defaulting to `BINARY`) does not count as a key either.
+//
+// RKOI review (same follow-up, 1 critical): `checkForeignKeyTargetsStructurallyValid`
+// covers table and column EXISTENCE, and skips a foreign key whose target
+// column set is only covered by a PARTIAL unique index (`PRAGMA index_list`
+// reports `partial = 1`) -- neither needs anything beyond the existing
+// PRAGMAs. It deliberately does NOT decide whether a column set is
+// genuinely a usable key (the right PRIMARY KEY/UNIQUE index, with matching
+// collation, generated-column and `WITHOUT ROWID` handling, etc.) by
+// re-implementing SQLite's own rules against parsed `CREATE TABLE` text --
+// an earlier version of this file tried exactly that with a hand-written
+// parser, and disagreed with SQLite on 7 of 27 real parent-key shapes
+// (false rejections when the text merely LOOKED like it might mention
+// `COLLATE`, e.g. inside a `CHECK`, a string literal, or a comment; a false
+// acceptance for `PRIMARY KEY (col COLLATE NOCASE)`, whose short-circuit
+// never compared collations at all). That question is answered by SQLite
+// itself instead of a parser:
+//   - PLAIN path (`PRAGMA foreign_keys` is ON the whole time here):
+//     `checkForeignKeysResolveOnPlainPath`, below, prepares -- but never
+//     executes -- `UPDATE "<table>" SET "<col>" = "<col>" [, ...] WHERE 0`
+//     for every foreign-key constraint on every table (grouped by
+//     `PRAGMA foreign_key_list`'s `id` so a composite key produces one
+//     statement, using its OWN `from` columns, not the target's). Merely
+//     PREPARING that statement makes SQLite resolve the constraint's parent
+//     key; nothing is executed and no row is scanned (`WHERE 0`). If the
+//     parent key does not actually resolve, `better-sqlite3`'s `.prepare()`
+//     throws `SqliteError: foreign key mismatch - ...` synchronously, at
+//     prepare time, before anything runs.
+//   - DIRECTIVE path (`PRAGMA foreign_keys` is OFF while the migration's SQL
+//     runs): the same `UPDATE ... WHERE 0` trick does NOT resolve foreign
+//     keys while the pragma reads OFF, so it cannot be used there. Instead
+//     `PRAGMA foreign_key_check` (already run on this path both before and
+//     after the migration's SQL, `runForeignKeyCheck`, below) already
+//     raises the identical `SqliteError: foreign key mismatch - ...`
+//     regardless of the pragma's current value, and that has already been
+//     caught and rethrown, prefixed, since the belt-and-braces fix in the
+//     same review round.
+// A partial-index-only target is caught by BOTH layers independently in
+// practice (`checkForeignKeyTargetsStructurallyValid`'s cheap PRAGMA-only
+// skip, and SQLite's own prepare-time/`foreign_key_check` resolution); the
+// cheap JS layer is kept because it needs no parser and gives a clearer,
+// earlier message on the plain path, not because SQLite's own answer is in
+// doubt.
+//
+// RKOI review (same round, warning 1): a structural defect that PREDATES
+// this migration -- introduced out-of-band, or by an earlier migration --
+// must not be blamed on this one. The table/column EXISTENCE half of
+// `checkForeignKeyTargetsStructurallyValid`'s logic therefore also runs
+// once against the CURRENT schema, before `db.exec(file.sql)`, on both
+// paths (`assertNoPreexistingStructuralForeignKeyViolation`, below). A
+// violation there throws prefixed `migration_preexisting_structural_violation:`
+// instead of `migration_foreign_key_check_failed:`, naming the table and
+// target, and the migration's own SQL never runs -- mirroring the existing
+// `migration_preexisting_foreign_key_violation:` guard for row-level
+// violations on the directive path, just for the structural question and on
+// both paths.
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -226,192 +274,43 @@ function sameColumnSet(a, b) {
   return sortedA.every((name, index) => name === sortedB[index]);
 }
 
-// Splits the inside of a `CREATE TABLE (...)` at top-level commas only --
-// respecting nested parentheses (e.g. `DECIMAL(10, 2)`, `CHECK (a > b)`)
-// and quoted/bracketed identifiers and string literals, so a comma inside
-// any of those never splits a column or table-constraint definition.
-function splitTopLevelDefinitions(inner) {
-  const parts = [];
-  let depth = 0;
-  let current = "";
-  let quoteChar = null;
-  for (let i = 0; i < inner.length; i++) {
-    const ch = inner[i];
-    if (quoteChar) {
-      current += ch;
-      if (ch === quoteChar) {
-        if (inner[i + 1] === quoteChar) {
-          current += inner[++i];
-        } else {
-          quoteChar = null;
-        }
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"' || ch === "`") {
-      quoteChar = ch;
-      current += ch;
-      continue;
-    }
-    if (ch === "[") {
-      const end = inner.indexOf("]", i);
-      if (end === -1) {
-        current += ch;
-        continue;
-      }
-      current += inner.slice(i, end + 1);
-      i = end;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-      current += ch;
-      continue;
-    }
-    if (ch === ")") {
-      depth--;
-      current += ch;
-      continue;
-    }
-    if (ch === "," && depth === 0) {
-      parts.push(current);
-      current = "";
-      continue;
-    }
-    current += ch;
-  }
-  if (current.trim() !== "") parts.push(current);
-  return parts;
-}
-
-// Extracts the text between the outermost, quote-aware, matching pair of
-// parentheses in a `CREATE TABLE` statement -- i.e. the column and
-// constraint list -- ignoring anything after it (`STRICT`, `WITHOUT
-// ROWID`, a trailing `;`).
-function extractColumnDefinitionsSection(createSql) {
-  const openIndex = createSql.indexOf("(");
-  if (openIndex === -1) return "";
-  let depth = 0;
-  let quoteChar = null;
-  for (let i = openIndex; i < createSql.length; i++) {
-    const ch = createSql[i];
-    if (quoteChar) {
-      if (ch === quoteChar) {
-        if (createSql[i + 1] === quoteChar) {
-          i++;
-          continue;
-        }
-        quoteChar = null;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"' || ch === "`") {
-      quoteChar = ch;
-      continue;
-    }
-    if (ch === "[") {
-      const end = createSql.indexOf("]", i);
-      if (end !== -1) i = end;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-      continue;
-    }
-    if (ch === ")") {
-      depth--;
-      if (depth === 0) return createSql.slice(openIndex + 1, i);
-      continue;
-    }
-  }
-  return createSql.slice(openIndex + 1);
-}
-
-function unquoteIdentifier(token) {
-  const trimmed = token.trim();
-  if (trimmed.length >= 2) {
-    const first = trimmed[0];
-    const last = trimmed[trimmed.length - 1];
-    if ((first === '"' && last === '"') || (first === "`" && last === "`")) {
-      return trimmed.slice(1, -1).replace(new RegExp(`\\${first}\\${first}`, "g"), first);
-    }
-    if (first === "[" && last === "]") return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-const IDENTIFIER_TOKEN_PATTERN = /^("(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|\S+)/;
-const TABLE_CONSTRAINT_KEYWORDS = new Set(["CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN"]);
-const COLLATE_CLAUSE_PATTERN = /\bCOLLATE\s+("(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|\w+)/i;
-
-// A column's declared collation as it appears in its own CREATE TABLE
-// definition (`COLLATE <name>`), or SQLite's implicit default, "BINARY",
-// when the column carries no explicit COLLATE clause. Parsed from
-// sqlite_schema.sql rather than any PRAGMA, since none of table_info,
-// table_xinfo, or the foreign_key/index pragmas exposes a plain column's
-// declared collation.
-function columnCollation(db, table, column) {
-  const row = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?").get(table);
-  if (!row || !row.sql) return "BINARY";
-  const section = extractColumnDefinitionsSection(row.sql);
-  for (const definition of splitTopLevelDefinitions(section)) {
-    const trimmed = definition.trim();
-    if (trimmed === "") continue;
-    const firstTokenMatch = trimmed.match(IDENTIFIER_TOKEN_PATTERN);
-    if (!firstTokenMatch) continue;
-    const firstToken = unquoteIdentifier(firstTokenMatch[1]);
-    if (TABLE_CONSTRAINT_KEYWORDS.has(firstToken.toUpperCase())) continue; // table-level constraint, not a column
-    if (firstToken.toLowerCase() !== column.toLowerCase()) continue;
-    const collateMatch = trimmed.match(COLLATE_CLAUSE_PATTERN);
-    return collateMatch ? unquoteIdentifier(collateMatch[1]).toUpperCase() : "BINARY";
-  }
-  return "BINARY";
-}
-
-// True if `columns` (as a set, order not significant) is `table`'s
-// PRIMARY KEY or is exactly the column set of one of its UNIQUE indexes --
-// i.e. `columns` is actually a key on `table`, so a foreign key naming them
-// can resolve to at most one row. Two refinements match what SQLite itself
-// accepts as a foreign-key parent key (RKOI, WP-E0 warning 1, back in scope
-// now that this check also gates the plain path):
-//   - a PARTIAL unique index (`PRAGMA index_list` reports `partial = 1`)
-//     does not cover every row, so it cannot resolve every possible foreign
-//     key value to at most one row and is ignored entirely.
-//   - the index's own collating sequence for each column (`PRAGMA
-//     index_xinfo`'s `coll`) must match that column's declared collation
-//     (`columnCollation`, above) -- an index built with a different
-//     COLLATE than the column's own does not compare the same way the
-//     column itself does, so it does not count as that column's key.
+// True if `columns` (as a set, order not significant) is `table`'s PRIMARY
+// KEY, or is exactly the column set of one of its non-partial UNIQUE
+// indexes. A PARTIAL unique index (`PRAGMA index_list` reports
+// `partial = 1`) does not cover every row, so it cannot resolve every
+// possible foreign-key value to at most one row, and is ignored entirely --
+// this needs nothing beyond the existing PRAGMAs, no parser. This is
+// deliberately a cheap, EXISTENCE-only filter: it does not decide collation
+// or any other fuller "is this really usable as a foreign-key parent key"
+// question. That question is delegated to SQLite itself (see the module
+// header comment and `checkForeignKeysResolveOnPlainPath`, below).
 function isKeyColumnSet(db, table, columns) {
   if (sameColumnSet(primaryKeyColumns(db, table), columns)) return true;
   for (const index of db.pragma(`index_list(${quoteIdentifier(table)})`)) {
-    if (!index.unique) continue;
-    if (index.partial) continue;
-    const indexColumnRows = db
-      .pragma(`index_xinfo(${quoteIdentifier(index.name)})`)
-      .filter((column) => column.key === 1)
-      .sort((a, b) => a.seqno - b.seqno);
-    const indexColumns = indexColumnRows.map((column) => column.name);
-    if (!sameColumnSet(indexColumns, columns)) continue;
-    const collationsMatch = indexColumnRows.every(
-      (column) => String(column.coll).toUpperCase() === columnCollation(db, table, column.name).toUpperCase(),
-    );
-    if (collationsMatch) return true;
+    if (!index.unique || index.partial) continue;
+    const indexColumns = db
+      .pragma(`index_info(${quoteIdentifier(index.name)})`)
+      .sort((a, b) => a.seqno - b.seqno)
+      .map((column) => column.name);
+    if (sameColumnSet(indexColumns, columns)) return true;
   }
   return false;
 }
 
-// Structural companion to PRAGMA foreign_key_check (see the module header
-// comment for why the row-level check alone is not enough): for every
-// table in the schema, every foreign key's target table must still exist,
-// every explicitly named target column must exist on it, and the target
-// column set must actually be a key on the target table (its PRIMARY KEY,
-// or covered by a UNIQUE index) -- otherwise the "foreign key" can silently
-// resolve to zero or many rows instead of at most one. Checked across the
-// WHOLE schema, not just tables this migration's SQL touched, because a
-// rebuild can break a REFERENCES clause on an unrelated table simply by
-// renaming the table that clause names.
-function checkForeignKeyTargetsStructurallyValid(db, file) {
+// Finds the first structural foreign-key defect in the CURRENT schema, or
+// `null` if there is none: a foreign key whose target table no longer
+// exists, whose implicit reference has no PRIMARY KEY to resolve against,
+// whose named target column no longer exists, or whose target column set
+// `isKeyColumnSet` above cannot even place a PRIMARY KEY or non-partial
+// UNIQUE index under. Checked across the WHOLE schema, not just tables a
+// migration's SQL touched, because a rebuild can break a REFERENCES clause
+// on an unrelated table simply by renaming the table that clause names.
+// Shared by the two callers below so both agree on what counts as a
+// defect: the post-migration check (`checkForeignKeyTargetsStructurallyValid`)
+// and the pre-existing-schema check
+// (`assertNoPreexistingStructuralForeignKeyViolation`, RKOI follow-up
+// warning 1).
+function findStructuralForeignKeyIssue(db) {
   const tables = db
     .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")
     .all()
@@ -432,10 +331,7 @@ function checkForeignKeyTargetsStructurallyValid(db, file) {
     for (const constraintRows of byConstraintId.values()) {
       const targetTable = constraintRows[0].table;
       if (!tableSet.has(targetTable)) {
-        throw new SchemaVersionError(
-          `migration_foreign_key_check_failed: migration "${file.name}" left table "${table}" with a foreign key ` +
-            `pointing at table "${targetTable}", which does not exist after the rebuild. Refusing to start.`,
-        );
+        return { kind: "missing_target_table", table, targetTable };
       }
 
       // to === null on every row of a constraint means SQLite resolves it
@@ -446,10 +342,7 @@ function checkForeignKeyTargetsStructurallyValid(db, file) {
         : explicitTargetColumns;
 
       if (targetColumns.length === 0) {
-        throw new SchemaVersionError(
-          `migration_foreign_key_check_failed: migration "${file.name}" left table "${table}" with a foreign key to ` +
-            `table "${targetTable}", which has no PRIMARY KEY to resolve the implicit reference against. Refusing to start.`,
-        );
+        return { kind: "no_implicit_primary_key", table, targetTable };
       }
 
       const targetColumnNames = new Set(
@@ -457,19 +350,158 @@ function checkForeignKeyTargetsStructurallyValid(db, file) {
       );
       for (const column of targetColumns) {
         if (!targetColumnNames.has(column)) {
-          throw new SchemaVersionError(
-            `migration_foreign_key_check_failed: migration "${file.name}" left table "${table}" with a foreign key ` +
-              `naming column "${column}" on table "${targetTable}", which does not exist after the rebuild. Refusing to start.`,
-          );
+          return { kind: "missing_target_column", table, targetTable, column };
         }
       }
 
       if (!isKeyColumnSet(db, targetTable, targetColumns)) {
-        throw new SchemaVersionError(
-          `migration_foreign_key_check_failed: migration "${file.name}" left table "${table}" with a foreign key to ` +
-            `table "${targetTable}" columns (${targetColumns.join(", ")}), which are neither that table's PRIMARY KEY ` +
-            `nor covered by a UNIQUE index after the rebuild. Refusing to start.`,
-        );
+        return { kind: "not_a_key", table, targetTable, targetColumns };
+      }
+    }
+  }
+  return null;
+}
+
+// Post-migration structural check (see the module header comment for why
+// the row-level check alone is not enough, and why this does not decide
+// collation). Throws the existing `SchemaVersionError` prefixed
+// `migration_foreign_key_check_failed:`, naming the migration and the
+// offending table.
+function checkForeignKeyTargetsStructurallyValid(db, file) {
+  const issue = findStructuralForeignKeyIssue(db);
+  if (!issue) return;
+  switch (issue.kind) {
+    case "missing_target_table":
+      throw new SchemaVersionError(
+        `migration_foreign_key_check_failed: migration "${file.name}" left table "${issue.table}" with a foreign key ` +
+          `pointing at table "${issue.targetTable}", which does not exist after the rebuild. Refusing to start.`,
+      );
+    case "no_implicit_primary_key":
+      throw new SchemaVersionError(
+        `migration_foreign_key_check_failed: migration "${file.name}" left table "${issue.table}" with a foreign key to ` +
+          `table "${issue.targetTable}", which has no PRIMARY KEY to resolve the implicit reference against. Refusing to start.`,
+      );
+    case "missing_target_column":
+      throw new SchemaVersionError(
+        `migration_foreign_key_check_failed: migration "${file.name}" left table "${issue.table}" with a foreign key ` +
+          `naming column "${issue.column}" on table "${issue.targetTable}", which does not exist after the rebuild. Refusing to start.`,
+      );
+    case "not_a_key":
+      throw new SchemaVersionError(
+        `migration_foreign_key_check_failed: migration "${file.name}" left table "${issue.table}" with a foreign key to ` +
+          `table "${issue.targetTable}" columns (${issue.targetColumns.join(", ")}), which are neither that table's PRIMARY KEY ` +
+          `nor covered by a UNIQUE index after the rebuild. Refusing to start.`,
+      );
+    /* c8 ignore next 5 -- findStructuralForeignKeyIssue only ever returns one of the four kinds above. */
+    default:
+      throw new SchemaVersionError(
+        `migration_foreign_key_check_failed: migration "${file.name}" left an unrecognized structural foreign-key issue. Refusing to start.`,
+      );
+  }
+}
+
+// Pre-migration check (RKOI follow-up, warning 1): the SAME structural
+// question as above, asked against the CURRENT schema BEFORE this
+// migration's SQL runs at all, on BOTH paths. A defect found here predates
+// this migration -- an earlier migration, or out-of-band tampering -- and
+// must not be blamed on it, mirroring the existing
+// `migration_preexisting_foreign_key_violation:` guard for row-level
+// violations on the directive path (`runForeignKeyCheck`/
+// `applyForeignKeysOffMigration`, below), just for the structural question
+// and on both paths. Throws prefixed `migration_preexisting_structural_violation:`
+// -- a distinct prefix from `migration_foreign_key_check_failed:`, since
+// this migration's own SQL never even ran.
+function assertNoPreexistingStructuralForeignKeyViolation(db, file) {
+  const issue = findStructuralForeignKeyIssue(db);
+  if (!issue) return;
+  switch (issue.kind) {
+    case "missing_target_table":
+      throw new SchemaVersionError(
+        `migration_preexisting_structural_violation: migration "${file.name}" cannot run -- the schema already has table ` +
+          `"${issue.table}" with a foreign key pointing at table "${issue.targetTable}", which does not exist, before this ` +
+          `migration's SQL ran. Refusing to start.`,
+      );
+    case "no_implicit_primary_key":
+      throw new SchemaVersionError(
+        `migration_preexisting_structural_violation: migration "${file.name}" cannot run -- the schema already has table ` +
+          `"${issue.table}" with a foreign key to table "${issue.targetTable}", which has no PRIMARY KEY to resolve the ` +
+          `implicit reference against, before this migration's SQL ran. Refusing to start.`,
+      );
+    case "missing_target_column":
+      throw new SchemaVersionError(
+        `migration_preexisting_structural_violation: migration "${file.name}" cannot run -- the schema already has table ` +
+          `"${issue.table}" with a foreign key naming column "${issue.column}" on table "${issue.targetTable}", which does ` +
+          `not exist, before this migration's SQL ran. Refusing to start.`,
+      );
+    case "not_a_key":
+      throw new SchemaVersionError(
+        `migration_preexisting_structural_violation: migration "${file.name}" cannot run -- the schema already has table ` +
+          `"${issue.table}" with a foreign key to table "${issue.targetTable}" columns (${issue.targetColumns.join(", ")}), ` +
+          `which are neither that table's PRIMARY KEY nor covered by a UNIQUE index, before this migration's SQL ran. ` +
+          `Refusing to start.`,
+      );
+    /* c8 ignore next 5 -- findStructuralForeignKeyIssue only ever returns one of the four kinds above. */
+    default:
+      throw new SchemaVersionError(
+        `migration_preexisting_structural_violation: migration "${file.name}" cannot run -- the schema already has an ` +
+          `unrecognized structural foreign-key issue before this migration's SQL ran. Refusing to start.`,
+      );
+  }
+}
+
+// PLAIN-path-only companion to the structural check above (see the module
+// header comment for why): resolves the fuller "is this actually a usable
+// foreign-key parent key" question -- collation, generated columns,
+// composite keys, everything SQLite itself cares about -- by asking SQLite
+// directly instead of re-implementing its rules against parsed
+// `CREATE TABLE` text. `PRAGMA foreign_keys` is ON for the whole plain path
+// (connection.mjs always enables it, and this path never turns it off), so
+// merely PREPARING -- never executing -- an
+// `UPDATE <table> SET <col> = <col> ... WHERE 0` against a table's OWN
+// foreign-key columns makes SQLite resolve every foreign key those columns
+// take part in; `WHERE 0` guarantees zero rows are ever touched even if the
+// statement were run, which it never is. If a foreign key does not actually
+// resolve to a real key, `.prepare()` throws
+// `SqliteError: foreign key mismatch - ...` synchronously, at prepare time,
+// before anything executes. Checked across the WHOLE schema, one statement
+// per constraint (`PRAGMA foreign_key_list`'s rows grouped by `id`, so a
+// composite key produces exactly one statement over its own `from`
+// columns), for the same cross-table-rebuild reason as the structural
+// check above.
+function checkForeignKeysResolveOnPlainPath(db, file) {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")
+    .all()
+    .map((row) => row.name)
+    .filter((name) => !name.startsWith("sqlite_"));
+
+  for (const table of tables) {
+    const foreignKeys = db.pragma(`foreign_key_list(${quoteIdentifier(table)})`);
+    if (foreignKeys.length === 0) continue;
+
+    const byConstraintId = new Map();
+    for (const foreignKey of foreignKeys) {
+      if (!byConstraintId.has(foreignKey.id)) byConstraintId.set(foreignKey.id, []);
+      byConstraintId.get(foreignKey.id).push(foreignKey);
+    }
+
+    for (const constraintRows of byConstraintId.values()) {
+      const fromColumns = constraintRows.map((foreignKey) => foreignKey.from);
+      const setClause = fromColumns.map((column) => `${quoteIdentifier(column)} = ${quoteIdentifier(column)}`).join(", ");
+      const probeSql = `UPDATE ${quoteIdentifier(table)} SET ${setClause} WHERE 0`;
+      try {
+        // Never executed -- .prepare() alone is enough to make SQLite
+        // resolve the foreign key's parent key, and WHERE 0 means this
+        // would touch zero rows even if it somehow ran.
+        db.prepare(probeSql);
+      } catch (error) {
+        if (error instanceof Error && typeof error.message === "string" && error.message.includes("foreign key mismatch")) {
+          throw new SchemaVersionError(
+            `migration_foreign_key_check_failed: migration "${file.name}" left table "${table}" with a foreign key ` +
+              `SQLite itself refuses to resolve -- "${error.message}". Refusing to start.`,
+          );
+        }
+        throw error;
       }
     }
   }
@@ -509,6 +541,11 @@ function applyForeignKeysOffMigration(db, file, insertMigration) {
         `connection is already inside a transaction -- PRAGMA foreign_keys cannot be changed there. Refusing to start.`,
     );
   }
+
+  // RKOI follow-up warning 1: check the CURRENT schema, before this
+  // migration's SQL runs at all, so a defect that predates this migration
+  // is never blamed on it.
+  assertNoPreexistingStructuralForeignKeyViolation(db, file);
 
   const previousForeignKeys = db.pragma("foreign_keys", { simple: true });
   db.pragma("foreign_keys = OFF");
@@ -648,6 +685,13 @@ export function runMigrations(db, migrationsDir) {
     if (directive.state === "off") {
       applyForeignKeysOffMigration(db, file, insertMigration);
     } else {
+      // RKOI follow-up warning 1: check the CURRENT schema, before this
+      // migration's SQL runs at all, so a defect that predates this
+      // migration is never blamed on it. Outside the transaction on
+      // purpose -- if this throws, db.exec(file.sql) below never runs, so
+      // there is nothing to roll back.
+      assertNoPreexistingStructuralForeignKeyViolation(db, file);
+
       const applyOne = db.transaction(() => {
         db.exec(file.sql);
 
@@ -658,6 +702,13 @@ export function runMigrations(db, migrationsDir) {
         // same structural guarantee on its own, before this migration is
         // allowed to commit.
         checkForeignKeyTargetsStructurallyValid(db, file);
+
+        // RKOI follow-up (critical): delegate the fuller "is this really a
+        // usable foreign-key parent key" question -- collation and
+        // everything else `checkForeignKeyTargetsStructurallyValid` does
+        // not decide -- to SQLite itself, since `PRAGMA foreign_keys` is ON
+        // for the whole plain path.
+        checkForeignKeysResolveOnPlainPath(db, file);
 
         insertMigration.run({
           version: file.version,
