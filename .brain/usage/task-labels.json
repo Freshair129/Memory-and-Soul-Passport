@@ -366,6 +366,18 @@
           "label": "Keyring re-review, round 2 (APPROVED, fd8095f)"
         }
       }
+    },
+    "a9a5d8be45b214928": {
+      "actor": "ghost",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Root-cause keyring fuzz anomaly (quote-character ids)",
+          "status": "open"
+        }
+      }
     }
   },
   "coordinator": {
@@ -544,6 +556,15 @@
         "BL-MEMOS-087"
       ],
       "label": "Record owner confirmation of DEC-MEMOS-01..16 (docs 214a7d2)"
+    },
+    "30": {
+      "task_ids": [
+        "BL-MEMOS-049",
+        "BL-MEMOS-033",
+        "BL-MEMOS-040..049"
+      ],
+      "label": "Fix it all: fuzz anomaly, keyring nits, stage-2 spec, Sonnet trailer rewrite",
+      "status": "open"
     }
   }
 }
