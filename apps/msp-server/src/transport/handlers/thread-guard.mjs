@@ -100,26 +100,35 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
             thread.channelAccountId === grant.channelAccountId,
           SCOPE_MESSAGE,
         );
-        // RKOI review (2nd round), WARNING 1: channel_account_id equality
-        // alone is not enough -- many threads can share one
-        // channel_account_id (many rooms under one LINE OA). The grant's
-        // OWN room (tenantId|channelAccountId|externalRoomRef) must hash to
-        // the SAME value as this specific thread's stored hash, for EVERY
-        // thread-bound tool, including compaction claim/commit/retry via
-        // the job's thread. Without this, a grant scoped to room "dm-b"
-        // (or an operator's own distinct room) could act on, or read, a
-        // DIFFERENT room's thread as long as the channel account matched.
-        // Skipped only when the grant carries no externalRoomRef at all
-        // (never true for zuri-ai's real grants; kept defensive for a
-        // theoretical future caller).
-        if (grant.externalRoomRef) {
-          const grantRoomHmac = hmacRoomRef(identityHmacKey, {
-            tenantId: grant.tenantId,
-            channelAccountId: grant.channelAccountId,
-            externalRoomRef: grant.externalRoomRef,
-          });
-          assertThreadScope(grantRoomHmac === thread.externalRoomRefHmac, SCOPE_MESSAGE);
-        }
+        // RKOI review (2nd round), WARNING 1 / CRITICAL (round 2): channel_
+        // account_id equality alone is not enough -- many threads can share
+        // one channel_account_id (many rooms under one LINE OA). The
+        // grant's OWN room (tenantId|channelAccountId|externalRoomRef) must
+        // hash to the SAME value as this specific thread's stored hash, for
+        // EVERY thread-bound tool, including compaction claim/commit/retry
+        // via the job's thread. Without this, a grant scoped to room
+        // "dm-b" (or an operator's own distinct room) could act on, or
+        // read, a DIFFERENT room's thread as long as the channel account
+        // matched.
+        //
+        // RKOI code review round 2, CRITICAL: this check used to run only
+        // `if (grant.externalRoomRef)`, so a validly-SIGNED grant that
+        // simply OMITTED externalRoomRef skipped the room check entirely --
+        // fail OPEN, not fail closed. RKOI's r2/p2.mjs probe demonstrated
+        // this claiming another room's compaction job, reading/appending to
+        // a DIRECT thread that was not the grant's own, and planting a
+        // membership into a GROUP thread with no room claim at all. Every
+        // real zuri-ai grant for every thread-bound tool always carries
+        // both externalRoomRef and channelAccountId (verified against
+        // zuri-ai origin/main's createMspThreadMemoryPort); a grant missing
+        // either is refused outright, never treated as "no room to check".
+        assertThreadScope(!!grant.externalRoomRef && !!grant.channelAccountId, SCOPE_MESSAGE);
+        const grantRoomHmac = hmacRoomRef(identityHmacKey, {
+          tenantId: grant.tenantId,
+          channelAccountId: grant.channelAccountId,
+          externalRoomRef: grant.externalRoomRef,
+        });
+        assertThreadScope(grantRoomHmac === thread.externalRoomRefHmac, SCOPE_MESSAGE);
         // RKOI review (docs round 4), replacing the "skip when absent" rule
         // from the earlier round: audienceKind is REQUIRED on every later
         // call against an existing thread EXCEPT msp_thread_delivery_record
@@ -131,7 +140,7 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
         // the inbound message's own thread plus the room-hash check above,
         // so the audience check is skipped ONLY when the claim is genuinely
         // absent; a delivery grant that DOES carry audienceKind is still
-        // checked. ROOT behaves exactly like GROUP here -- neither is
+        // checked. ROOM behaves exactly like GROUP here -- neither is
         // DIRECT, so neither ever reaches a private read below.
         if (name === "msp_thread_delivery_record" && grant.audienceKind === undefined) {
           // no audience claim to check for this one tool.

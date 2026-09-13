@@ -6,12 +6,14 @@
 -- migration is needed. Every statement below is a brand-new CREATE TABLE;
 -- nothing here rebuilds an existing table, so the foreign-keys-off directive
 -- documented in packages/msp-storage/src/db/migrate.mjs and docs/MIGRATION.md
--- does not apply to this file (that file's own header wording still needs
--- to stop calling 0008 a `vaults` rebuild -- see docs/NOTES.md). This
--- migration is checksum-locked once merged (packages/msp-storage/src/db/
--- migrate.mjs's drift guard) -- every correction from BOTH rounds of
--- RKOI's review is folded in here rather than shipped as a follow-up
--- migration.
+-- does not apply to this file (both of those files' own header wording, and
+-- docs/NOTES.md's known-facts note, were corrected to stop calling 0008 a
+-- `vaults` rebuild -- that name now belongs only to
+-- docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md's still-unshipped,
+-- separately-numbered migration). This migration is checksum-locked once
+-- merged (packages/msp-storage/src/db/migrate.mjs's drift guard) -- every
+-- correction from every round of RKOI's review is folded in here rather
+-- than shipped as a follow-up migration.
 --
 -- Zuri owns channel identity and authorization; MSP owns the durable thread
 -- lifecycle, speaker references, bounded recent exchanges and the
@@ -92,6 +94,18 @@ WHEN NEW.status IS NOT OLD.status
 BEGIN
   SELECT RAISE(ABORT, 'threads.status may only transition ACTIVE -> CLOSED')
   WHERE NOT (OLD.status = 'ACTIVE' AND NEW.status = 'CLOSED');
+END;
+
+-- RKOI code review round 2, WARNING 7: a `threads` row must never be
+-- DELETEd -- every other table in this file references thread_id (directly
+-- or transitively), and closing a thread already has a dedicated,
+-- audit-preserving path (status ACTIVE -> CLOSED, above). This closes the
+-- gap left when every OTHER durable table in this migration got its own
+-- no-delete trigger but `threads` itself did not.
+CREATE TRIGGER trg_threads_no_delete
+BEFORE DELETE ON threads
+BEGIN
+  SELECT RAISE(ABORT, 'threads rows may never be deleted');
 END;
 
 -- Append-only membership rows. A row's identity, thread, speaker and join
@@ -249,6 +263,15 @@ CREATE TABLE thread_messages (
 
 CREATE INDEX idx_thread_messages_exchange ON thread_messages (thread_id, exchange_id, sequence);
 CREATE INDEX idx_thread_messages_session ON thread_messages (session_id, sequence);
+-- RKOI code review round 2, WARNING 3: the cross-thread exchange_id check in
+-- trg_thread_messages_tenant_consistency below filters on exchange_id ALONE
+-- (it does not yet know which thread_id the existing row belongs to -- that
+-- is exactly what it is checking) then compares thread_id, so it cannot use
+-- idx_thread_messages_exchange, which leads with thread_id. This index
+-- leads with exchange_id so that lookup is a single index seek instead of a
+-- full table scan (confirmed via EXPLAIN QUERY PLAN on the exact trigger
+-- query, in tests/integration/thread-memory-schema-invariants.test.mjs).
+CREATE INDEX idx_thread_messages_exchange_lookup ON thread_messages (exchange_id, thread_id);
 
 CREATE TRIGGER trg_thread_messages_tenant_consistency
 BEFORE INSERT ON thread_messages
@@ -511,6 +534,15 @@ BEFORE INSERT ON thread_delivery_receipts
 BEGIN
   SELECT RAISE(ABORT, 'thread_delivery_receipts.tenant_id must match its message''s thread tenant_id')
   WHERE NEW.tenant_id IS NOT (SELECT t.tenant_id FROM thread_messages m JOIN threads t ON t.thread_id = m.thread_id WHERE m.message_id = NEW.message_id);
+
+  -- RKOI code review round 2, WARNING 7: a delivery receipt's target
+  -- message is, by definition, the reply that WAS delivered -- it can only
+  -- ever be an OUTBOUND message. Nothing upstream currently mints a
+  -- receipt against an INBOUND message_id, but this makes that impossible
+  -- at the schema layer too, matching every other cross-reference
+  -- integrity trigger in this file.
+  SELECT RAISE(ABORT, 'thread_delivery_receipts.message_id must name an OUTBOUND message')
+  WHERE NOT EXISTS (SELECT 1 FROM thread_messages m WHERE m.message_id = NEW.message_id AND m.direction = 'OUTBOUND');
 END;
 
 CREATE TRIGGER trg_thread_delivery_receipts_tombstone_only
@@ -555,6 +587,14 @@ BEFORE INSERT ON thread_injection_receipts
 BEGIN
   SELECT RAISE(ABORT, 'thread_injection_receipts.tenant_id must match its thread''s tenant_id')
   WHERE NEW.tenant_id IS NOT (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+
+  -- RKOI code review round 2, WARNING 7: an injection receipt's exchange_id
+  -- must belong to ITS OWN thread_id, matching the same cross-reference
+  -- rule thread_messages.exchange_id already enforces -- an injection
+  -- cannot be recorded against an exchange that in fact happened on a
+  -- different thread.
+  SELECT RAISE(ABORT, 'thread_injection_receipts.exchange_id must belong to thread_id')
+  WHERE NOT EXISTS (SELECT 1 FROM thread_messages m WHERE m.exchange_id = NEW.exchange_id AND m.thread_id = NEW.thread_id);
 
   SELECT RAISE(ABORT, 'thread_injection_receipts must be first inserted as RESOLVED')
   WHERE NEW.state <> 'RESOLVED';
@@ -654,15 +694,22 @@ BEGIN
   WHERE NEW.tenant_id IS NOT (SELECT tenant_id FROM session_summaries WHERE summary_id = NEW.summary_id);
 END;
 
--- RKOI review (3rd round / docs probes), item 1 (V3): pin tenant_id (and
--- summary_id, its PRIMARY KEY) on UPDATE. Nothing in this module ever
--- UPDATEs this table today (only INSERT OR IGNORE and reads), so this is
--- pure defense in depth.
+-- RKOI review (3rd round / docs probes), item 1 (V3), tightened by RKOI
+-- code review round 2, WARNING 7: the WHOLE row is immutable, not just
+-- tenant_id/summary_id (its PRIMARY KEY) -- reason and recorded_at pinned
+-- too, since a recorded invalidation is a fact about what was observed at
+-- write time and must never be edited after the fact. Nothing in this
+-- module ever UPDATEs this table today (writes go through
+-- `INSERT ... ON CONFLICT(summary_id) DO NOTHING`, and everything else is a
+-- read), so this remains pure defense in depth.
 CREATE TRIGGER trg_thread_summary_invalidations_pin_identity
 BEFORE UPDATE ON thread_summary_invalidations
-WHEN NEW.tenant_id IS NOT OLD.tenant_id OR NEW.summary_id IS NOT OLD.summary_id
+WHEN NEW.tenant_id IS NOT OLD.tenant_id
+  OR NEW.summary_id IS NOT OLD.summary_id
+  OR NEW.reason IS NOT OLD.reason
+  OR NEW.recorded_at IS NOT OLD.recorded_at
 BEGIN
-  SELECT RAISE(ABORT, 'thread_summary_invalidations.summary_id/tenant_id are immutable');
+  SELECT RAISE(ABORT, 'thread_summary_invalidations rows are immutable');
 END;
 
 CREATE TRIGGER trg_thread_summary_invalidations_no_delete

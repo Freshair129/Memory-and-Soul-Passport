@@ -167,8 +167,36 @@ function translateTriggerError(error) {
   if (/record_subject_mismatch:/.test(error.message)) {
     throw new RecordSubjectMismatchError(error.message.replace(/^.*record_subject_mismatch:\s*/, ""));
   }
-  if (/tenant_id must match|session_id must belong to|must be a CURRENT participant/.test(error.message)) {
+  if (
+    /tenant_id must match|session_id must belong to|must be a CURRENT participant|exchange_id must belong to thread_id|must name an OUTBOUND message/.test(
+      error.message,
+    )
+  ) {
     throw new ThreadMemoryValidationError(error.message.replace(/^.*?:\s*/, ""));
+  }
+  // RKOI code review round 2, WARNING 3: these two RAISE(ABORT) triggers
+  // (trg_thread_messages_tenant_consistency's exchange_id and
+  // reply_to_message_id checks) were not yet recognized here, so they fell
+  // through to the generic `throw error` below and leaked a raw
+  // SqliteError/trigger-text string to the caller instead of the module's
+  // typed vocabulary.
+  //
+  // exchange_id is, like message_id/receipt_id/injection_id, a caller-
+  // supplied identifier that must behave as a single GLOBAL namespace (the
+  // trigger's entire purpose is refusing a second thread's claim on an
+  // exchange_id already used by a first) -- so a collision here gets
+  // mapped to the exact SAME generic conflict message as any other id
+  // collision below, never naming the other tenant or thread, for the same
+  // no-existence-oracle reason.
+  if (/exchange_id was previously used on a different thread/.test(error.message)) {
+    throw new ThreadMemoryConflictError("That identifier is already in use.");
+  }
+  // reply_to_message_id is thread-scoped by construction (the query behind
+  // this trigger is `WHERE ... AND thread_id = NEW.thread_id`), so this is
+  // always a validation problem with the caller's own request, never
+  // information about another tenant.
+  if (/reply_to_message_id must name a message of the same thread/.test(error.message)) {
+    throw new ThreadMemoryValidationError("reply_to_message_id does not name a message of this thread.");
   }
   // RKOI review, 2nd round, WARNING 3 (W6 leftover): message_id, receipt_id
   // and injection_id are caller-supplied, global primary keys. A collision
@@ -446,7 +474,17 @@ export class ThreadMemoryStore {
       .prepare("SELECT * FROM threads WHERE tenant_id = ? AND channel_account_id = ? AND external_room_ref_hmac = ? AND status = 'ACTIVE'")
       .get(tenant, account, roomHmac);
     if (existing) {
-      if (existing.business_id !== business || existing.thread_kind !== kind) {
+      // RKOI code review round 2, WARNING 1 (DEC-MEMOS-16, adopted default
+      // pending owner confirmation): the room-hash binding
+      // (tenant_id, channel_account_id, external_room_ref_hmac) does not
+      // encode channel_type (see hmacRoomRef's header comment -- deliberate,
+      // since zuri-ai's delivery grant never sends one). That means a
+      // resolve naming a DIFFERENT channel_type than the thread that
+      // already owns this binding can never be treated as "the same
+      // thread" -- it must be refused as a typed conflict, exactly like a
+      // business_id or thread_kind mismatch, never silently returning the
+      // other channel's thread under the caller's own requested kind.
+      if (existing.business_id !== business || existing.thread_kind !== kind || existing.channel_type !== channel) {
         throw new ThreadMemoryConflictError("The channel binding already belongs to a different thread scope.");
       }
       this.#db.prepare("UPDATE threads SET updated_at = ? WHERE thread_id = ?").run(timestamp, existing.thread_id);
@@ -480,7 +518,9 @@ export class ThreadMemoryStore {
         .prepare("SELECT * FROM threads WHERE tenant_id = ? AND channel_account_id = ? AND external_room_ref_hmac = ? AND status = 'ACTIVE'")
         .get(tenant, account, roomHmac);
       if (!raced) throw error;
-      if (raced.business_id !== business || raced.thread_kind !== kind) {
+      // Same DEC-MEMOS-16 check as the initial lookup above, applied to the
+      // UNIQUE-constraint race-retry read.
+      if (raced.business_id !== business || raced.thread_kind !== kind || raced.channel_type !== channel) {
         throw new ThreadMemoryConflictError("The channel binding already belongs to a different thread scope.");
       }
       return { thread: rowThread(raced), created: false };
@@ -572,6 +612,21 @@ export class ThreadMemoryStore {
       if (active && active.thread_id !== thread.threadId) throw new ThreadMemoryConflictError("session_id does not belong to thread_id.");
       if (sessionId && referencedExchange && sessionId !== referencedExchange.session_id) throw new ThreadMemoryConflictError('Exchange belongs to a different session.');
       if (referencedExchange && active?.status === 'CLOSED' && !reconcileDelivery) throw new ThreadMemoryConflictError('Cannot append to a sealed session.');
+      // RKOI code review round 2, WARNING 5: a caller that names an
+      // explicit, no-longer-open session_id with no exchange reference
+      // (the OUTBOUND-via-exchange case is already covered by the
+      // "Exchange belongs to a different session" check above) would
+      // otherwise fall through to the auto-rotation branch below, which
+      // silently creates a brand-new OPEN session, ignoring the one the
+      // caller actually named. If a DIFFERENT session for this thread is
+      // already OPEN by the time that runs, the new session's INSERT
+      // collides with idx_chat_sessions_one_open and used to surface as a
+      // raw UNIQUE-constraint conflict ("That identifier is already in
+      // use."), which says nothing about the real problem. Answer with a
+      // typed, specific error instead, before that fallback ever runs.
+      if (!referencedExchange && sessionId && active && active.status !== 'OPEN') {
+        throw new ThreadMemoryConflictError('session_id names a session that is not open.');
+      }
       let session = active;
       if (messageDirection === 'INBOUND' && exchangeId) {
         const previous = this.#db.prepare('SELECT session_id FROM thread_messages WHERE thread_id=? AND exchange_id=? LIMIT 1').get(thread.threadId, exchangeId);
@@ -1010,8 +1065,31 @@ export class ThreadMemoryStore {
       if (!scope?.tenantId || !scope.channelAccountId || !scope.externalRoomRef) throw new ThreadMemoryValidationError('Delivery scope is required.');
       const roomHmac = this.#hmacRoomRef({ tenantId: scope.tenantId, channelAccountId: scope.channelAccountId, externalRoomRef: scope.externalRoomRef });
       const old = this.#db.prepare('SELECT * FROM thread_pending_deliveries WHERE receipt_id=?').get(id);
-      if (old && (old.inbound_message_id !== inboundId || old.tenant_id !== scope.tenantId || old.business_id !== (scope.businessId ?? null) ||
-        old.channel_account_id !== scope.channelAccountId || old.external_room_ref_hmac !== roomHmac || old.text !== body || old.outcome !== state)) throw new ThreadMemoryConflictError('Pending receipt retry differs.');
+      if (old) {
+        // RKOI code review round 2, WARNING 4: a receipt_id colliding with
+        // a DIFFERENT tenant's pending delivery answers with the exact same
+        // generic conflict text every other caller-supplied global id
+        // collision uses (message_id/exchange_id/injection_id) -- never a
+        // scenario-specific message a caller could use to tell "this id
+        // belongs to someone else" apart from "this id is my own but with
+        // different content". This is cheap to fix and does not change the
+        // outcome (still a conflict either way), only the message text.
+        // It does NOT hide the residual existence-oracle inherent to any
+        // globally unique caller-supplied id: a truly UNUSED receipt_id
+        // still succeeds outright as PENDING_INBOUND below, so a caller can
+        // still tell "taken" from "free" by outcome alone. receipt_id has
+        // no stage-1 keyring binding it to a tenant before this call, so
+        // that residual gap is recorded, not fixed, per RKOI's explicit
+        // choice of "leave as a named stage-1 gap" for whichever part of
+        // this is not cheap -- see docs/GATE-A.md.
+        if (old.tenant_id !== scope.tenantId) {
+          throw new ThreadMemoryConflictError('That identifier is already in use.');
+        }
+        if (old.inbound_message_id !== inboundId || old.business_id !== (scope.businessId ?? null) ||
+          old.channel_account_id !== scope.channelAccountId || old.external_room_ref_hmac !== roomHmac || old.text !== body || old.outcome !== state) {
+          throw new ThreadMemoryConflictError('Pending receipt retry differs.');
+        }
+      }
       // RKOI review (docs round 4), item 2: ON CONFLICT(receipt_id), not OR
       // IGNORE, so this only ever suppresses the intended idempotent-retry
       // collision on receipt_id -- never a NOT NULL violation on tenant_id.
