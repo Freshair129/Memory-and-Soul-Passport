@@ -7,6 +7,7 @@
 // responsibility (msp-core): it already HMACs every actor before writing an
 // entry, so this file never calls journal.append itself.
 import { ThreadMemoryStore } from "@freshair129/msp-core/thread-memory";
+import { ThreadValidationError } from "@freshair129/msp-core/errors";
 
 /**
  * @param {object} options
@@ -23,7 +24,8 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
   const bounded = (value, ceiling, label) => {
     if (value === undefined || value === null) return ceiling;
     if (!Number.isInteger(value) || value < 1 || value > ceiling) {
-      throw new Error(`${label} exceeds the MSP deployment policy ceiling.`);
+      // RKOI review (2nd round), WARNING 5: a typed error, not a raw Error.
+      throw new ThreadValidationError(`${label} exceeds the MSP deployment policy ceiling.`);
     }
     return value;
   };

@@ -11,12 +11,18 @@
 // surface: every registered tool is wrapped here before dispatch, mirroring
 // how contracts/vault-scope-guard.mjs's assertVaultScope is orchestrated by
 // a transport/handlers/*.mjs module for the vault surface.
-import { ThreadRegistry } from "@freshair129/msp-core/thread-memory";
+import { hmacRoomRef, ThreadRegistry } from "@freshair129/msp-core/thread-memory";
 import { ThreadAudienceMismatchError } from "@freshair129/msp-core/errors";
 import { assertThreadScope, verifyThreadGrant } from "@freshair129/msp-contracts/thread-access";
 import { validateThreadContract } from "@freshair129/msp-contracts/thread-schema";
 
 const ASSURANCE_RANK = { UNRESOLVED: 0, PENDING: 1, VERIFIED: 2 };
+
+// RKOI review (2nd round), WARNING 3: the SAME message for "no thread
+// resolves at all" and "a thread resolves, but not to this grant's scope" --
+// a caller must never be able to tell "that id does not exist" apart from
+// "that id belongs to someone else" from the error text alone.
+const SCOPE_MESSAGE = "thread_scope_denied: the request does not resolve to a thread this grant can access.";
 
 function threadLookupFor(registry, name, input) {
   if (input.thread_id) return registry.findThreadById(input.thread_id);
@@ -35,9 +41,13 @@ function threadLookupFor(registry, name, input) {
  *   @freshair129/msp-contracts/thread-access's verifyThreadGrant. Stage 1
  *   always resolves to the single MSP_THREAD_SERVICE_KEY; stage 2 can add a
  *   real keyring here without changing this guard.
+ * @param {string} options.identityHmacKey MSP_IDENTITY_HMAC_KEY -- used ONLY
+ *   to recompute a grant's own room hash for the WARNING 1 room check below;
+ *   every OTHER identity hash (room ref at write time, journal actor) stays
+ *   msp-core's job.
  * @param {() => number} [options.clock]
  */
-export function createThreadGuard({ db, key, clock = Date.now }) {
+export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }) {
   const registry = new ThreadRegistry(db);
 
   return function guardThreadHandler({ name, handler }) {
@@ -66,10 +76,14 @@ export function createThreadGuard({ db, key, clock = Date.now }) {
             (input.business_id ?? null) === (grant.businessId ?? null) &&
             input.channel_account_id === grant.channelAccountId &&
             input.external_room_ref === grant.externalRoomRef,
-          "thread_scope_denied: the resolve request does not match the grant's channel scope.",
+          SCOPE_MESSAGE,
         );
         // RKOI review, item 1: on mint, thread_kind, audience_kind (when
         // sent) and the grant's own audienceKind claim must all agree.
+        // zuri-ai's resolve grant always carries audienceKind (its port's
+        // resolveThread signs `audienceKind: audience` unconditionally), so
+        // this check is unconditional here, unlike the existing-thread
+        // check below.
         if (
           input.thread_kind !== grant.audienceKind ||
           (input.audience_kind !== undefined && input.audience_kind !== null && input.audience_kind !== input.thread_kind)
@@ -84,19 +98,50 @@ export function createThreadGuard({ db, key, clock = Date.now }) {
             thread.tenantId === grant.tenantId &&
             thread.businessId === (grant.businessId ?? null) &&
             thread.channelAccountId === grant.channelAccountId,
-          "thread_scope_denied: the thread does not match the grant's channel scope.",
+          SCOPE_MESSAGE,
         );
-        // RKOI review, item 1: on every later call against an existing
-        // thread, the grant's audienceKind must match the thread's own
-        // (immutable) thread_kind. ROOT behaves exactly like GROUP here --
-        // neither is DIRECT, so neither ever reaches a private read below.
-        if (grant.audienceKind !== thread.audienceKind) {
+        // RKOI review (2nd round), WARNING 1: channel_account_id equality
+        // alone is not enough -- many threads can share one
+        // channel_account_id (many rooms under one LINE OA). The grant's
+        // OWN room (tenantId|channelAccountId|externalRoomRef) must hash to
+        // the SAME value as this specific thread's stored hash, for EVERY
+        // thread-bound tool, including compaction claim/commit/retry via
+        // the job's thread. Without this, a grant scoped to room "dm-b"
+        // (or an operator's own distinct room) could act on, or read, a
+        // DIFFERENT room's thread as long as the channel account matched.
+        // Skipped only when the grant carries no externalRoomRef at all
+        // (never true for zuri-ai's real grants; kept defensive for a
+        // theoretical future caller).
+        if (grant.externalRoomRef) {
+          const grantRoomHmac = hmacRoomRef(identityHmacKey, {
+            tenantId: grant.tenantId,
+            channelAccountId: grant.channelAccountId,
+            externalRoomRef: grant.externalRoomRef,
+          });
+          assertThreadScope(grantRoomHmac === thread.externalRoomRefHmac, SCOPE_MESSAGE);
+        }
+        // RKOI review (docs round 4), replacing the "skip when absent" rule
+        // from the earlier round: audienceKind is REQUIRED on every later
+        // call against an existing thread EXCEPT msp_thread_delivery_record
+        // -- zuri-ai's own port sends it on the other five tools
+        // (resolveThread, appendMessage, context, recordProtectedMemory,
+        // recordInjection's claimsFor route). msp_thread_delivery_record's
+        // grant never carries one (verified against zuri-ai origin/main's
+        // createMspThreadMemoryPort#recordDelivery) -- its scope comes from
+        // the inbound message's own thread plus the room-hash check above,
+        // so the audience check is skipped ONLY when the claim is genuinely
+        // absent; a delivery grant that DOES carry audienceKind is still
+        // checked. ROOT behaves exactly like GROUP here -- neither is
+        // DIRECT, so neither ever reaches a private read below.
+        if (name === "msp_thread_delivery_record" && grant.audienceKind === undefined) {
+          // no audience claim to check for this one tool.
+        } else if (grant.audienceKind === undefined || grant.audienceKind !== thread.audienceKind) {
           throw new ThreadAudienceMismatchError(
             `the grant's audienceKind ("${grant.audienceKind}") does not match this thread's own kind ("${thread.audienceKind}").`,
           );
         }
       } else if (!["msp_session_sweep", "msp_thread_delivery_record"].includes(name)) {
-        assertThreadScope(false, "thread_scope_denied: unknown thread reference.");
+        assertThreadScope(false, SCOPE_MESSAGE);
       }
 
       if (name === "msp_thread_context") {
@@ -115,45 +160,56 @@ export function createThreadGuard({ db, key, clock = Date.now }) {
         input.requester_speaker_id = grant.principalId;
       }
 
-      if (name === "msp_thread_message_append") {
-        // A HUMAN append must always speak as the grant principal, UNLESS
-        // the grant carries an explicit assertParticipants claim asserting
-        // a change on someone else's behalf (RKOI review, item 2).
-        if (input.speaker_kind === "HUMAN") {
-          const current = registry.findCurrentParticipant(thread.threadId, input.speaker_id);
-          if (!current) {
-            // The FIRST-EVER membership for this speaker_id is always
-            // bound to the grant principal -- never caller-asserted, even
-            // under assertParticipants. zuri-ai's frozen flow (resolve,
-            // then a HUMAN append, no separate "join" tool) depends on
-            // this succeeding with no extra claim.
+      if (name === "msp_thread_message_append" && input.speaker_kind === "HUMAN") {
+        // RKOI review (2nd round), WARNING 2: person_id may never name
+        // anyone but the grant's own principal, whether creating a
+        // membership or changing one -- probe A9c minted person_id=bob
+        // under principal erin, which this closes unconditionally.
+        const requestedPerson = input.person_id ?? undefined;
+        assertThreadScope(
+          requestedPerson === undefined || requestedPerson === null || requestedPerson === grant.principalId,
+          "thread_scope_denied: person_id must be absent or equal to the grant principal.",
+        );
+
+        const current = registry.findCurrentParticipant(thread.threadId, input.speaker_id);
+        if (!current) {
+          // The FIRST-EVER membership for this speaker_id is always bound
+          // to the grant principal -- never caller-asserted, even under
+          // assertParticipants. zuri-ai's frozen flow (resolve, then a
+          // HUMAN append, no separate "join" tool) depends on this
+          // succeeding with no extra claim.
+          assertThreadScope(
+            input.speaker_id === grant.principalId,
+            "thread_scope_denied: the first HUMAN membership on a thread must be created by the grant principal.",
+          );
+        } else if (input.speaker_id !== grant.principalId) {
+          // Never self -- ANY touch to someone else's participant row,
+          // changed or not, requires an explicit assertion.
+          assertThreadScope(
+            grant.assertParticipants === true,
+            "thread_scope_denied: creating, upgrading or reassigning a HUMAN participant requires assertParticipants.",
+          );
+        } else {
+          // input.speaker_id === grant.principalId, and the REQUESTED
+          // person_id is already constrained above to {null,
+          // grant.principalId}. RKOI review (docs round 4), item 3
+          // (tightening DEC-MEMOS-15): the STORED row's person_id must be
+          // checked too, not just the value this request sends -- a self
+          // upgrade is free only when the participant record was not
+          // already linked to some OTHER person (however that happened).
+          // If it was, this still needs an explicit assertion even though
+          // speaker_id and the REQUESTED person_id both look self-
+          // referential. A downgrade (VERIFIED -> PENDING) reaches this
+          // same branch and is likewise never gated on its own --
+          // ThreadMemoryStore#applyHumanParticipant already treats a
+          // downgrade as no change at all, so it is accepted here and
+          // silently ignored there, never refused and never stored.
+          const storedPerson = current.personId ?? null;
+          if (storedPerson !== null && storedPerson !== grant.principalId) {
             assertThreadScope(
-              input.speaker_id === grant.principalId,
-              "thread_scope_denied: the first HUMAN membership on a thread must be created by the grant principal.",
+              grant.assertParticipants === true,
+              "thread_scope_denied: this participant's stored person_id already names someone else; upgrading requires assertParticipants.",
             );
-          } else {
-            // Omitting person_id on a routine follow-up append is "no
-            // change requested", never "unlink" -- only an EXPLICIT,
-            // different person_id counts as a change (matches
-            // ThreadMemoryStore#applyHumanParticipant's own
-            // `personId || existing.person_id` "keep unless explicitly
-            // replaced" semantics in msp-core).
-            const requestedPerson = input.person_id ?? undefined;
-            const requestedAssurance = input.identity_assurance;
-            const isChange =
-              (requestedPerson !== undefined && requestedPerson !== (current.personId ?? null)) ||
-              (ASSURANCE_RANK[requestedAssurance] ?? -1) > (ASSURANCE_RANK[current.identityAssurance] ?? -1);
-            if (isChange || input.speaker_id !== grant.principalId) {
-              // Continuing as an already-current, UNCHANGED participant
-              // needs no extra claim as long as the caller IS that
-              // principal. Anything else -- a state change, or speaking as
-              // a speaker_id that is not the grant's own principal at all
-              // -- requires an explicit assertParticipants claim.
-              assertThreadScope(
-                grant.assertParticipants === true,
-                "thread_scope_denied: creating, upgrading or reassigning a HUMAN participant requires assertParticipants.",
-              );
-            }
           }
         }
       }
@@ -185,8 +241,14 @@ export function createThreadGuard({ db, key, clock = Date.now }) {
 
       if (name === "msp_thread_delivery_record") {
         assertThreadScope(grant.deliveryWriter === true, "thread_scope_denied: delivery receipts require a deliveryWriter grant.");
+        // RKOI review (2nd round), CRITICAL 1: zuri-ai's own delivery grant
+        // (createMspThreadMemoryPort#recordDelivery) never carries a
+        // channelType claim -- requiring one made every delivery
+        // unreachable. The room hash no longer needs channel_type at all
+        // (see hmacRoomRef's header comment in msp-core/thread-memory.mjs),
+        // so channelType is no longer required, or even read, here.
         assertThreadScope(
-          !!grant.channelAccountId && !!grant.externalRoomRef && !!grant.channelType,
+          !!grant.channelAccountId && !!grant.externalRoomRef,
           "thread_scope_denied: the delivery grant is missing its channel scope.",
         );
         input.delivery_scope = {
@@ -194,7 +256,6 @@ export function createThreadGuard({ db, key, clock = Date.now }) {
           businessId: grant.businessId ?? null,
           channelAccountId: grant.channelAccountId,
           externalRoomRef: grant.externalRoomRef,
-          channelType: grant.channelType,
         };
       }
 
@@ -225,9 +286,21 @@ export function createThreadGuard({ db, key, clock = Date.now }) {
       // lease by lying about the time. This guard never itself decides that;
       // it only ever forwards `input` to the handler, which is where that
       // decision is actually enforced (createThreadHandlers).
-      const result = await handler(input);
-      validateThreadContract(name, result, "output");
-      return result;
+      //
+      // RKOI review (2nd round), WARNING 5: output validation against
+      // API-011.tools.json used to run here, AFTER `handler(input)` had
+      // already committed the domain's own DB transaction -- a mismatch
+      // could only ever be reported once the write had already happened,
+      // which is not a fail-closed check, only a late diagnostic. It is
+      // deliberately REMOVED rather than moved: the domain layer's
+      // responses are built exclusively by this module's own typed
+      // row-mappers (rowThread/rowMessage/etc in thread-memory.mjs), never
+      // by echoing untrusted input, so a mismatch here would mean a defect
+      // in that mapping code that already shipped -- an output check
+      // running after commit cannot prevent that, only report it after the
+      // fact, and input validation (still run above, before ANY write)
+      // remains the fail-closed half of contract enforcement.
+      return await handler(input);
     };
   };
 }

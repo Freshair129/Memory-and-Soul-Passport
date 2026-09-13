@@ -113,6 +113,20 @@ describe("standalone MSP workspace dependency boundaries", () => {
     expect(code).not.toMatch(/\bSELECT\b/i);
   });
 
+  // RKOI review (2nd round), WARNING 8: the `db`-parameter scan above only
+  // covered thread-access.mjs by name. Extended to every msp-contracts
+  // source file, matching the file-wide .prepare(/.exec(/.pragma( scan
+  // just below -- an injected `db` PARAMETER on any contracts/ function,
+  // even one not literally named thread-access.mjs, would be the same C-2
+  // coupling.
+  it("no msp-contracts source file accepts an injected db-handle parameter", () => {
+    for (const file of collectFiles(roots.contracts)) {
+      const code = stripComments(readFileSync(file, "utf8"));
+      expect(code, `${file} must not take a db parameter`).not.toMatch(/\bdb\s*[,)]/);
+      expect(code, `${file} must not call db.prepare`).not.toMatch(/\bdb\.prepare\b/);
+    }
+  });
+
   // RKOI review (post-implementation, item 13): scanning ONLY
   // thread-access.mjs's imports let the ORIGINAL C-2 finding pass this
   // suite, because that version's DB handle was INJECTED as a parameter

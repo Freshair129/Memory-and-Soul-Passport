@@ -88,7 +88,13 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   // MSP_THREAD_SERVICE_KEY, ignoring the (untrusted, pre-verification)
   // tenantId claim; stage 2 can add a real per-tenant keyring here without
   // changing thread-guard.mjs or thread-access.mjs.
-  const guardThreadHandler = createThreadGuard({ db, key: () => env.MSP_THREAD_SERVICE_KEY });
+  const guardThreadHandler = createThreadGuard({
+    db,
+    key: () => env.MSP_THREAD_SERVICE_KEY,
+    // RKOI review (2nd round), WARNING 1: the guard recomputes a grant's own
+    // room hash to compare against a resolved thread's stored one.
+    identityHmacKey: env.MSP_IDENTITY_HMAC_KEY ?? null,
+  });
 
   const toolRegistry = new ToolRegistry();
   toolRegistry.register("msp_ping", async () => ({ ok: true, timestamp: new Date().toISOString() }));
