@@ -180,3 +180,328 @@ describe("db/migrate (AC-03)", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM entities_fts WHERE entity_id = ?").get("msp:entity/fts-survival").count).toBe(0);
   });
 });
+
+// WP-E0: a migration file whose first line is exactly
+// "-- msp-migration: foreign-keys=off" gets the standard SQLite 12-step
+// parent-table rebuild procedure (PRAGMA foreign_keys=OFF outside the
+// transaction, PRAGMA foreign_key_check inside it before commit, PRAGMA
+// foreign_keys restored in a finally). These tests use their own temporary
+// migration directories -- the root migrations/ files are never touched;
+// their checksums are lineage evidence (docs/GATE-A.md).
+const FOREIGN_KEYS_OFF_DIRECTIVE = "-- msp-migration: foreign-keys=off";
+
+// 0001: a parent table with a narrow CHECK and a child table with a NOT
+// NULL foreign key into it.
+const parentChildInit = [
+  "CREATE TABLE parent (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('a')));",
+  "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));",
+].join("\n");
+
+// The 12-step rebuild body (steps 3-9 collapsed to what this schema needs):
+// create parent_new with a widened CHECK, copy every row, drop parent,
+// rename parent_new to parent. `excludeId` optionally drops one row from
+// the INSERT...SELECT to produce an orphaned child for the rollback case.
+function parentRebuildBody({ excludeId } = {}) {
+  const selectClause = excludeId ? ` WHERE id <> '${excludeId}'` : "";
+  return [
+    "CREATE TABLE parent_new (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('a', 'b')));",
+    `INSERT INTO parent_new (id, kind) SELECT id, kind FROM parent${selectClause};`,
+    "DROP TABLE parent;",
+    "ALTER TABLE parent_new RENAME TO parent;",
+  ].join("\n");
+}
+
+function withDirective(body) {
+  return `${FOREIGN_KEYS_OFF_DIRECTIVE}\n${body}`;
+}
+
+// The UNSAFE "rename the old table away" rebuild order. SQLite rewrites a
+// child table's REFERENCES clause to follow a RENAME of the table it
+// names, regardless of PRAGMA foreign_keys, so this leaves `child` pointing
+// at `parent_old`, which is then dropped -- PRAGMA foreign_key_check alone
+// cannot catch this when `child` is empty, since it only inspects existing
+// rows. This is exactly what the structural check exists to reject.
+function renameAwayRebuildBody() {
+  return [
+    "ALTER TABLE parent RENAME TO parent_old;",
+    "CREATE TABLE parent (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('a', 'b')));",
+    "INSERT INTO parent (id, kind) SELECT id, kind FROM parent_old;",
+    "DROP TABLE parent_old;",
+  ].join("\n");
+}
+
+function seedParentAndChildRows(db) {
+  db.prepare("INSERT INTO parent (id, kind) VALUES ('p1', 'a')").run();
+  db.prepare("INSERT INTO parent (id, kind) VALUES ('p2', 'a')").run();
+  db.prepare("INSERT INTO child (id, parent_id) VALUES (1, 'p1')").run();
+  db.prepare("INSERT INTO child (id, parent_id) VALUES (2, 'p2')").run();
+}
+
+// Applies migration 0001 alone (the parent/child schema), seeds rows into
+// it, then drops migration 0002 into the same directory so it is applied
+// against an already-populated database -- exactly the ordering that makes
+// the foreign-keys=off mode necessary in the first place.
+function initAndPopulate(migrationsDir, db) {
+  runMigrations(db, migrationsDir);
+  seedParentAndChildRows(db);
+}
+
+function addMigration0002(migrationsDir, sql) {
+  writeFileSync(path.join(migrationsDir, "0002_widen_parent_kind.sql"), sql, "utf8");
+}
+
+describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
+  it("rebuilds a populated parent table: every parent/child row survives, foreign_key_check is empty, the FK still resolves, foreign_keys is restored to 1, user_version is 2, and both migrations are recorded", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(migrationsDir, withDirective(parentRebuildBody()));
+
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(1);
+
+    expect(db.prepare("SELECT id, kind FROM parent ORDER BY id").all()).toEqual([
+      { id: "p1", kind: "a" },
+      { id: "p2", kind: "a" },
+    ]);
+    expect(db.prepare("SELECT id, parent_id FROM child ORDER BY id").all()).toEqual([
+      { id: 1, parent_id: "p1" },
+      { id: 2, parent_id: "p2" },
+    ]);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }, { version: 2 }]);
+
+    // The rebuilt parent table's REFERENCES clause on child still resolves:
+    // a bogus parent_id is refused.
+    expect(() => db.prepare("INSERT INTO child (id, parent_id) VALUES (3, 'does-not-exist')").run()).toThrow(
+      /FOREIGN KEY constraint failed/i,
+    );
+
+    // The widened CHECK actually took effect.
+    expect(() => db.prepare("INSERT INTO parent (id, kind) VALUES ('p3', 'b')").run()).not.toThrow();
+  });
+
+  it("rolls back a rebuild that would orphan a child row: throws SchemaVersionError prefixed migration_foreign_key_check_failed, naming the table, leaves schema_migrations/user_version/table contents unchanged, and restores foreign_keys to 1", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    // Rebuild that drops 'p1' from the copy while child row 1 still
+    // references it -- an orphan.
+    addMigration0002(migrationsDir, withDirective(parentRebuildBody({ excludeId: "p1" })));
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:.*"child"/s);
+
+    // Not recorded, not bumped.
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    expect(db.pragma("user_version", { simple: true })).toBe(1);
+
+    // Table contents unchanged -- both parent rows and both child rows.
+    expect(db.prepare("SELECT id, kind FROM parent ORDER BY id").all()).toEqual([
+      { id: "p1", kind: "a" },
+      { id: "p2", kind: "a" },
+    ]);
+    expect(db.prepare("SELECT id, parent_id FROM child ORDER BY id").all()).toEqual([
+      { id: 1, parent_id: "p1" },
+      { id: 2, parent_id: "p2" },
+    ]);
+
+    // The whole transaction rolled back, not just the parts that failed: no
+    // leftover parent_new, and the original narrow CHECK is back in force.
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'parent_new'").all()).toEqual([]);
+    expect(() => db.prepare("INSERT INTO parent (id, kind) VALUES ('p3', 'b')").run()).toThrow(/CHECK constraint failed/i);
+
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  it("rejects the unsafe rename-away rebuild order even with an EMPTY child table -- PRAGMA foreign_key_check alone cannot catch this", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    runMigrations(db, migrationsDir);
+    // Populate ONLY parent -- child stays empty, which is exactly the case
+    // the row-level PRAGMA foreign_key_check cannot catch on its own.
+    db.prepare("INSERT INTO parent (id, kind) VALUES ('p1', 'a')").run();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM child").get().count).toBe(0);
+
+    addMigration0002(migrationsDir, withDirective(renameAwayRebuildBody()));
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:.*"child".*"parent_old"/s);
+
+    // Not recorded, not bumped.
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    expect(db.pragma("user_version", { simple: true })).toBe(1);
+
+    // Rolled back: child's schema still says REFERENCES parent, not
+    // parent_old, and parent itself is still the original table.
+    const childSchema = db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'child'").get();
+    expect(childSchema.sql).toMatch(/REFERENCES parent\s*\(\s*id\s*\)/);
+    expect(db.prepare("SELECT id, kind FROM parent").all()).toEqual([{ id: "p1", kind: "a" }]);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  it("refuses to blame a directive migration for a pre-existing foreign-key violation it did not create", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+
+    // Corrupt the database out-of-band, unrelated to any migration: delete
+    // a referenced parent row directly while foreign keys are off, so the
+    // violation predates this migration entirely.
+    db.pragma("foreign_keys = OFF");
+    db.prepare("DELETE FROM parent WHERE id = 'p1'").run();
+    db.pragma("foreign_keys = ON");
+    expect(db.pragma("foreign_key_check")).toHaveLength(1);
+
+    // A directive migration that does not even touch parent or child.
+    addMigration0002(migrationsDir, withDirective("CREATE TABLE unrelated (id INTEGER PRIMARY KEY);"));
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_preexisting_foreign_key_violation:.*"child"/s);
+
+    // The migration never got the chance to run -- not recorded, and its
+    // CREATE TABLE never executed.
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'unrelated'").all()).toEqual([]);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  it("refuses a directive migration that runs while the connection is already inside a transaction", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(migrationsDir, withDirective(parentRebuildBody()));
+
+    expect(() =>
+      db.transaction(() => {
+        runMigrations(db, migrationsDir);
+      })(),
+    ).toThrow(/^migration_foreign_key_check_failed:.*already inside a transaction/s);
+  });
+
+  it("without the directive, the same populated rebuild fails on the plain path -- this is the reason the mode exists", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(migrationsDir, parentRebuildBody());
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/FOREIGN KEY constraint failed/i);
+
+    // Rolled back: only 0001 is recorded, and the original parent table
+    // (narrow CHECK, original rows) is still in place.
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    expect(db.pragma("user_version", { simple: true })).toBe(1);
+    expect(() => db.prepare("INSERT INTO parent (id, kind) VALUES ('p3', 'b')").run()).toThrow(/CHECK constraint failed/i);
+  });
+
+  it("a directive not on the first line is not a directive -- it is refused outright as misplaced, not silently run on the plain path", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(
+      migrationsDir,
+      ["-- a leading comment pushes the directive off the first line", FOREIGN_KEYS_OFF_DIRECTIVE, parentRebuildBody()].join(
+        "\n",
+      ),
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_directive_misplaced:.*"0002_widen_parent_kind\.sql"/s,
+    );
+
+    // Never even attempted: not recorded, user_version unchanged, parent
+    // table untouched.
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    expect(db.pragma("user_version", { simple: true })).toBe(1);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  it("a UTF-8 BOM before an otherwise-exact directive on line 1 is refused as misplaced too", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(migrationsDir, `﻿${withDirective(parentRebuildBody())}`);
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_directive_misplaced:/);
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  it("leading/trailing whitespace and different casing on an otherwise-exact directive line are refused as misplaced too", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(migrationsDir, withDirective(parentRebuildBody()).toUpperCase());
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_directive_misplaced:/);
+  });
+
+  it("idempotency: a second runMigrations over the same directory applies 0 migrations and leaves foreign_keys at 1", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(migrationsDir, withDirective(parentRebuildBody()));
+    runMigrations(db, migrationsDir);
+
+    const second = runMigrations(db, migrationsDir);
+    expect(second.appliedCount).toBe(0);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  it("the checksum-drift guard covers the directive line itself", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(migrationsDir, withDirective(parentRebuildBody()));
+    runMigrations(db, migrationsDir);
+
+    // Rewrite the already-applied 0002 file with the directive removed --
+    // same rebuild SQL, different first line -- and the checksum no longer
+    // matches what was recorded when it was applied.
+    addMigration0002(migrationsDir, parentRebuildBody());
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/checksum drift/i);
+  });
+
+  it("restores foreign_keys to whatever it was before the migration ran, even when that was already OFF", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(migrationsDir, withDirective(parentRebuildBody()));
+
+    db.pragma("foreign_keys = OFF");
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(0);
+
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(1);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    // Restored to what it was BEFORE this migration ran, not forced to ON.
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(0);
+  });
+});
