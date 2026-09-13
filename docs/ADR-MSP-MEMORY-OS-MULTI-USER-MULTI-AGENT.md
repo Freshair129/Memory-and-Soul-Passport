@@ -1,7 +1,7 @@
 ---
-version: "0.1.3b"
+version: "0.1.4b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-14T21:00:00+07:00,ATHER"
+last_update: "2026-09-15T00:00:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -72,6 +72,26 @@ same list; the assurance-upgrade item is now stated as resolved MSP-side
 by DEC-MEMOS-15 (no zuri-ai change needed for the normal case), and the
 relink item is unchanged — it still needs a zuri-ai-side caller and stays
 on the activation gate.
+
+## Revision note — RKOI round four, APPROVED with 9 warnings (2026-09-15)
+
+RKOI reviewed the docs at commit `1c4a62f` and **approved them with 0
+critical findings**, asking that nine warnings be folded in before merge —
+the first round that is not a rejection. The warning most relevant to this
+ADR: **DEC-MEMOS-15 needed tightening** (design §7 rule 2 corrected to
+check the *stored* participant row's `person_id`, not only the incoming
+value, and to state plainly that the self-upgrade closes the old row and
+inserts a new one in one transaction — not an implementation choice, since
+the append-only trigger permits nothing else). This ADR's decision 15 and
+owner checklist item 15 are updated to match. Also folded in: the
+`RSK-MEMOS-01` cross-repo list now states the `personId`-change lock-up
+mechanism directly in the risk row itself (previously only pointed at from
+here without actually being recorded there); every citation of RKOI's
+session-scratch probe scripts is removed from the evidence map, since
+those files were never part of this repository. A cross-room authorization
+gap with no prior backlog row (`BL-MEMOS-111`, design §6.3/§12.1/§15) was
+also found in this round, on the code side rather than this ADR's own
+content.
 
 ## Context
 
@@ -243,21 +263,36 @@ of these is a final owner ruling.
 15. **DEC-MEMOS-15, assurance self-upgrade needs no claim.** A later
     append's `PENDING → VERIFIED` transition is accepted with no
     `assertParticipants` only when `speaker_id === grant.principalId`,
-    `speaker_kind === HUMAN`, `person_id ∈ { null, grant.principalId }`,
-    and the membership updated is that principal's own current row. A
-    later append's `VERIFIED → PENDING` is silently ignored, never stored
-    and never refused. Every other assurance or membership change still
-    requires `assertParticipants`. This exists because zuri-ai sends
-    `identity_assurance: VERIFIED` with `person_id = principalId` the
-    instant a user is verified (`server-line-answer.js:186-199`), on an
-    ordinary follow-up append that structurally cannot carry
-    `assertParticipants` — without this rule a `DIRECT` thread becomes
-    permanently unwritable past first verification. **Open risk**: if
-    zuri-ai's `principal.personId` itself changes at verification (rather
-    than staying equal to the existing `principalId`), the lifetime
-    single-`HUMAN` trigger locks the thread until the relink caller (item
-    4 of the cross-repo change list below) exists — recorded in
-    `RSK-MEMOS-01`. — *adopted default, pending owner confirmation.*
+    `speaker_kind === HUMAN`, `person_id ∈ { null, grant.principalId }` on
+    the **incoming request**, **and (tightened, RKOI round four) the
+    *stored* current membership row's own `person_id` is likewise `∈ {
+    null, grant.principalId }`** — checking only the incoming value would
+    let a row whose stored `person_id` already names someone else slip
+    through on a claim-free append. The membership updated must be that
+    principal's own current row, and **the transition is a mandatory
+    close-old-row-plus-insert-new-row in one transaction, not an
+    implementation choice** — the append-only trigger permits only
+    `left_at NULL → NOT NULL`, so there is no `UPDATE` path by which
+    `identity_assurance` could change in place at all. A later append's
+    `VERIFIED → PENDING` is silently ignored, never stored and never
+    refused — which also means MSP's own participant state does not
+    implement revocation: if zuri-ai later de-verifies this person, MSP's
+    row simply stays `VERIFIED`, and the only actual protection is zuri-ai
+    no longer setting `readPrivate` for them. Every other assurance or
+    membership change still requires `assertParticipants`. This exists
+    because zuri-ai sends `identity_assurance: VERIFIED` with `person_id =
+    principalId` the instant a user is verified
+    (`server-line-answer.js:186-199`), on an ordinary follow-up append
+    that structurally cannot carry `assertParticipants` — without this
+    rule a `DIRECT` thread becomes permanently unwritable past first
+    verification. **Open risk, stated directly in `RSK-MEMOS-01`'s own
+    row (not only pointed at from here)**: if zuri-ai's
+    `principal.personId` itself changes at verification (rather than
+    staying equal to the existing `principalId`) — for example an account
+    merge into an existing Person — the lifetime single-`HUMAN` trigger
+    locks the thread until the relink caller (item 4 of the cross-repo
+    change list below) exists. — *adopted default, pending owner
+    confirmation.*
 
 ### The multi-user model
 
@@ -380,9 +415,17 @@ instruction that every cross-repo change be listed in both places:
   Zuri must call it on a Person relink/merge event once the tool exists
   (phase 003) — MSP only provides the tool (decision 4); nothing calls it
   today, and a relinked channel account's old thread stays open until
-  something does. **This is a real, still-open cross-repo change**: it
-  needs a zuri-owner backlog item and belongs on the channel-activation
-  gate, not something DEC-MEMOS-15 resolves.
+  something does. **The mechanism, stated directly (RKOI round four): a
+  zuri-ai account merge into an existing Person changes that Person's
+  `personId`. The next append from the merged account passes
+  DEC-MEMOS-12's first-membership check, but the *lifetime* single-`HUMAN`
+  trigger (design §6.3) still refuses a second distinct `HUMAN` speaker on
+  that `DIRECT` thread — every later append then fails closed until this
+  caller exists, and the merged Person never inherits the old thread's
+  history in the meantime (DEC-MEMOS-11).** This is a real, still-open
+  cross-repo change: it needs a zuri-owner backlog item (`BL-MEMOS-092`)
+  and belongs on the channel-activation gate, not something DEC-MEMOS-15
+  resolves.
 - **Item 5 — the assurance-upgrade caller — corrected (RKOI round three):
   resolved MSP-side by DEC-MEMOS-15, no zuri-ai change needed for the
   normal case.** An earlier version of this list said the opposite (that
@@ -427,7 +470,7 @@ instruction that every cross-repo change be listed in both places:
 ## What this ADR does not decide
 
 - The exact corrected DDL for the folded migration — that is
-  `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.3b's job, not
+  `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.4b's job, not
   this ADR's.
 - Whether or when GoVibe or Zuri actually calls the participant lifecycle
   tool (decision 4 only says MSP must provide it).
@@ -456,20 +499,19 @@ instruction that every cross-repo change be listed in both places:
 - [ ] 12. First HUMAN membership is created by append, bound to the grant's own principal (DEC-MEMOS-12).
 - [ ] 13. The thread store lives in `msp-core`, no new package (DEC-MEMOS-13).
 - [ ] 14. Agent fields and `grant_nonces` ship in stage 2, not `0008`; migration numbers are assigned in merge order (DEC-MEMOS-14).
-- [ ] 15. A PENDING→VERIFIED self-upgrade on a later append needs no `assertParticipants` under the four stated conditions; VERIFIED→PENDING is silently ignored (DEC-MEMOS-15).
+- [ ] 15. A PENDING→VERIFIED self-upgrade on a later append needs no `assertParticipants` when the stated conditions hold on both the incoming request and the stored row, closing the old row and inserting a new one in one transaction; VERIFIED→PENDING is silently ignored, and MSP's own state does not implement revocation as a result (DEC-MEMOS-15).
 - [ ] RKOI ruling 1: grant capability growth is additive-only; new required/nested/re-encoded fields are cross-repo.
 - [ ] RKOI ruling 2: per-tenant keyring, with the stated selection/fallback/rotation/defense-in-depth conditions.
 - [ ] RKOI ruling 3: nonce required on every mutating tool except append, with the stated transaction/conflict/pruning conditions, and the named stage-1 gap.
 - [ ] RKOI ruling 4: single persisted `thread_kind`, pinned by trigger, `ROOM` behaves as `GROUP`.
 
 Overturning any row above reopens the corresponding section of
-`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.3b named in its
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.4b named in its
 mapping table (§3.1).
 
 ## Evidence and implementation map
 
-- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.3.3b (superseded in relevant part by this ADR + the design's own §0.1 review response)
-- RKOI's round-three probes (scratch, not part of this repo): `memos-001-r3/` — `port.mjs` (zuri-ai's real grant signer), `probe-delivery.mjs`/`probe-delivery2.mjs` (delivery grant claims), `probe-ddl.mjs`/`probe-jobs.mjs` (trigger gaps), `probe-upgrade.mjs` (the DEC-MEMOS-15 scenario)
+- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.3.4b (superseded in relevant part by this ADR + the design's own §0.1 review response)
 - Stage-1 code, the new source of truth for wire/schema shapes: `feat/memos-002-thread-memory` (worktree `agent-ab508b7a790efd268`), especially `migrations/0008_thread_memory.sql`, `packages/msp-core/src/domain/thread-memory.mjs`, `packages/msp-contracts/src/contracts/thread-access.mjs`, `apps/msp-server/src/transport/handlers/thread-guard.mjs`, and `docs/API-011-THREAD-MEMORY-CONTRACT.md`
 - Unmerged branch (facts only, not read via git by this ADR's author): `origin/codex/msp-thread-memory`, commits `50859fb`, `e4303cb`
 - Existing guard pattern the design's C-2 fix follows: [`packages/msp-contracts/src/contracts/vault-scope-guard.mjs`](../packages/msp-contracts/src/contracts/vault-scope-guard.mjs) (the fix itself, `grant-scope-guard.mjs`, does not exist yet — see the corrected C-2 entry above)
@@ -481,7 +523,8 @@ mapping table (§3.1).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
-| 0.1.3b | 2026-09-14 | proposed | Answers RKOI's round-three NEEDS REVISION on commit `6d1a801` (1 critical): zuri-ai's real delivery grant carries neither `channelType` nor `audienceKind` (`msp-thread-memory-port.js:420-422`, confirmed against `memos-001-r3/port.mjs`) — corrected the design accordingly per owner direction (a), dropping `channel_type` from the room HMAC and every `channelType` grant requirement. Added **DEC-MEMOS-15** (assurance self-upgrade needs no `assertParticipants` under four stated conditions; a downgrade is silently ignored), closing a real correctness gap `memos-001-r3/probe-upgrade.mjs` demonstrates directly. Corrected the cross-repo change list: removed the sentence claiming `assertParticipants` "needs no zuri-ai change" (it read as contradicting items 4 and 5); restated item 5 (assurance-upgrade caller) as resolved MSP-side by DEC-MEMOS-15, needing no zuri-ai change for the normal case; kept item 4 (relink/merge caller) as a real, still-open cross-repo change on the activation gate. Extended the owner confirmation checklist with DEC-MEMOS-15 and pointed every version reference at design v0.3.3b. | working-tree | ATHER |
+| 0.1.4b | 2026-09-15 | proposed | Folds RKOI's nine round-four warnings (docs **APPROVED, 0 critical**, commit `1c4a62f`) ahead of merge. Tightened **decision 15**: the self-upgrade check now also requires the *stored* participant row's own `person_id` (not only the incoming value), and states plainly that the transition is a mandatory close-old-row-plus-insert-new-row in one transaction, never an implementation choice — the append-only trigger permits nothing else; recorded that a silently-ignored downgrade means MSP's own state does not implement revocation. Moved the `personId`-change lock-up risk mechanism into `RSK-MEMOS-01`'s cross-repo item 4 directly, rather than only pointing at it from decision 15. Removed the evidence map's citation of RKOI's session-scratch probe scripts (never part of this repository); pointed every design version reference at v0.3.4b. Noted `BL-MEMOS-111` (a cross-room authorization gap with no prior backlog row) as a round-four finding on the code side. | working-tree | ATHER |
+| 0.1.3b | 2026-09-14 | proposed | Answers RKOI's round-three NEEDS REVISION on commit `6d1a801` (1 critical): zuri-ai's real delivery grant carries neither `channelType` nor `audienceKind` (`msp-thread-memory-port.js:420-422`) — corrected the design accordingly per owner direction (a), dropping `channel_type` from the room HMAC and every `channelType` grant requirement. Added **DEC-MEMOS-15** (assurance self-upgrade needs no `assertParticipants` under four stated conditions; a downgrade is silently ignored), closing a real correctness gap in the append flow. Corrected the cross-repo change list: removed the sentence claiming `assertParticipants` "needs no zuri-ai change" (it read as contradicting items 4 and 5); restated item 5 (assurance-upgrade caller) as resolved MSP-side by DEC-MEMOS-15, needing no zuri-ai change for the normal case; kept item 4 (relink/merge caller) as a real, still-open cross-repo change on the activation gate. Extended the owner confirmation checklist with DEC-MEMOS-15 and pointed every version reference at design v0.3.3b. | working-tree | ATHER |
 | 0.1.2b | 2026-09-14 | proposed | Answers RKOI's round-two NEEDS REVISION on commit `92cb591` (1 critical: wrong wire values, fixed in the design against KIN's now-shipped stage-1 code, not this ADR's decision list directly). Corrected ruling 1's wording: a new required grant field (`agentId`/`workspaceId` in stage 2) is a cross-repo change to negotiate via `RSK-MEMOS-01`/`BL-MEMOS-090`, not something this ADR can declare "out of bounds." Added two items to the cross-repo change list: a caller for `close_for_relink` (nothing calls it today) and a caller for an `identity_assurance` upgrade (nothing asks for one today) — both flagged by RKOI as missing next to the existing `agentId`/`nonce`/`assertAgents`/`assertParticipants` items. Pointed the evidence map at the actual stage-1 code as the new source of truth for wire/schema shapes. | working-tree | ATHER |
 | 0.1.1b | 2026-09-14 | proposed | Answers RKOI's NEEDS REVISION on commit `2f4d584` (3 critical findings, all in the companion design's DDL/wire shapes, not this ADR's decision list directly). Corrected the C-2 citation, which wrongly named an already-existing `thread-scope-guard.mjs`; the real fix is a new `grant-scope-guard.mjs`. Recorded RKOI's rulings on all four of ATHER's prior judgement calls (narrow capability growth, conditional per-tenant keyring, conditional nonce split with a named stage-1 gap, single persisted `thread_kind`). Added four new adopted defaults: DEC-MEMOS-11 (relink closes the thread and mints a new one), DEC-MEMOS-12 (first HUMAN membership created by append, bound to the grant's own principal — zuri-ai's resolve carries no `participants` field), DEC-MEMOS-13 (no separate `msp-thread-memory` package — the store stays in `msp-core`), DEC-MEMOS-14 (agent fields and `grant_nonces` ship in stage 2, not `0008`; migration numbers assigned in merge order, correcting decision 7's pre-bound `0009`). Added the cross-repo change list stage 2 requires of zuri-ai (`agentId`/`workspaceId` required, `nonce`, `assertAgents`, `assertParticipants`), cross-referenced with the plan's `RSK-MEMOS-01`. Extended the owner confirmation checklist accordingly. | working-tree | ATHER |
 | 0.1.0b | 2026-09-14 | proposed | Initial ADR: reconciled the unmerged `codex/msp-thread-memory` branch (API-010-labelled, ten tools, two migrations, C-1/C-2 critical findings) against `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.2.3b's from-scratch, unshipped design. Adopted RKOI's ten recommended defaults as pending-confirmation decisions, renamed the branch surface to API-011, and specified the multi-user (one human per DIRECT thread, subject-bound protected records, explicit-claim-only participation changes) and multi-agent (`thread_agents` relation, per-agent episodic vaults, AGENT/THREAD record visibility, shared passport and summaries) model neither prior effort fully covered. Flagged two judgement calls (grant capability growth; optional per-tenant keyring) for owner review. | working-tree | ATHER |

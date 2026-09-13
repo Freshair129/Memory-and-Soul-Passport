@@ -1,7 +1,7 @@
 ---
-version: "0.3.3b"
+version: "0.3.4b"
 created_at: "2026-09-13T21:00:00+07:00,Claude Fable 5.1,working-tree"
-last_update: "2026-09-14T21:00:00+07:00,ATHER"
+last_update: "2026-09-15T00:00:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -14,55 +14,94 @@ attributes:
 
 ## สรุปภาษาไทย
 
-ฉบับ 0.3.3b แก้ 1 จุดวิกฤตจากรีวิวรอบสามของ RKOI: grant ของ
-`msp_thread_delivery_record` ที่ zuri-ai ส่งจริงไม่มีทั้ง `audienceKind`
-และ `channelType` เลย (มีแค่ `tenantId, businessId, channelAccountId,
-externalRoomRef, principalId, policyRevision, deliveryWriter`) — เอกสาร
-ฉบับก่อนคิดเอาเองว่ามี `channelType` เพื่อคำนวณ room hash ก่อนที่ thread
-จะถูกสร้าง ซึ่งไม่ตรงกับความจริง และเจ้าของทิศทางเลือกทางแก้ (a): ตัด
-`channel_type` ออกจาก room hash ทั้งหมด (เหลือ `tenant_id|
-channel_account_id|external_room_ref`) และเลิกเรียกร้อง `channelType`
-บน grant ใด ๆ
+ฉบับ 0.3.4b คือรอบที่ RKOI **อนุมัติแล้ว (0 critical)** แต่ขอให้พับ
+คำเตือน 9 ข้อเข้ามาก่อน merge จึงไม่ใช่การแก้ NEEDS REVISION เหมือนสามรอบ
+ก่อนหน้า ประเด็นสำคัญที่สุดคือ **ช่องโหว่ cross-room ที่ยังไม่มีงานในแผน**:
+การเรียกเครื่องมือบน thread ที่มีอยู่แล้วตรวจ tenant/business/account
+แต่ไม่ตรวจ "ห้อง" เลย และ `msp_session_compaction_claim` ไม่ตรวจ scope
+อะไรเลย ทำให้ grant ของ worker ห้อง R1 claim งานของห้อง R2 แล้วได้
+`sources` ของห้องอื่นไปได้ — เพิ่ม **BL-MEMOS-111** ให้ทุกเครื่องมือที่ผูกกับ
+thread ต้องเทียบ room hash ของ grant กับ hash ที่เก็บไว้ของ thread นั้น
+รวมถึง claim/commit/retry ผ่าน thread ของ job ด้วย
 
-รอบนี้เพิ่ม **DEC-MEMOS-15**: การอัปเกรด `identity_assurance` จาก PENDING
-เป็น VERIFIED ผ่าน append ธรรมดา (ไม่ต้องมี `assertParticipants`) ทำได้
-เมื่อ `speaker_id`, `speaker_kind=HUMAN`, `person_id` และแถว membership
-ล้วนเป็นของ principal เดียวกับ grant เท่านั้น — เพราะ zuri-ai ส่ง
-`identity_assurance: VERIFIED` พร้อม `person_id = principalId` ทันทีที่
-ผู้ใช้ยืนยันตัวตน ถ้าไม่มีกติกานี้ DIRECT thread จะเขียนอะไรต่อไม่ได้อีกเลย
-หลังจากยืนยันตัวตนครั้งแรก
+รอบนี้ยังแก้การวินิจฉัยที่ผิดของรอบก่อน: ค่า `DEFAULT ''` เดิมทำให้ trigger
+**ปฏิเสธ** การ insert ที่ tenant ไม่ตรง (ไม่ใช่ปล่อยผ่านเงียบ ๆ อย่างที่เขียนไว้ผิด)
+บั๊กจริงคือพอเปลี่ยนเป็น `NOT NULL` แล้ว handler ที่ยังใช้ `INSERT OR IGNORE`
+จะกลืน NOT NULL violation แบบเงียบ ๆ (`changes=0`) ไม่ insert อะไรเลย ต้องเปลี่ยน
+handler เป็น `ON CONFLICT(summary_id) DO NOTHING` และ trigger ต้องใช้ `IS NOT`
+แทน `<>` เพื่อไม่พลาดค่า NULL
 
-รอบนี้ยังแก้ trigger ที่ probe ของ RKOI พบว่าพัง: `thread_summary_invalidations`
-ต้องมี `tenant_id NOT NULL` ตั้งแต่ตอนสร้างตาราง (0008 ยังไม่ shipped) ไม่ใช่
-`DEFAULT ''`, ต้อง pin `tenant_id` ตอน UPDATE, และ trigger ของ
-`thread_injection_receipts` ต้อง pin `injection_id` ด้วย ไม่ใช่แค่คอลัมน์อื่น
+กติกา audience ก็เปลี่ยนทิศทาง: `audienceKind` เป็นข้อบังคับ (required) บน
+ทุกเครื่องมือยกเว้น `msp_thread_delivery_record` ไม่ใช่แค่ "เช็คถ้ามีมา" อย่างที่
+เขียนไว้ก่อนหน้า ส่วนกติกาความจำ session ก็แก้จากเดิมที่บอกว่ามีสถานะเปิดอยู่
+อย่างละหนึ่งเสมอ เป็น "OPEN ได้อย่างมากหนึ่งเดียว" เพราะ reconciliation ทำให้มี
+สถานะกำลังปิดกับสถานะเปิดพร้อมกันได้จริงตามปกติ
+
+**DEC-MEMOS-15** ถูกเข้มขึ้น: ต้องเช็ค `person_id` ของแถวที่เก็บไว้จริงด้วย
+ไม่ใช่แค่ค่าที่ส่งมา, การอัปเกรดต้องปิดแถวเก่าแล้วเปิดแถวใหม่ในธุรกรรมเดียว
+(ไม่ใช่ทางเลือกของ implementation) และบันทึกไว้ชัดว่าการ "ถอนการยืนยัน" ยัง
+ทำไม่ได้จนกว่าจะมีเครื่องมือ lifecycle — MSP ยังพึ่ง zuri-ai ไม่ตั้ง
+`readPrivate` อีกต่อไปเป็นกลไกเดียว
+
+การอ้างอิงไฟล์ probe ชั่วคราวของ RKOI (ที่อยู่นอก repo) ถูกลบออกทั้งหมด
+ตามคำขอ เพราะไฟล์เหล่านั้นอยู่นอก repo และไม่คงทน แทนที่ด้วยการชี้ไปที่
+backlog item ที่มี acceptance test ยืนยันแทน
 
 ส่วนที่เหลือของเอกสารเป็นภาษาอังกฤษตามแบบแผนของ repo ดู §0.1 สำหรับตารางแก้ไข
 ฉบับนี้ทั้งหมด
 
 ## 0. Review response
 
-### 0.1 Round seven (0.3.2b → 0.3.3b) — RKOI round-3 review, 1 critical
+### 0.1 Round eight (0.3.3b → 0.3.4b) — RKOI round-4 review, APPROVED with 9 warnings
+
+RKOI reviewed the docs at commit `1c4a62f` and **APPROVED it with 0
+critical findings**, conditioned on nine warnings being folded in before
+merge. Unlike every prior round, nothing here is a rejection — this
+revision is a pre-merge cleanup pass. Per RKOI's own instruction, every citation of RKOI's session-scratch probe
+scripts as evidence is removed throughout this document: those files are
+session-temporary and were never part of this repository, so a stable
+citation must name the actual acceptance test instead. Where an earlier
+round cited a probe directly, this revision either points at the backlog
+item whose acceptance test now proves the same fact, or simply states the
+finding without a file citation.
+
+| # | Warning | Correction |
+|---|---|---|
+| 1 | **Cross-room guard gap had no BL row.** A call against an existing thread matched tenant, business and channel account, but not the room; `msp_session_compaction_claim` took no scope check at all — a worker grant scoped to room R1 could claim room R2's compaction job and receive its `sources`, since `claimCompaction` never compares any room identity | New backlog item **BL-MEMOS-111** (owner KIN): the grant's own room hash (`tenant_id\|channel_account_id\|external_room_ref` under `MSP_IDENTITY_HMAC_KEY`) must be recomputed and compared against the resolved thread's stored `external_room_ref_hmac` on **every** thread-bound call, including `claim`/`commit`/`retry` via the job's own thread — not only `resolve`. Added as a `BL-MEMOS-033` dependency and a `GATE-MEMOS-2` bullet. §6.3's "listed in §12.1/§15/the plan" is now true: §12.1 specifies the check, §15 has an invariant row, the plan has BL-MEMOS-111 | §6.3, §12.1, §15, plan |
+| 2 | **The `thread_summary_invalidations` failure was described backwards.** With the old `DEFAULT ''`, the tenant-consistency trigger's `<>` comparison actually *refused* the mismatched insert (`'' <> '<real tenant>'` is true, so the trigger fires) — it did not succeed silently, contrary to what round seven claimed. The real bug is different and only appears with the *fixed* `NOT NULL` column plus the *unfixed* handler: `INSERT OR IGNORE` silently absorbs a `NOT NULL` violation exactly as it absorbs a `PRIMARY KEY` conflict, so a handler that still omits `tenant_id` now inserts **nothing at all** (`changes: 0`) instead of failing loudly or succeeding wrong. Separately, the trigger's `<>` is not NULL-safe: if `tenant_id` were ever `NULL` (not merely empty), `NULL <> x` evaluates to `NULL`, which `WHERE` treats as false, so the trigger would not fire at all for a `NULL` value | §12.1's trigger now compares with **`IS NOT`**, not `<>`; the handler must use `INSERT … ON CONFLICT(summary_id) DO NOTHING`, not `INSERT OR IGNORE`, so a `NOT NULL` violation on a forgotten `tenant_id` raises loudly instead of being swallowed by the same blanket clause that also handles the legitimate duplicate-insert case; the reconcile-after-close acceptance case now explicitly asserts the invalidation row **exists** (not merely that the reconcile call "succeeds") | §12.1, §15, BL-MEMOS-102 |
+| 3 | **Plan rows contradicted v0.3.3b.** `BL-MEMOS-023` still said "assurance upgrade only via the lifecycle tool," ignoring DEC-MEMOS-15 entirely; `BL-MEMOS-021` still said "`thread_bindings` restored as its own table," directly contradicting `BL-MEMOS-100`'s own cancellation two rounds earlier | Both rewritten in the plan; `BL-MEMOS-020`..`033` scanned as a block for the same class of drift | plan |
+| 4 | **The audience rule was "check only when present"; owner direction is per-tool required.** `audienceKind` is not merely optional-and-checked-if-sent — zuri-ai's signer sends it unconditionally on `resolve`, and `claimsFor` includes it on every other non-delivery tool, so its absence on any of those five is itself a signal something is wrong, not a normal case to tolerate silently | `audienceKind` is now **required** on `resolve`, `append`, `context`, `memory_record` and `injection_record`; missing it on any of those five is refused. Only `delivery_record`'s grant carries none — its scope is the inbound message's own thread plus the room hash, never `audienceKind`. A delivery grant that *does* happen to carry `audienceKind` is still checked against the thread, not ignored | §9.2, §13, plan BL-MEMOS-109 |
+| 5 | **Session uniqueness was mis-stated as an existing "one OPEN/CLOSING" rule.** It is not existing behaviour, and it is the wrong invariant: reconciliation legitimately leaves one `CLOSING` and one new `OPEN` session on the same thread at once (a session being wound down while its successor is already accepting messages) | Restated as **"at most one `OPEN` session per thread"** — never a claim about `CLOSING`. `UNIQUE (thread_id) WHERE status = 'OPEN'` is proposed, **conditional on `BL-MEMOS-033` proving every flow (rotation, delivery reconciliation, idle sweep) still holds it**; until proven, the invariant is code-enforced only, not schema-enforced, and this document says so plainly rather than asserting a constraint that might reject a legitimate reconciliation state | §0.1 (this row, replacing round six's wrong framing), §12.1, plan BL-MEMOS-102 |
+| 6 | **Uncommitted fixes were described as already-true facts.** §6.1 said `channelType` "does not exist anywhere on either side of the wire," and §13 said "no `channelType` claim exists" — both stated as settled fact. At the reviewed commit the code still required a `channelType` claim | Both reworded as a **tracked gap** (`BL-MEMOS-109`), not an accomplished fact — this document specifies the target, the code has not yet been verified to match it. `BL-MEMOS-109` gains an explicit task to update `docs/API-011-THREAD-MEMORY-CONTRACT.md:54,196` and the cross-repo test's own header comment, both of which still describe the four-segment hash. Also corrected: an earlier changelog entry said the room-hash input lives in §6.3 — it is §6.2 | §6.1, §13, plan BL-MEMOS-109 |
+| 7 | **DEC-MEMOS-15 needed tightening in three places.** (a) The rule checked only the *incoming* `person_id` value, not the *stored* row's own `person_id` — a row whose stored `person_id` already names someone else must not self-upgrade just because the incoming value happens to be null or match the principal. (b) §7 rule 6 called "insert a new row vs. update in place" an implementation choice; it is not — the append-only trigger permits only `left_at NULL → NOT NULL`, so a self-upgrade **must** close the old row and insert a new one in one transaction, exactly like every other membership change. (c) Nothing recorded what happens when zuri-ai *de-verifies* someone: since a `VERIFIED → PENDING` downgrade is silently ignored, MSP's own row stays `VERIFIED` after zuri-ai's own state has moved on — revocation is not implemented and today relies entirely on zuri-ai no longer setting `readPrivate` for that principal | ADR decision 15, design §7 rule 2 and rule 6, §9.1 all corrected; the revocation gap stated explicitly rather than left implicit | ADR, §7, §9.1 |
+| 8 | **Gates and evidence.** `GATE-MEMOS-4/5/6` named no suite files; scratch probe paths were cited as if they were durable evidence | `GATE-MEMOS-4/5/6` now each name their §15 suite file; every scratch-probe citation in this document is removed, replaced by naming the finding directly or pointing at the backlog item whose acceptance test proves it; `BL-MEMOS-110` reworded to "make `test:cross-zuri` pass against a read-only extract of zuri-ai `origin/main`, and wire it into `GATE-MEMOS-2`" — the script and the test already exist; the item is about making it pass and gating on it, not building it from nothing | plan |
+| 9 | **`RSK-MEMOS-01` referenced a risk it never actually stated.** The ADR and §19 both said the `personId`-change lock-up risk was "recorded in `RSK-MEMOS-01`," but the risk row itself never named the mechanism | The plan's `RSK-MEMOS-01` row now states it directly: a zuri-ai account merge into an existing Person changes that Person's `personId`; the next append passes the first-membership check (§7 rule 2) but the *lifetime* single-`HUMAN` trigger (§6.3) still refuses a second distinct `HUMAN` speaker on that `DIRECT` thread; every later append then fails closed until `BL-MEMOS-092`'s relink caller exists; the merged Person never inherits the old thread's history in the meantime | plan |
+
+### 0.2 Round seven (0.3.2b → 0.3.3b) — RKOI round-3 review, 1 critical
 
 RKOI reviewed commit `6d1a801` (design v0.3.2b, ADR v0.1.2b, plan 0.1.2b)
-and returned **NEEDS REVISION, 1 critical**. RKOI's probes live in
-`memos-001-r3/` (a scratch directory, not part of this repo); this
-revision reads them directly rather than working from prose alone, the
-same discipline §0.2 established.
+and returned **NEEDS REVISION, 1 critical**. RKOI supplied a set of
+session-scratch probe scripts run directly against zuri-ai's real code and
+the shipped migration; this revision reads their findings directly rather
+than working from prose alone, the same discipline §0.3 established.
+**Note added in round four**: those probe scripts were never part of this
+repository and are not cited here as durable evidence — every finding
+below is described on its own merits, or by pointing at the named backlog
+item whose acceptance test now proves it.
 
 **Critical**
 
 | # | Finding | Change in 0.3.3b | Where |
 |---|---|---|---|
-| 1 | The delivery grant does not carry `channelType` (or `audienceKind`) at all. zuri-ai's real signer (`msp-thread-memory-port.js:420-422`, `origin/main`, confirmed against `memos-001-r3/port.mjs`) sends exactly `{ tenantId, businessId, channelAccountId, externalRoomRef, principalId, policyRevision, deliveryWriter }`. §0.2's fix invented a `channelType` claim that does not exist on either side of the wire. **Owner direction: option (a)** — drop `channel_type` from the room HMAC entirely (three segments: `tenant_id\|channel_account_id\|external_room_ref`), and stop requiring `channelType` on any grant. KIN is fixing the code this way in the same pass | §6.1 (grant examples and claim list rebuilt), §6.3 (room-hash input corrected to three segments, normative), §9.2 (delivery scope corrected), §13 (delivery row corrected) | §6.1, §6.3, §9.2, §13 |
+| 1 | The delivery grant does not carry `channelType` (or `audienceKind`) at all. zuri-ai's real signer (`msp-thread-memory-port.js:420-422`, `origin/main`) sends exactly `{ tenantId, businessId, channelAccountId, externalRoomRef, principalId, policyRevision, deliveryWriter }`. §0.3's fix invented a `channelType` claim that does not exist on either side of the wire. **Owner direction: option (a)** — drop `channel_type` from the room HMAC entirely (three segments: `tenant_id\|channel_account_id\|external_room_ref`), and stop requiring `channelType` on any grant. KIN is fixing the code this way in the same pass | §6.1 (grant examples and claim list rebuilt), §6.3 (room-hash input corrected to three segments, normative), §9.2 (delivery scope corrected), §13 (delivery row corrected) | §6.1, §6.3, §9.2, §13 |
 
 **New adopted default**
 
 | ID | Decision | Where |
 |---|---|---|
-| DEC-MEMOS-15 | Assurance upgrade without a claim: a later append's `PENDING → VERIFIED` transition is accepted with no `assertParticipants` only when `speaker_id === grant.principalId`, `speaker_kind === HUMAN`, `person_id ∈ {null, grant.principalId}`, and the membership is that principal's own current row. A later append's `VERIFIED → PENDING` is silently ignored (not stored, not refused) rather than treated as a change. Every other assurance or membership change still requires `assertParticipants`. This closes a real correctness gap `memos-001-r3/probe-upgrade.mjs` demonstrates directly: zuri-ai sends `identity_assurance: VERIFIED` with `person_id = principalId` the moment a user is verified (`server-line-answer.js:186-199`), and without this rule that call would need `assertParticipants` it never carries, leaving a DIRECT thread permanently unwritable past first verification | §7, §9.1 |
+| DEC-MEMOS-15 | Assurance upgrade without a claim: a later append's `PENDING → VERIFIED` transition is accepted with no `assertParticipants` only when `speaker_id === grant.principalId`, `speaker_kind === HUMAN`, `person_id ∈ {null, grant.principalId}`, and the membership is that principal's own current row. A later append's `VERIFIED → PENDING` is silently ignored (not stored, not refused) rather than treated as a change. Every other assurance or membership change still requires `assertParticipants`. This closes a real correctness gap: zuri-ai sends `identity_assurance: VERIFIED` with `person_id = principalId` the moment a user is verified (`server-line-answer.js:186-199`), and without this rule that call would need `assertParticipants` it never carries, leaving a DIRECT thread permanently unwritable past first verification | §7, §9.1 |
 
-**Warnings, verified against `memos-001-r3/`'s probes**
+**Warnings, verified against RKOI's round-three findings**
 
 | # | Warning | Verified | Change |
 |---|---|---|---|
@@ -76,7 +115,7 @@ same discipline §0.2 established.
 Every `DEC-MEMOS-01..14` reference in this design, the ADR and the plan is
 updated to `01..15` in this revision.
 
-### 0.2 Round six (0.3.1b → 0.3.2b) — RKOI round-2 review, 1 critical
+### 0.3 Round six (0.3.1b → 0.3.2b) — RKOI round-2 review, 1 critical
 
 RKOI reviewed commit `92cb591` and returned **NEEDS REVISION, 1 critical**.
 Round-1 criticals 1 and 3 are closed; 2 is mostly closed. KIN's stage-1 port
@@ -127,37 +166,37 @@ BL-MEMOS-033 (the parallel code review) rather than silently matching a bug.
 
 Recorded in §6.1 and §19 as an accepted stage-1 posture, not a silent gap.
 
-### 0.3 Round five (0.3.0b → 0.3.1b) — RKOI round-1 review, 3 criticals
+### 0.4 Round five (0.3.0b → 0.3.1b) — RKOI round-1 review, 3 criticals
 
 RKOI reviewed commit `2f4d584` and returned NEEDS REVISION, 3 critical
 findings, against a version of this design written **before** KIN's stage-1
 code existed, so it necessarily guessed at wire shapes. Superseded in every
-particular by §0.2 above, which reads the actual shipped code instead of
+particular by §0.3 above, which reads the actual shipped code instead of
 reconstructing it from a branch this document's author could not read
 directly. Kept as provenance.
 
 | # | Finding | Status |
 |---|---|---|
-| 1 | Migration 0008 did not apply (`CHECK` used a forbidden subquery) | The shipped migration never had this defect — every cross-row rule is a `BEFORE INSERT` trigger from the start (`trg_protected_memory_records_subject_rules`). §0.2's finding 1 was about wire *values*, not this structural point, which was never wrong in the code |
-| 2 | §12.1/§13 broke DEC-MEMOS-02 (frozen wire) with an invented nested/camelCase grant shape | Superseded — §0.2 rebuilds every shape from the actual shipped flat/epoch-ms/hex grant |
-| 3 | Any agent could attach itself to any thread by calling resolve | Moot in stage 1 — the shipped code has no agent-attachment concept of any kind (§0.2 check b) |
+| 1 | Migration 0008 did not apply (`CHECK` used a forbidden subquery) | The shipped migration never had this defect — every cross-row rule is a `BEFORE INSERT` trigger from the start (`trg_protected_memory_records_subject_rules`). §0.3's finding 1 was about wire *values*, not this structural point, which was never wrong in the code |
+| 2 | §12.1/§13 broke DEC-MEMOS-02 (frozen wire) with an invented nested/camelCase grant shape | Superseded — §0.3 rebuilds every shape from the actual shipped flat/epoch-ms/hex grant |
+| 3 | Any agent could attach itself to any thread by calling resolve | Moot in stage 1 — the shipped code has no agent-attachment concept of any kind (§0.3 check b) |
 
 Adopted defaults DEC-MEMOS-11..14 and the four rulings on ATHER's judgement
 calls (capability growth, keyring, nonce split, single `thread_kind`) from
-this round stand, adjusted where §0.2 found the shipped code does something
+this round stand, adjusted where §0.3 found the shipped code does something
 more specific than the rulings anticipated (notably: `thread_kind` and
 `audience_kind` are not two columns kept equal by a trigger — `threads` has
 only `thread_kind`, and every response mirrors it as `audienceKind`; there
 was never a second column to keep in sync).
 
-### 0.4 Round four (0.2.3b → 0.3.0b) — reconciling the unmerged branch
+### 0.5 Round four (0.2.3b → 0.3.0b) — reconciling the unmerged branch
 
 Historical; unchanged from prior revisions' record. Reconciled this design
 against the independently-built, unmerged branch `codex/msp-thread-memory`
 per the owner's ten adopted defaults; superseded in wire-shape detail by
-§0.2/§0.3, unchanged in the multi-user/multi-agent model's substance.
+§0.3/§0.4, unchanged in the multi-user/multi-agent model's substance.
 
-### 0.5 Round three (0.2.1b → 0.2.2b)
+### 0.6 Round three (0.2.1b → 0.2.2b)
 
 Historical. RKOI's third review approved v0.2.1b with zero criticals and
 eight warnings folded into v0.2.2b (instance-attachment surrogate key,
@@ -167,13 +206,13 @@ and rotation procedure, `entities_fts` erasure row, non-empty-summary
 CHECK). Several of the tables this round discusses are withdrawn as of
 0.3.0b (§3.1).
 
-### 0.6 Round two (0.2.0b → 0.2.1b)
+### 0.7 Round two (0.2.0b → 0.2.1b)
 
 Historical. RKOI's second review confirmed round-one closures and raised
 two criticals, twelve warnings, closed at the mechanism; superseded by the
 `thread_agents` model (§8) and the erasure table (§11.1).
 
-### 0.7 Round one (0.1.0b → 0.2.0b)
+### 0.8 Round one (0.1.0b → 0.2.0b)
 
 Historical. Thirteen criticals, eleven warnings, closed at the mechanism;
 not repeated here — see `git log` of this file.
@@ -396,16 +435,20 @@ for the audience check and the room-hash input.
   itself, and its absence is whatever that tool's own check makes of it
   (usually `thread_scope_denied` for a missing capability).
 - **Shipped additive claim: `assertParticipants`** (boolean; see §7).
-  **Correction (RKOI round three): `channelType` is not a grant claim and
-  never was.** An earlier revision of this document invented it, reasoning
-  that a delivery grant would need it to re-derive a room hash before the
-  thread exists. zuri-ai's actual delivery grant
+  **`channelType` should not be a grant claim, and this is a tracked gap,
+  not yet a settled fact (RKOI round four).** An earlier revision of this
+  document invented `channelType` as a grant claim, reasoning that a
+  delivery grant would need it to re-derive a room hash before the thread
+  exists. zuri-ai's actual delivery grant
   (`msp-thread-memory-port.js:420-422`, `origin/main`) carries no
   `channelType` and no `audienceKind` at all — its full claim set is
   exactly `{ tenantId, businessId, channelAccountId, externalRoomRef,
-  principalId, policyRevision, deliveryWriter }`. The room hash input
-  itself does not include `channel_type` either (§6.3) — the field this
-  bullet invented does not exist anywhere on either side of the wire.
+  principalId, policyRevision, deliveryWriter }`, and the target room-hash
+  input (§6.2) has no `channel_type` segment either. **This is what the
+  wire and the hash *should* be — at the reviewed commit, the shipped code
+  still required a `channelType` claim.** `BL-MEMOS-111`'s sibling backlog
+  item `BL-MEMOS-109` tracks removing that requirement; this document
+  specifies the target, not a claim that the removal has already landed.
   **`assertAgents`, `agentId`, `workspaceId` and a `nonce` do not exist in
   the stage-1 grant at all** — they are stage-2, unstarted.
 - **Per-tenant keying is already a supported seam, not yet wired to a real
@@ -421,7 +464,7 @@ for the audience check and the room-hash input.
   when it happens.
 
 **Nonce gap — accepted for stage 1, RKOI-verified against the shipped
-code (§0.2).** There is no `grant_nonces` table in `0008`, and no nonce
+code (§0.3).** There is no `grant_nonces` table in `0008`, and no nonce
 field on the grant at all. This is accepted because three properties
 already hold, all confirmed against the code rather than assumed:
 `record_id` is content-derived (a duplicate `msp_thread_memory_record`
@@ -446,21 +489,21 @@ and every journal `actor` field. A tool that must compute this hash with no
 key configured throws `IdentityHmacUnconfiguredError`
 (`identity_hmac_unconfigured`) and writes nothing.
 
-**Room-hash input, normative (RKOI round three): `HMAC-SHA256(key,
+**Room-hash input, normative target (RKOI round three, tracked as a gap
+by `BL-MEMOS-109`, not yet confirmed shipped): `HMAC-SHA256(key,
 "<tenant_id>|<channel_account_id>|<external_room_ref>")` — three segments,
 no `channel_type`.** zuri-ai's own delivery grant (§6.1) has no
 `channelType` claim to hash with in the first place, and `channel_type` is
 not part of a channel binding's identity — the same `channel_account_id`/
 `external_room_ref` pair names the same room regardless of which
-transport label a given call happens to carry. **This corrects both this
-document and, as of this revision, the shipped code**: `0008` as it
-currently stands computes the hash over four segments including
-`channel_type` (matching an earlier, wrong version of this design and
-`docs/API-011-THREAD-MEMORY-CONTRACT.md:54` on KIN's own branch). KIN is
-fixing the code to the three-segment form in the same pass that removes
-the `channelType` grant requirement (§9.2); if `docs/API-011-THREAD-MEMORY-
-CONTRACT.md` exists on this branch it is fixed here too, otherwise it is
-left for KIN's branch, which owns it.
+transport label a given call happens to carry. **This corrects an earlier,
+wrong version of this design, which computed the hash over four segments
+including `channel_type`** — the same mistake `docs/API-011-THREAD-MEMORY-
+CONTRACT.md:54` on KIN's branch makes. `BL-MEMOS-109` is where the code
+change (three-segment hash, no `channelType` grant requirement, §9.2) and
+the matching contract-doc update (`docs/API-011-THREAD-MEMORY-CONTRACT.md:54,196`)
+both live; this document specifies the target, and does not claim the
+change has already landed.
 
 **Correction from 0.3.1b: rotation is not implemented, and this revision
 does not invent a table to support it.** An earlier revision proposed a
@@ -508,18 +551,21 @@ but not built now).
 - **Every thread-bound call must re-derive the room hash from the grant's
   own `channelAccountId`/`externalRoomRef` and compare it to the thread's
   stored `external_room_ref_hmac` — not merely to `channelAccountId`
-  alone.** Two rooms under the same channel account are two different
-  hashes and therefore two different threads; matching only the account id
-  would let a grant scoped to room R1 pass the scope check against a
-  thread that actually belongs to room R2 of the same account. **This is a
-  confirmed gap, not existing behaviour**: `thread-guard.mjs`'s `else if
-  (thread)` branch (the check every call other than resolve goes through
-  once `thread` resolves) compares `tenantId`, `businessId` and
-  `channelAccountId` only — it never recomputes or compares
-  `external_room_ref_hmac`, even though the grant for append/context/
-  memory_record/injection already carries `externalRoomRef` (via `route`,
-  §6.1). Required addition for `BL-MEMOS-033`, listed in §12.1/§15/the
-  plan.
+  alone, and not only on `resolve`.** Two rooms under the same channel
+  account are two different hashes and therefore two different threads;
+  matching only the account id would let a grant scoped to room R1 pass
+  the scope check against a thread that actually belongs to room R2 of the
+  same account. **Confirmed gap, not existing behaviour, and confirmed
+  worse than first found: `thread-guard.mjs`'s general scope check
+  (tenant/business/channel-account only, no room) applies to every tool
+  that resolves a thread through `thread_id`/`session_id` — but
+  `msp_session_compaction_claim` resolves its thread through `job_id` with
+  no scope check of any kind**, so a worker grant scoped to room R1 could
+  claim room R2's compaction job outright and receive its `sources`. This
+  is now **listed in §12.1 (the check's exact placement), §15 (an
+  invariant row) and the plan (`BL-MEMOS-111`, a `BL-MEMOS-033` dependency
+  and a `GATE-MEMOS-2` bullet)** — every one of those three actually names
+  it, closing the earlier promise this bullet made and did not keep.
 - **DEC-MEMOS-11, relink, is unchanged in intent and not yet built.** The
   migration's own header comment for `idx_threads_active_binding`
   describes exactly this: "the old thread is CLOSED (a later lifecycle
@@ -572,8 +618,16 @@ Tier 1 process**, constrained to one narrow creation path.
    - `speaker_id === grant.principalId` (the append still speaks as the
      grant's own principal — rule 2's baseline condition, unchanged);
    - `speaker_kind === 'HUMAN'`;
-   - `person_id ∈ { null, grant.principalId }` (never a *different*
-     explicit person — that always still needs `assertParticipants`);
+   - `person_id ∈ { null, grant.principalId }` **on the incoming request**;
+   - **and (tightened, RKOI round four) the *stored* current membership
+     row's own `person_id` is likewise `∈ { null, grant.principalId }`.**
+     Checking only the incoming value is not enough: a row whose stored
+     `person_id` already names a *different* person (however that got
+     there) must not be allowed to silently self-upgrade just because the
+     next append happens to send a null or matching value — that would let
+     a claim-free append paper over a state that can only have arisen from
+     an `assertParticipants`-gated change or a data problem, either of
+     which deserves a denial, not a quiet upgrade;
    - the row being updated is that same principal's own current
      membership (not a different speaker's row).
 
@@ -582,19 +636,25 @@ Tier 1 process**, constrained to one narrow creation path.
    row §7 rule 6 would otherwise insert is simply not inserted, and the
    append still succeeds as an ordinary message append. A caller cannot
    use a later, lower-assurance append to quietly downgrade a participant
-   any more than it could before this decision.
+   any more than it could before this decision. **This has a real
+   consequence for revocation, stated plainly rather than left implicit
+   (RKOI round four):** if zuri-ai itself later de-verifies this person
+   (its own state moves the identity back to unverified), MSP's stored
+   membership row simply stays `VERIFIED` — nothing in this design revokes
+   it, because a downgrade is defined to be a no-op. Until the lifecycle
+   tool exists, the only thing actually protecting a de-verified person's
+   privacy is that zuri-ai is expected to stop setting `readPrivate` for
+   them going forward (the private-read predicate in rule 5 still requires
+   it); MSP's own participant state is not part of that protection today.
 
    **Why this exists**: zuri-ai sends exactly `identity_assurance:
    'VERIFIED'` with `person_id` set to the same `principalId` the instant
-   a user's identity is confirmed (`server-line-answer.js:186-199`), on an
-   ordinary follow-up append — never through a separate claim-bearing
-   call. Without this exception, that append would need
-   `assertParticipants` it structurally cannot carry (zuri-ai's own
-   `claimsFor` never sets it for a normal message append), and a `DIRECT`
-   thread would become permanently unwritable the instant its one
-   participant is verified — confirmed directly against
-   `memos-001-r3/probe-upgrade.mjs`'s four-turn sequence (PENDING, PENDING,
-   VERIFIED, VERIFIED), which fails on turn 3 without this rule.
+   a user's identity is confirmed, on an ordinary follow-up append — never
+   through a separate claim-bearing call. Without this exception, that
+   append would need `assertParticipants` it structurally cannot carry
+   (zuri-ai's own grant-building logic never sets it for a normal message
+   append), and a `DIRECT` thread would become permanently unwritable the
+   instant its one participant is verified.
 
    A routine follow-up append by the already-current `HUMAN` participant,
    naming their own `speaker_id`, with the same `person_id` and no
@@ -615,14 +675,15 @@ Tier 1 process**, constrained to one narrow creation path.
    `person_id` and `identity_assurance`, is pinned for the row's life —
    a person_id/assurance **change under `assertParticipants`** always
    inserts a **new** row via `#applyHumanParticipant`, never an `UPDATE`
-   of the old one. **The one exception is DEC-MEMOS-15's self-upgrade**:
-   whether that path also inserts a new row or updates the existing one in
-   place is an implementation choice `BL-MEMOS-023` makes — either is
-   consistent with this rule as long as the *old* `PENDING` row's own
-   columns are never mutated in place outside the append-only convention
-   (i.e. a new row superseding it, mirroring every other membership
-   change, is the expected shape). Re-joining after leaving is likewise a
-   new row.
+   of the old one. **DEC-MEMOS-15's self-upgrade is not an exception to
+   this shape, and is not an implementation choice (corrected, RKOI round
+   four): it must close the old row and insert the new one in one
+   transaction, exactly like every other membership change.** The
+   append-only trigger's own shape makes this the *only* legal way to
+   change `identity_assurance` at all — it permits `left_at NULL → NOT
+   NULL` and nothing else, so there is no `UPDATE` path by which
+   `identity_assurance` could change in place even if `BL-MEMOS-023` tried
+   one. Re-joining after leaving is likewise a new row.
 7. **`msp_thread_participant_lifecycle`** (phase 003, not built in stage 1)
    will support `leave` (`assertParticipants` required) and
    `close_for_relink` (**corrected from 0.3.1b**: gated by
@@ -712,21 +773,25 @@ not a claim about what exists today.
   The append request accepts a `policy_revision` field, but nothing in
   the shipped store persists it onto `thread_messages` — it is session
   metadata. A design correction against a warning that assumed it was a
-  message column (§0.2).
+  message column (§0.3).
 - **`person_id` is a caller convention this design records but does not
   itself enforce**: zuri-ai's own sending behavior sets it to the
   speaker's `principalId` when the speaker is a verified `HUMAN` and
-  leaves it `null` otherwise, confirmed exactly by
-  `memos-001-r3/probe-upgrade.mjs`'s own comment ("exactly
-  `server-line-answer.js:186-199`'s shape: `speakerId = principal`;
-  `personId = verified ? principal : null`"), but `#applyHumanParticipant`
-  simply stores whatever value is sent (`personId || existing.person_id`
-  when omitted) — MSP does not derive `person_id` from anything and does
-  not validate this convention on its own. **This exact convention is what
-  DEC-MEMOS-15 (§7 rule 2) keys off of**: the `person_id ∈ { null,
+  leaves it `null` otherwise (`server-line-answer.js:186-199`'s shape:
+  `speakerId = principal`; `personId = verified ? principal : null`), but
+  `#applyHumanParticipant` simply stores whatever value is sent
+  (`personId || existing.person_id` when omitted) — MSP does not derive
+  `person_id` from anything and does not validate this convention on its
+  own. **This exact convention is what DEC-MEMOS-15 (§7 rule 2) keys off
+  of, on both sides of the check**: the incoming `person_id ∈ { null,
   grant.principalId }` condition is satisfiable precisely because zuri-ai
-  never sends anything else. This corrects 0.3.1b, which stated a
-  stronger, MSP-enforced rule that the code does not actually have.
+  never sends anything else, and the *stored* row's own `person_id` must
+  independently satisfy the same membership before a self-upgrade is
+  accepted (§7 rule 2's round-four tightening) — checking only the
+  incoming value would have let a row with someone else's stored
+  `person_id` slip through on a claim-free append. This corrects 0.3.1b,
+  which stated a stronger, MSP-enforced rule that the code does not
+  actually have.
 - **Idempotency and conflict.** `source_event_id` is **required** on
   append (the contract doc's own words: "zuri-ai always sends one"). A
   replayed identical append returns `deduplicated: true` with the
@@ -751,7 +816,7 @@ not a claim about what exists today.
 
 ### 9.2 Delivery reconciliation
 
-**Already shipped correctly** (§0.2 warning 2), described here for
+**Already shipped correctly** (§0.3 warning 2), described here for
 completeness rather than as a correction:
 
 - `thread_pending_deliveries` carries `receipt_id` (its own primary key),
@@ -788,26 +853,34 @@ completeness rather than as a correction:
   `tenantId`/`businessId`/`channelAccountId`/`externalRoomRef`, hashing
   `externalRoomRef` the same three-segment way every other room-hash
   computation does.
-- **Confirmed code gap, requires a fix (§0.2 check a, corrected):**
-  delivery grants carry no `audienceKind` at all — not merely a value
-  that happens not to match. `thread-guard.mjs`'s general `else if
-  (thread)` branch nonetheless runs the audience-mismatch check
-  unconditionally whenever `threadLookupFor` resolves a thread — which it
-  does for `msp_thread_delivery_record` once `inbound_message_id` already
-  names an existing message. **Design requirement, general rule (not a
-  delivery-specific carve-out): the audience check runs only when the
-  grant actually carries an `audienceKind` claim.** Skipping it applies to
-  `msp_thread_delivery_record` today because that is the only tool whose
-  grant omits the claim, but the rule itself is "check when present," not
-  "except for delivery" — a future tool with the same claim shape gets the
-  same treatment without a new carve-out. This is a real code gap for
-  `BL-MEMOS-033`/`BL-MEMOS-109`, not merely a documentation mismatch — a
-  delivery receipt for any thread whose inbound message has already landed
-  is refused today.
+- **`audienceKind` is required on every thread tool except
+  `msp_thread_delivery_record` — corrected from "check only when present"
+  (RKOI round four, owner direction).** zuri-ai's signer sends
+  `audienceKind` unconditionally on `resolve`, and `claimsFor` includes it
+  on `append`, `context`, `memory_record` and `injection_record` as well —
+  its absence on any of those five tools is not a normal case to tolerate
+  silently, it is itself a signal something is wrong upstream. **Missing
+  the claim on any of those five is refused** (the same
+  `thread_audience_mismatch` family of error, or a dedicated
+  `validation_failed` if the guard chooses to distinguish "absent" from
+  "present but wrong"). **Only `msp_thread_delivery_record`'s grant
+  legitimately carries no `audienceKind` at all** — confirmed a real code
+  gap: delivery grants carry no `audienceKind`, but `thread-guard.mjs`'s
+  general `else if (thread)` branch nonetheless runs the audience-mismatch
+  check unconditionally whenever `threadLookupFor` resolves a thread —
+  which it does for `msp_thread_delivery_record` once `inbound_message_id`
+  already names an existing message, wrongly refusing every such delivery
+  call today. Its scope instead comes from the inbound message's own
+  thread plus the room hash (tenant + account + room, §6.2/§6.3) — no
+  `audienceKind` is ever required or derived for it. **If a delivery grant
+  ever does happen to carry an `audienceKind` claim anyway, it is still
+  checked against the thread**, never silently ignored just because the
+  tool is normally exempt. This is a real code gap for
+  `BL-MEMOS-033`/`BL-MEMOS-109`, not merely a documentation mismatch.
 
 ### 9.3 Injection receipts
 
-**State machine corrected to match the shipped handler exactly** (§0.2
+**State machine corrected to match the shipped handler exactly** (§0.3
 critical finding 1): `thread_injection_receipts` carries `injection_id`
 (**`PRIMARY KEY`**, not merely unique — stronger than originally required),
 `thread_id`, `exchange_id`, `packet_hash`, `policy_revision`, `model_ref`,
@@ -823,7 +896,7 @@ worker's own retry of an identical state is idempotent rather than an
 error. **The first insert must be `RESOLVED`** — `(!old && status !==
 'RESOLVED')` is a `conflict`.
 
-**Confirmed code gap, requires a fix (§0.2 warning 3):** the `UPDATE
+**Confirmed code gap, requires a fix (§0.3 warning 3):** the `UPDATE
 thread_injection_receipts SET state=?,updated_at=?,version=version+1
 WHERE injection_id=?` that implements this is **JS-only** — no database
 trigger backs it, unlike every other content-bearing table's tombstone or
@@ -927,7 +1000,7 @@ the migration's own header comment.)*
 
 The tables and triggers below marked **shipped** are transcribed from the
 actual migration file; those marked **required addition** are gaps this
-revision found against the warnings in §0.2 and specifies for
+revision found against the warnings in §0.3 and specifies for
 `BL-MEMOS-033` to add before merge (the migration is not yet merged, so
 these are ordinary edits to `0008`, not a follow-up migration).
 
@@ -969,7 +1042,7 @@ CREATE UNIQUE INDEX idx_thread_participants_open ON thread_participants (thread_
 -- second distinct HUMAN speaker_id is refused unconditionally, even after the
 -- first has left.
 --
--- REQUIRED ADDITION (§0.1 warning 3, consolidated consistency list): no
+-- REQUIRED ADDITION (§0.2 warning 3, consolidated consistency list): no
 -- INSERT-time tenant check exists for this table at all today. Add:
 CREATE TRIGGER trg_thread_participants_tenant_consistency
 BEFORE INSERT ON thread_participants
@@ -995,7 +1068,7 @@ CREATE TABLE chat_sessions (
 );
 -- trg_chat_sessions_tenant_consistency (INSERT only, shipped).
 --
--- REQUIRED ADDITION (§0.2 warning 4): no trigger stops tenant_id or
+-- REQUIRED ADDITION (§0.3 warning 4): no trigger stops tenant_id or
 -- thread_id from changing after insert. Add:
 CREATE TRIGGER trg_chat_sessions_pin_tenant_and_thread
 BEFORE UPDATE ON chat_sessions
@@ -1028,7 +1101,7 @@ CREATE TABLE thread_messages (
   UNIQUE (thread_id, sequence),
   UNIQUE (thread_id, source_event_id)
 );
--- REQUIRED ADDITION (§0.2 warning 4): cross-row consistency the shipped
+-- REQUIRED ADDITION (§0.3 warning 4): cross-row consistency the shipped
 -- migration does not yet check. Add:
 CREATE TRIGGER trg_thread_messages_cross_consistency
 BEFORE INSERT ON thread_messages
@@ -1062,7 +1135,7 @@ CREATE TABLE protected_memory_records (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
--- Note the two distinct status domains (§0.2 finding, "record status is
+-- Note the two distinct status domains (§0.3 finding, "record status is
 -- ACTIVE|REVOKED|SUPERSEDED, with verification_state a separate domain"):
 -- `status` tracks the record's own lifecycle (superseded/revoked);
 -- `verification_state` tracks whether its content is trusted
@@ -1072,7 +1145,7 @@ CREATE TABLE protected_memory_records (
 -- current participant of thread_id in the same tenant. No CHECK-with-subquery
 -- exists or ever existed in the shipped file.
 --
--- REQUIRED ADDITION (§0.1 warning 3): a record's own session_id, when
+-- REQUIRED ADDITION (§0.2 warning 3): a record's own session_id, when
 -- present, must belong to its own thread_id -- the same shape as
 -- thread_messages' cross-consistency trigger, not present for this table
 -- today. Fold this into trg_protected_memory_records_subject_rules'
@@ -1099,8 +1172,8 @@ CREATE TABLE session_compaction_jobs (
 -- trg_session_compaction_jobs_tenant_consistency (INSERT only, shipped)
 -- checks tenant_id against threads -- but not that session_id actually
 -- belongs to thread_id, or to the same tenant. REQUIRED ADDITION
--- (§0.1 warning 3, confirmed by memos-001-r3/probe-jobs.mjs's J1 and J2,
--- both wrongly ACCEPTED today):
+-- (§0.2 warning 3: a job naming a session of a different thread, or of a
+-- different tenant, is wrongly accepted today):
 CREATE TRIGGER trg_session_compaction_jobs_session_consistency
 BEFORE INSERT ON session_compaction_jobs
 BEGIN
@@ -1119,6 +1192,15 @@ BEGIN
   SELECT CASE WHEN NOT (
     NEW.tenant_id IS OLD.tenant_id AND NEW.thread_id IS OLD.thread_id AND NEW.session_id IS OLD.session_id
   ) THEN RAISE(ABORT, 'session_compaction_jobs.tenant_id/thread_id/session_id are immutable') END;
+-- `BL-MEMOS-111` (§6.3, §15): the room-hash comparison itself is a
+-- HANDLER-level check (thread-guard.mjs resolves job_id -> session_id ->
+-- thread_id, then must recompute and compare the grant's own room hash
+-- against that thread's stored external_room_ref_hmac), not a database
+-- trigger -- there is no column on this table to compare against without
+-- the join above. This table's own contribution to closing the
+-- cross-room gap is exactly the two triggers above: without them, even a
+-- correct room-hash check on `claim` could not stop a job from being
+-- inserted against the wrong thread in the first place.
 END;
 
 -- SHIPPED
@@ -1144,7 +1226,7 @@ CREATE TABLE session_summaries (
 -- redaction_state/summary_json. No `invocation_state` column exists here
 -- (it lives on session_compaction_jobs) -- a warning that named it here
 -- was mistaken about which table holds it.
--- REQUIRED ADDITION (§0.1 warning 3): the same session-belongs-to-thread
+-- REQUIRED ADDITION (§0.2 warning 3): the same session-belongs-to-thread
 -- check `session_compaction_jobs` needs. Add to the existing
 -- trg_session_summaries_tenant_consistency trigger's body:
 --   SELECT RAISE(ABORT, 'session_summaries.session_id must belong to thread_id')
@@ -1175,14 +1257,13 @@ CREATE TABLE thread_injection_receipts (
   version INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
--- REQUIRED ADDITION (§0.2 warning 3, §9.3; corrected §0.1 warning 2 —
+-- REQUIRED ADDITION (§0.3 warning 3, §9.3; corrected §0.2 warning 2 —
 -- injection_id itself must also be pinned): no UPDATE trigger exists
--- today; the state machine is JS-only. `memos-001-r3/probe-ddl.mjs`'s I3
--- shows a PRIMARY-KEY-only rewrite (state and version left untouched) was
--- accepted by an earlier draft of this trigger that pinned every OTHER
--- column but not the key itself. Add, matching the handler's own two
--- behaviours (a real transition, or a same-state no-op) exactly, and
--- pinning `injection_id`:
+-- today; the state machine is JS-only. RKOI found that a PRIMARY-KEY-only
+-- rewrite (state and version left untouched) was accepted by an earlier
+-- draft of this trigger that pinned every OTHER column but not the key
+-- itself. Add, matching the handler's own two behaviours (a real
+-- transition, or a same-state no-op) exactly, and pinning `injection_id`:
 CREATE TRIGGER trg_thread_injection_receipts_state_machine
 BEFORE UPDATE ON thread_injection_receipts
 BEGIN
@@ -1221,20 +1302,35 @@ CREATE TABLE thread_pending_deliveries (
 -- tombstone, pinning everything else via IS. No thread_id FK, deliberately.
 
 -- SHIPPED, but missing a tenant_id column entirely.
--- REQUIRED FIX (§0.1 warning 1, RKOI round three — corrected from §0.2's
--- own wrong fix): `memos-001-r3/probe-ddl.mjs`'s V1 shows KIN's shipped
+-- REQUIRED FIX, diagnosis corrected (RKOI round four — round two's own fix
+-- got the failure mode backwards). KIN's shipped
 -- `#refreshSummaryAfterDelivery` reconciliation write is exactly
 -- `INSERT OR IGNORE INTO thread_summary_invalidations(summary_id,reason,recorded_at)
 -- SELECT summary_id,'DELIVERY_RECONCILED',? FROM session_summaries WHERE session_id=?`
--- -- it never names tenant_id at all. §0.2's `ALTER TABLE ... ADD COLUMN
--- tenant_id TEXT NOT NULL DEFAULT ''` would make that exact INSERT
--- succeed silently with an EMPTY tenant_id instead of failing loudly
--- (probe V1's own point). Since 0008 has not shipped, this is an ordinary
--- edit to the CREATE TABLE, not a follow-up migration: declare the column
--- NOT NULL with **no default**, so an INSERT that omits it fails at the
--- database layer immediately. The handler must be changed to select and
--- supply the tenant explicitly (a one-line join through session_summaries
--- -> threads, the same join the trigger below already needs):
+-- -- it never names tenant_id at all. WITH THE OLD `DEFAULT ''`, the
+-- tenant-consistency trigger's `<>` comparison actually REFUSED that
+-- insert ('' <> '<real tenant>' is true, so the trigger fired) -- it did
+-- not succeed silently, contrary to what an earlier round claimed. The
+-- REAL bug only appears once tenant_id is NOT NULL with no default: since
+-- the handler still uses `INSERT OR IGNORE`, and IGNORE silently absorbs
+-- a NOT NULL violation exactly as it absorbs a PRIMARY KEY conflict, the
+-- statement now inserts NOTHING AT ALL (`changes: 0`) instead of either
+-- failing loudly or succeeding wrong -- the invalidation record simply
+-- never exists. Fix has two parts, both required:
+--   (1) the handler must change to `INSERT INTO thread_summary_invalidations(...)
+--       SELECT ... ON CONFLICT(summary_id) DO NOTHING`, an explicit
+--       conflict target rather than a blanket IGNORE, so a NOT NULL
+--       violation on a forgotten tenant_id still raises loudly while the
+--       legitimate duplicate-insert case (the same summary reconciled
+--       twice) is still a harmless no-op;
+--   (2) the trigger's comparison must be NULL-safe: `<>` against a NULL
+--       tenant_id evaluates to NULL, which WHERE treats as false, so the
+--       trigger would not fire at all for a NULL value -- use `IS NOT`.
+-- Since 0008 has not shipped, both are ordinary edits, not a follow-up
+-- migration: declare the column NOT NULL with **no default**, and the
+-- handler must be changed to select and supply the tenant explicitly (a
+-- one-line join through session_summaries -> threads, the same join the
+-- trigger below already needs):
 CREATE TABLE thread_summary_invalidations (
   summary_id TEXT PRIMARY KEY REFERENCES session_summaries (summary_id),
   tenant_id TEXT NOT NULL,
@@ -1245,12 +1341,11 @@ CREATE TRIGGER trg_thread_summary_invalidations_tenant_consistency
 BEFORE INSERT ON thread_summary_invalidations
 BEGIN
   SELECT RAISE(ABORT, 'thread_summary_invalidations.tenant_id must match its summary''s thread tenant_id')
-  WHERE NEW.tenant_id <> (SELECT t.tenant_id FROM session_summaries s JOIN threads t ON t.thread_id = s.thread_id WHERE s.summary_id = NEW.summary_id);
+  WHERE NEW.tenant_id IS NOT (SELECT t.tenant_id FROM session_summaries s JOIN threads t ON t.thread_id = s.thread_id WHERE s.summary_id = NEW.summary_id);
 END;
--- REQUIRED ADDITION (§0.1 warning 1, probe V3 — a bare UPDATE rewriting
--- tenant_id was accepted with no trigger at all to stop it): pin every
--- column; nothing about an invalidation record is ever meant to change
--- once written.
+-- REQUIRED ADDITION (round three: a bare UPDATE rewriting tenant_id was
+-- accepted with no trigger at all to stop it): pin every column; nothing
+-- about an invalidation record is ever meant to change once written.
 CREATE TRIGGER trg_thread_summary_invalidations_no_update
 BEFORE UPDATE ON thread_summary_invalidations
 BEGIN
@@ -1295,12 +1390,12 @@ handler**, not reconstructed from prose.
 
 | Tool | Required request fields | Optional fields | Response | Rule |
 |---|---|---|---|---|
-| `msp_thread_resolve` | `thread_kind`, `channel_type`, `channel_account_id`, `external_room_ref`, `tenant_id`, `access` | `audience_kind`, `business_id`, `actor`, `now` | `{ thread: { threadId, threadKind, channelType, channelAccountId, externalRoomRef, tenantId, businessId, audienceKind, status }, created }` | HMAC key required. Mint requires `thread_kind === grant.audienceKind` and (if sent) `audience_kind === thread_kind`, else `thread_audience_mismatch`. **Stage 1: resolving an existing thread just returns `created: false` — no agent concept applies at all (§8).** |
-| `msp_thread_message_append` | `thread_id`, `speaker_id`, `speaker_kind`, `identity_assurance`, `direction`, `text`, `source_event_id`, `access` | `session_id`, `exchange_id`, `person_id`, `occurred_at`, `received_at`, `reply_to_message_id`, `delivery_state`, `idle_timeout_minutes`, `policy_revision`, `message_id`, `now` | `{ message: { messageId, exchangeId, sequence }, session: { sessionId }, deduplicated }` | First `HUMAN` append with `speaker_id === grant.principalId` creates the membership (DEC-MEMOS-12, §7 rule 2); every other participant change needs `assertParticipants`. Idempotent on `(thread_id, source_event_id)`; a content-mismatched replay is `conflict`. `direction` is `INBOUND`/`OUTBOUND`. |
-| `msp_thread_memory_record` | `thread_id`, `kind`, `asserted_by_speaker_id`, `body`, `source_message_refs`, `access` | `session_id`, `subject_person_id`, `scope`, `supersedes_record_id`, `status`, `verification_state`, `now` | `{ recordId, threadId, assertedBySpeakerId, sourceMessageRefs, verificationState, ... }` | Requires `writePrivate` and `thread.audienceKind === 'DIRECT'`. `asserted_by_speaker_id` must equal `grant.principalId`. `verification_state: 'CONFIRMED'` requires `confirmMemory`. `record_id` is content-derived (§6.1) — a duplicate identical assertion is idempotent by construction, no nonce needed. |
-| `msp_thread_context` | `thread_id`, `access` | `recent_exchange_count`, `current_exchange_id`, `now` | `{ thread, recentExchanges, threadSummaries, protectedRecords, participants, coverageGap }` | Requires `readPrivate` and `thread.audienceKind === 'DIRECT'`; grant principal must be the current `VERIFIED` `HUMAN` participant (§7 rule 5). |
-| `msp_thread_injection_record` | `thread_id`, `exchange_id`, `injection_id`, `packet_hash`, `policy_revision`, `model_ref`, `state`, `access` | `now` | `{ injectionId, state, version }` | Requires `readPrivate` and `DIRECT`. State machine per §9.3; same-state calls are a no-op, not an error. |
-| `msp_thread_delivery_record` | `source_event_id`, `receipt_id`, `outcome`, `text`, `inbound_message_id`, `access` | `provider_ref`, `now` | `{ receiptId, ... }` (pending, or reconciled with `messageId`) | Requires `deliveryWriter` and the grant's `tenantId`/`businessId`/`channelAccountId`/`externalRoomRef` scope — **no `channelType` claim exists** (§6.1, §9.2, corrected RKOI round three). The `audienceKind` check is skipped because this grant carries no `audienceKind` claim at all (the general "check only when present" rule, §9.2) — a real code gap to fix, not merely a spec point. |
+| `msp_thread_resolve` | `thread_kind`, `channel_type`, `channel_account_id`, `external_room_ref`, `tenant_id`, `access`; **grant's `audienceKind` required** | `audience_kind`, `business_id`, `actor`, `now` | `{ thread: { threadId, threadKind, channelType, channelAccountId, externalRoomRef, tenantId, businessId, audienceKind, status }, created }` | HMAC key required. Mint requires `thread_kind === grant.audienceKind` and (if sent) `audience_kind === thread_kind`, else `thread_audience_mismatch`. A grant with no `audienceKind` at all is refused, not silently unchecked. **Stage 1: resolving an existing thread just returns `created: false` — no agent concept applies at all (§8).** |
+| `msp_thread_message_append` | `thread_id`, `speaker_id`, `speaker_kind`, `identity_assurance`, `direction`, `text`, `source_event_id`, `access`; **grant's `audienceKind` required** | `session_id`, `exchange_id`, `person_id`, `occurred_at`, `received_at`, `reply_to_message_id`, `delivery_state`, `idle_timeout_minutes`, `policy_revision`, `message_id`, `now` | `{ message: { messageId, exchangeId, sequence }, session: { sessionId }, deduplicated }` | First `HUMAN` append with `speaker_id === grant.principalId` creates the membership (DEC-MEMOS-12, §7 rule 2); a self-upgrade under DEC-MEMOS-15's four conditions needs no claim; every other participant change needs `assertParticipants`. Idempotent on `(thread_id, source_event_id)`; a content-mismatched replay is `conflict`. `direction` is `INBOUND`/`OUTBOUND`. |
+| `msp_thread_memory_record` | `thread_id`, `kind`, `asserted_by_speaker_id`, `body`, `source_message_refs`, `access`; **grant's `audienceKind` required** | `session_id`, `subject_person_id`, `scope`, `supersedes_record_id`, `status`, `verification_state`, `now` | `{ recordId, threadId, assertedBySpeakerId, sourceMessageRefs, verificationState, ... }` | Requires `writePrivate` and `thread.audienceKind === 'DIRECT'`. `asserted_by_speaker_id` must equal `grant.principalId`. `verification_state: 'CONFIRMED'` requires `confirmMemory`. `record_id` is content-derived (§6.1) — a duplicate identical assertion is idempotent by construction, no nonce needed. |
+| `msp_thread_context` | `thread_id`, `access`; **grant's `audienceKind` required** | `recent_exchange_count`, `current_exchange_id`, `now` | `{ thread, recentExchanges, threadSummaries, protectedRecords, participants, coverageGap }` | Requires `readPrivate` and `thread.audienceKind === 'DIRECT'`; grant principal must be the current `VERIFIED` `HUMAN` participant (§7 rule 5). |
+| `msp_thread_injection_record` | `thread_id`, `exchange_id`, `injection_id`, `packet_hash`, `policy_revision`, `model_ref`, `state`, `access`; **grant's `audienceKind` required** | `now` | `{ injectionId, state, version }` | Requires `readPrivate` and `DIRECT`. State machine per §9.3; same-state calls are a no-op, not an error. |
+| `msp_thread_delivery_record` | `source_event_id`, `receipt_id`, `outcome`, `text`, `inbound_message_id`, `access`; **the one tool whose grant carries no `audienceKind` at all — this is the only exemption, not a general "check when present" rule** | `provider_ref`, `now` | `{ receiptId, ... }` (pending, or reconciled with `messageId`) | Requires `deliveryWriter` and the grant's `tenantId`/`businessId`/`channelAccountId`/`externalRoomRef` scope, plus the room hash (§6.2/§6.3) — **the `channelType` grant requirement is a tracked gap, not yet removed** (§6.1, §9.2, `BL-MEMOS-109`). Scope comes from the inbound message's own thread and the room hash, never from `audienceKind`; if a delivery grant ever does carry one anyway it is still checked, never ignored. A real code gap to fix, not merely a spec point. |
 
 ### The four worker tools
 
@@ -1310,7 +1405,7 @@ handler**, not reconstructed from prose.
 | Tool | Required request fields | Response (as the worker actually reads it) | Rule |
 |---|---|---|---|
 | `msp_session_sweep` | `access` | `{ jobs: [{ jobId, sessionId, sourceStartSequence, sourceEndSequence, sourceDigest, leaseToken, ... }], closed }` | Requires `operator`; every scope field (`tenant_id`, `business_id`, `channel_account_id`, `external_room_ref`) is **overwritten from the grant**, never trusted from the request body. Optional `limit`, test-only `now`. |
-| `msp_session_compaction_claim` | `job_id`, `worker_id`, `access` | Job fields including `sources` (message evidence only — **never `protectedRecords`**, §0.2 item 9), `sourceStartSequence`, `sourceEndSequence`, `sourceDigest`, `sessionId`, `jobId`, `leaseToken` | Requires `operator`. Optional `lease_seconds` (1–300, default 120). |
+| `msp_session_compaction_claim` | `job_id`, `worker_id`, `access` | Job fields including `sources` (message evidence only — **never `protectedRecords`**, §0.3 item 9), `sourceStartSequence`, `sourceEndSequence`, `sourceDigest`, `sessionId`, `jobId`, `leaseToken` | Requires `operator`. Optional `lease_seconds` (1–300, default 120). |
 | `msp_session_compaction_commit` | `session_id`, `job_id`, `source_start_sequence`, `source_end_sequence`, `summary`, `policy_revision`, `summarizer_version`, `invocation_state`, `lease_token`, `source_digest`, `access` | commit result | Requires `operator`. `invocation_state` must be the literal `"TERMINAL"`. Presence of `lease_token` and `source_digest` is checked before any job lookup (RKOI review item 11: refused the same way whether or not `job_id` happens to resolve). |
 | `msp_session_compaction_retry` | `job_id`, `error`, `lease_token`, `access` | `{ status: 'RETRYABLE', ... }` | Requires `operator`. Lease token presence checked before lookup, same as commit. |
 
@@ -1354,16 +1449,17 @@ they were live errors today.
 
 ## 15. Security invariants and the tests that prove them
 
-One list, reconciled with the plan (§0.2 warning 12): stage-1 code is
+One list, reconciled with the plan (§0.3 warning 12): stage-1 code is
 already creating `tests/security/thread-memory-scoping.security.mjs`; it
 is the umbrella file for every stage-1 case below.
 
 | Invariant | Suite |
 |---|---|
 | A second `HUMAN` cannot join a `DIRECT` thread; `AGENT`/`OPERATOR`/`UNKNOWN` never get a private read and never become a participant; `assurance` cannot rise except via an explicit `assertParticipants` claim, the (unbuilt) lifecycle tool, or DEC-MEMOS-15's narrow self-upgrade exception (§7 rule 2) — proven both ways: the exception fires only when all four conditions hold, and is refused the instant any one does not (a different `person_id`, a different `speaker_id`, or a downgrade attempt, which must be silently ignored rather than stored); a `HUMAN`-asserted record is self-bound; a null-subject record is asserter-only | `thread-memory-scoping.security.mjs` |
-| Two tenants, same external ref → two threads; a grant scoped to room R1's hash cannot act against a thread that only shares R1's `channelAccountId` (room-hash comparison, not account-id-only, §6.3); an append replay with mismatched content is `conflict`; the raw external ref, raw person id and `MSP_IDENTITY_HMAC_KEY`/`MSP_THREAD_SERVICE_KEY` never appear in a journal payload, error or response | `thread-memory-scoping.security.mjs` |
-| `msp_thread_delivery_record` succeeds for a thread whose inbound message already exists (no wrongful `thread_audience_mismatch`, since the delivery grant carries no `audienceKind` at all, §9.2); its scope check uses exactly `tenantId`/`businessId`/`channelAccountId`/`externalRoomRef`, never a `channelType` claim; a delivery reconciled after its session has already closed still succeeds and correctly invalidates the affected summary | `thread-memory-scoping.security.mjs` |
-| Every consistency-trigger gap this revision found is refused, not merely documented: a job/summary/record naming a session of a different thread or tenant; a post-insert rewrite of `chat_sessions`/`session_compaction_jobs` identity columns; a `thread_participants` row inserted under the wrong tenant; a `thread_summary_invalidations` insert omitting `tenant_id` (must fail the NOT NULL constraint, not silently succeed empty) or a later rewrite of it; an injection-receipt update that rewrites `injection_id` while leaving state/version untouched | `thread-memory-scoping.security.mjs` |
+| Two tenants, same external ref → two threads; a grant scoped to room R1's hash cannot act against a thread that only shares R1's `channelAccountId` (room-hash comparison, not account-id-only, §6.3) on **any** thread-bound tool; an append replay with mismatched content is `conflict`; the raw external ref, raw person id and `MSP_IDENTITY_HMAC_KEY`/`MSP_THREAD_SERVICE_KEY` never appear in a journal payload, error or response | `thread-memory-scoping.security.mjs` |
+| **`BL-MEMOS-111`: a worker grant scoped to room R1 cannot `claim`, `commit` or `retry` a compaction job belonging to room R2's thread**, even though those three tools resolve their thread through `job_id` rather than `thread_id` — the room-hash comparison applies via the job's own thread just as it does everywhere else, and a claim response never leaks R2's `sources` to an R1-scoped grant | `thread-memory-scoping.security.mjs` |
+| `audienceKind` is refused as missing on `resolve`/`append`/`context`/`memory_record`/`injection_record` (§9.2, §13); `msp_thread_delivery_record` succeeds for a thread whose inbound message already exists (no wrongful `thread_audience_mismatch`, since its grant carries no `audienceKind` claim at all — the one exemption, not a general rule); its scope check uses exactly `tenantId`/`businessId`/`channelAccountId`/`externalRoomRef` plus the room hash, and requiring a `channelType` claim is closed as a tracked gap (`BL-MEMOS-109`); a delivery reconciled after its session has already closed still succeeds, and the resulting invalidation row for the affected summary can be found directly in the database, not merely inferred from the call succeeding | `thread-memory-scoping.security.mjs` |
+| Every consistency-trigger gap this revision found is refused, not merely documented: a job/summary/record naming a session of a different thread or tenant; a post-insert rewrite of `chat_sessions`/`session_compaction_jobs` identity columns; a `thread_participants` row inserted under the wrong tenant; a `thread_summary_invalidations` insert omitting `tenant_id` raises a `NOT NULL` violation that is not swallowed by the handler's own conflict-handling clause (i.e. `ON CONFLICT(summary_id) DO NOTHING` does not also hide this failure) rather than silently inserting nothing; an injection-receipt update that rewrites `injection_id` while leaving state/version untouched; at most one `OPEN` session exists per thread at any time (never a claim about `CLOSING`, which may legitimately coexist with a new `OPEN` session during reconciliation) | `thread-memory-scoping.security.mjs` |
 | A relinked `DIRECT` thread (once the lifecycle tool exists) is closed, its binding freed only for `ACTIVE`-scoped uniqueness, and the new thread's history is empty | `participant-lifecycle-relink.security.mjs` (created when the lifecycle tool ships, phase 003 — not yet, per the plan's own placement) |
 | `msp-contracts` contains no `.prepare(`, `.exec(` or `.pragma(` call anywhere in its source tree (C-2 structural proof) | `dependency-boundaries.test.mjs` |
 | Once stage 2 exists: an agent's own resolve on an existing thread without `assertAgents` is `agent_not_current`; auto-attach happens only when `created: true`; a departed agent is denied on its very next call | `thread-agent-scoping.security.mjs` |
@@ -1403,7 +1499,7 @@ msp-client-js       (+ env names below)
 - **C-2 structural proof, already shipped**: `thread-access.mjs`'s own
   header comment states `tests/contract/dependency-boundaries.test.mjs`
   scans every `msp-contracts` source file for `.prepare(`, `.exec(` and
-  `.pragma(`, not only this one file's imports — confirming §0.2 warning
+  `.pragma(`, not only this one file's imports — confirming §0.3 warning
   7/12 is already closed in code, not merely planned.
 - **Environment names, confirmed against the contract doc and
   `thread-guard.mjs`**: `MSP_THREAD_SERVICE_KEY` (the grant-signing
@@ -1479,10 +1575,11 @@ New items this round:
   have supported it is withdrawn from this revision because the shipped
   code does not have one.
 - **Confirm DEC-MEMOS-15's self-upgrade rule** (§7 rule 2) — accepting a
-  `PENDING → VERIFIED` transition with no explicit claim when the four
-  listed conditions hold. This is a real, if narrow, widening of what an
-  ordinary append can change without `assertParticipants`; the owner
-  should see it named as a decision, not only find it in the schema.
+  `PENDING → VERIFIED` transition with no explicit claim when the listed
+  conditions hold on both the incoming request and the stored row. This is
+  a real, if narrow, widening of what an ordinary append can change
+  without `assertParticipants`; the owner should see it named as a
+  decision, not only find it in the schema.
 - **Relink still needs a caller** zuri-ai has not yet built (§7 rule 7) —
   recorded in the ADR's cross-repo change list. **Assurance upgrades no
   longer need one** for the normal case: DEC-MEMOS-15 resolves that
@@ -1507,7 +1604,8 @@ have been fixed. Nothing past stage 1 is implemented.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
-| 0.3.3b | 2026-09-14 | proposed | Answers RKOI's round-3 NEEDS REVISION on commit `6d1a801` (1 critical, verified against `memos-001-r3/`'s probes). **Critical**: the delivery grant carries neither `channelType` nor `audienceKind` — zuri-ai's real signer sends exactly `{tenantId, businessId, channelAccountId, externalRoomRef, principalId, policyRevision, deliveryWriter}` (`memos-001-r3/port.mjs:420-422`). Owner direction (a): dropped `channel_type` from the room-hash input entirely (three segments now, §6.2/§6.3, normative), removed every `channelType` grant claim from §6.1/§9.2/§13, and generalized the audience-check exemption to "check only when the claim is present" rather than a delivery-specific carve-out. Added **DEC-MEMOS-15** (§7 rule 2, §9.1): a later append's `PENDING → VERIFIED` self-upgrade needs no `assertParticipants` when `speaker_id`/`speaker_kind`/`person_id`/the target row all resolve to the grant's own principal; a `VERIFIED → PENDING` downgrade is silently ignored; every other change still needs the claim — confirmed necessary by `memos-001-r3/probe-upgrade.mjs`'s four-turn sequence, without which a DIRECT thread becomes unwritable the moment its participant is verified. Fixed three trigger bugs `memos-001-r3/probe-ddl.mjs` and `probe-jobs.mjs` demonstrated directly: `thread_summary_invalidations.tenant_id` is `NOT NULL` with no default (0008 is unshipped, so this is an ordinary edit) rather than a `DEFAULT ''` that let KIN's own shipped reconciliation INSERT succeed silently with an empty tenant, plus a no-update/no-delete trigger; the injection state-machine trigger now also pins `injection_id` itself, closing a primary-key-only rewrite the prior trigger accepted; `session_compaction_jobs` gains an INSERT-time session-belongs-to-thread-and-tenant check and an identity-pinning UPDATE trigger, and the same session-belongs-to-thread check is noted for `session_summaries` and `protected_memory_records`; `thread_participants` gains the tenant-consistency trigger it never had; every thread-bound call must compare the grant's re-derived room hash against the thread's own stored hash, not merely `channelAccountId`, listed here as a confirmed gap rather than existing behaviour. Every `DEC-MEMOS-01..14` reference updated to `01..15`. | working-tree | ATHER |
+| 0.3.4b | 2026-09-15 | proposed | Folds RKOI's nine round-four warnings (docs **APPROVED, 0 critical**, at commit `1c4a62f`) ahead of merge — not a NEEDS REVISION response. Added **`BL-MEMOS-111`**: the room-hash comparison must run on every thread-bound call, including `claim`/`commit`/`retry` via the job's own thread, closing a cross-room gap that had no backlog row at all — a worker grant scoped to room R1 could otherwise claim room R2's compaction job outright. Corrected the `thread_summary_invalidations` diagnosis, which round three got backwards: the old `DEFAULT ''` made the tenant trigger *refuse* the mismatched insert, not succeed silently; the real bug is that `INSERT OR IGNORE` on the new `NOT NULL` column silently inserts nothing at all, fixed by switching the handler to `ON CONFLICT(summary_id) DO NOTHING` and the trigger's comparison to `IS NOT`. Restated session uniqueness as "at most one `OPEN` session per thread" (never a claim about `CLOSING`, since reconciliation legitimately leaves one of each). Changed the audience rule from "check only when present" to **`audienceKind` required on every thread tool except `msp_thread_delivery_record`** — zuri-ai's signer sends it unconditionally everywhere else. Reworded the `channelType` removal and the room-hash three-segment form as a **tracked gap** (`BL-MEMOS-109`), not an already-true fact, since the code at the reviewed commit still required it. Tightened **DEC-MEMOS-15**: the check now also requires the *stored* row's own `person_id` to already be null-or-principal, not only the incoming value; §7 rule 6 states plainly that a self-upgrade must close-then-insert in one transaction (not an implementation choice — the append-only trigger allows nothing else); recorded that a `VERIFIED → PENDING` downgrade being ignored means MSP's own revocation today depends entirely on zuri-ai no longer setting `readPrivate`. Named `GATE-MEMOS-4/5/6`'s suite files explicitly. Removed every citation of RKOI's session-scratch probe scripts as evidence throughout this document, replacing each with the finding itself or the backlog item whose acceptance test proves it. | working-tree | ATHER |
+| 0.3.3b | 2026-09-14 | proposed | Answers RKOI's round-3 NEEDS REVISION on commit `6d1a801` (1 critical). **Critical**: the delivery grant carries neither `channelType` nor `audienceKind` — zuri-ai's real signer sends exactly `{tenantId, businessId, channelAccountId, externalRoomRef, principalId, policyRevision, deliveryWriter}`. Owner direction (a): dropped `channel_type` from the room-hash input entirely (three segments now, §6.2, normative), removed every `channelType` grant claim from §6.1/§9.2/§13, and generalized the audience-check exemption to "check only when the claim is present" rather than a delivery-specific carve-out (**corrected in 0.3.4b**: owner direction is actually per-tool required, not "check when present"). Added **DEC-MEMOS-15** (§7 rule 2, §9.1): a later append's `PENDING → VERIFIED` self-upgrade needs no `assertParticipants` when `speaker_id`/`speaker_kind`/`person_id`/the target row all resolve to the grant's own principal; a `VERIFIED → PENDING` downgrade is silently ignored; every other change still needs the claim, without which a DIRECT thread becomes unwritable the moment its participant is verified. Fixed three trigger gaps (**one diagnosis corrected in 0.3.4b**: the `thread_summary_invalidations` failure mode described here was backwards): `thread_summary_invalidations.tenant_id` is `NOT NULL` with no default (0008 is unshipped, so this is an ordinary edit) rather than a `DEFAULT ''`, plus a no-update/no-delete trigger; the injection state-machine trigger now also pins `injection_id` itself, closing a primary-key-only rewrite the prior trigger accepted; `session_compaction_jobs` gains an INSERT-time session-belongs-to-thread-and-tenant check and an identity-pinning UPDATE trigger, and the same session-belongs-to-thread check is noted for `session_summaries` and `protected_memory_records`; `thread_participants` gains the tenant-consistency trigger it never had; every thread-bound call must compare the grant's re-derived room hash against the thread's own stored hash, not merely `channelAccountId`, listed here as a confirmed gap rather than existing behaviour (**0.3.4b found this gap was worse than described**: `msp_session_compaction_claim` had no scope check of any kind, not merely a weaker one). Every `DEC-MEMOS-01..14` reference updated to `01..15`. | working-tree | ATHER |
 | 0.3.2b | 2026-09-14 | proposed | Answers RKOI's round-2 NEEDS REVISION on commit `92cb591` (1 critical: wrong wire values for `operation`, `expiresAt`, `direction`, and an incomplete injection state machine). Read KIN's shipped stage-1 code (`feat/memos-002-thread-memory`) directly as the new source of truth and rebuilt §6.1 (flat grant, epoch-**millisecond** `expiresAt`, hex payload hash, exact required/additive claims), §9.1–9.3 (no separate `exchanges` table — a column; `INBOUND`/`OUTBOUND`; `person_id` restated as a caller convention MSP does not enforce; the injection state machine's real transition table including `RESOLVED→FAILED` and same-state no-ops), §12.1 (transcribed the shipped migration exactly, marking five confirmed code gaps — `thread_summary_invalidations` tenant column/trigger, `chat_sessions` UPDATE-pinning, `thread_messages` cross-table consistency, an injection state-machine trigger, and the delivery/audience-check exemption — as required additions for `BL-MEMOS-033`, not silently assumed fixed), §13 (exact tool shapes from `API-011.tools.json` and the real worker-tool response shapes `thread-summary-worker.mjs` reads), and §14 (the exact typed-error vocabulary from `errors.mjs`, dropping `agent_not_current`/`grant_nonce_required`/`grant_replayed`, none of which exists in stage 1). Withdrew the separate `thread_bindings` table 0.3.1b introduced — the shipped code puts binding columns directly on `threads`, so identity-key rotation is recorded as a stated, accepted gap rather than something a table exists to support. Corrected §7's DEC-MEMOS-12 wording to the shipped guard's exact three conditions and removed an OPERATOR-participant path the code does not implement; corrected §7 rule 7's `close_for_relink` claim from `operator` to `assertParticipants` + a relink claim. Stated plainly in §8 that every agent rule is inert in stage 1. Restored §19's "pending owner confirmation" wording for RKOI's rulings, corrected in the ADR too. Restored `provenance-ids-are-not-owners` and `context-tools-ownership` to §15. Recorded RKOI's accepted nonce-gap conditions, now verified against the code rather than merely asserted. | working-tree | ATHER |
 | 0.3.1b | 2026-09-14 | proposed | Answers RKOI's round-1 NEEDS REVISION on commit `2f4d584` (3 critical findings), written before stage-1 code existed. Superseded in wire-shape detail by 0.3.2b, which reads the shipped code directly instead. | working-tree | ATHER |
 | 0.3.0b | 2026-09-14 | proposed | TASK-MEMOS-001: reconciled this design with the then-unmerged `codex/msp-thread-memory` branch. Superseded in significant part by 0.3.1b/0.3.2b. | working-tree | ATHER |
