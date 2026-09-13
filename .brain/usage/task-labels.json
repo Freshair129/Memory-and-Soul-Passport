@@ -98,8 +98,7 @@
           "task_ids": [
             "BL-MEMOS-012"
           ],
-          "label": "TASK-MEMOS-001 docs review, round 4 (1c4a62f)",
-          "status": "open"
+          "label": "TASK-MEMOS-001 docs review, round 4 (approved, 9 warnings)"
         }
       }
     },
@@ -212,6 +211,14 @@
             "BL-MEMOS-011"
           ],
           "label": "Docs revision round 4: delivery claim set, room hash, DEC-MEMOS-15, schema consistency (design v0.3.3b, commit 1c4a62f)"
+        },
+        "5": {
+          "task_ids": [
+            "BL-MEMOS-010",
+            "BL-MEMOS-011"
+          ],
+          "label": "Docs round 5: fold RKOI round-4 warnings (design v0.3.4b)",
+          "status": "open"
         }
       }
     },
