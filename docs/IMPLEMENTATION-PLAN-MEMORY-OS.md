@@ -1,7 +1,7 @@
 ---
-version: "0.1.5b"
+version: "0.1.6b"
 created_at: "2026-09-14T12:00:00+07:00,Claude Opus 5,working-tree"
-last_update: "2026-09-15T03:00:00+07:00,ATHER"
+last_update: "2026-09-14T06:00:00+07:00,COORD"
 status: "proposed"
 attributes:
   domain: "mission-state-protocol"
@@ -76,7 +76,7 @@ Every item carries exactly one id. Ids are keys: never renumber or reuse them. M
 | Sprint | `SPR-MEMOS-<nn>` | one delivery increment, ending in reviewed merges |
 | Epic | `TASK-MEMOS-<nnn>` | the ten roadmap items in zuri-ai `ROADMAP.md` (rev 2.74.0b) |
 | Backlog item | `BL-MEMOS-<nnn>` | an implementable unit with an owner, dependencies and proof |
-| Decision | `DEC-MEMOS-<nn>` | an owner decision; ten adopted defaults are pending confirmation |
+| Decision | `DEC-MEMOS-<nn>` | an owner decision; DEC-MEMOS-01..16 confirmed by the owner on 2026-09-14 |
 | Risk | `RSK-MEMOS-<nn>` | a tracked risk with a mitigation |
 
 BL numbers are grouped by phase: 001–009 for phase 0, 010–019 for phase 1, 020–039 for phase 2, and so on. Gaps are reserved for items discovered inside that phase. **Where a phase's block is already fully allocated (2026-09-14 revision: phase 3's 040–049 has no free slot), a newly discovered item takes the next free number in the 100+ range instead of renumbering anything**; its Epic/phase columns still say which phase it belongs to. This is itself a convention change, recorded in this revision's CHANGELOG row rather than applied silently.
@@ -124,7 +124,7 @@ Every gate also requires:
   - Zuri-ai PR #380 merged.
 - **GATE-MEMOS-1**
   - The ADR (current: v0.1.5b) and design (current: v0.3.5b) are merged.
-  - Every adopted default (DEC-MEMOS-01..16) is recorded as pending confirmation.
+  - DEC-MEMOS-01..16 are recorded as confirmed by the owner (2026-09-14).
   - The API-011 tool shapes are fully specified, with no field zuri-ai sends changed except those named in RSK-MEMOS-01.
 - **GATE-MEMOS-2** — every case below runs in `tests/security/thread-memory-scoping.security.mjs` (design §15) unless noted:
   - Migration 0008 is on `main`, and the real-graph migration tests (fresh and populated) pass.
@@ -163,7 +163,7 @@ Every gate also requires:
   - The end-to-end acceptance suite (2 tenants × 3 principals × 2 agents × DIRECT/GROUP) passes through the real process.
   - Gate A is re-baselined.
   - `pack:client` is clean.
-  - DEC-MEMOS-01..16 are confirmed by the owner, or amended and re-reviewed.
+  - DEC-MEMOS-01..16 are confirmed by the owner (met 2026-09-14), and any later DEC is confirmed or amended and re-reviewed.
 - **GATE-MEMOS-8 (deferred)**
   - The zuri-ai PLAN exit gates, re-opened by the owner.
 
@@ -203,11 +203,11 @@ Columns: **Owner**, **Depends** (items that must be done first) and **Proof** (w
 
 | ID | Epic | Title | Owner | Depends | Proof | Status |
 |---|---|---|---|---|---|---|
-| BL-MEMOS-010 | TASK-MEMOS-001 | `docs/ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md`: DEC-MEMOS-01..16 as adopted defaults pending confirmation; multi-user and multi-agent model; RKOI's rulings on four judgement calls; cross-repo change list | ATHER | — | ADR file (current: v0.1.5b); linked from `docs/ARCHITECTURE.md` (0.2.7b) | review |
+| BL-MEMOS-010 | TASK-MEMOS-001 | `docs/ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md`: DEC-MEMOS-01..16, confirmed by the owner 2026-09-14; multi-user and multi-agent model; RKOI's rulings on four judgement calls; cross-repo change list | ATHER | — | ADR file (current: v0.1.5b); linked from `docs/ARCHITECTURE.md` (0.2.7b) | review |
 | BL-MEMOS-011 | TASK-MEMOS-001 | Design rewritten around API-011's real branch wire shapes: §6–§11 and §13 replaced; stage-1 migration `0008` and the stage-2 multi-agent migration specified; §15 suites; §18 MSP-only packets; concept mapping v0.2.3b → API-011 | ATHER | — | design file (current: v0.3.5b) with §0 review response | review |
 | BL-MEMOS-012 | TASK-MEMOS-001 | RKOI review of BL-MEMOS-010 and BL-MEMOS-011 | RKOI | BL-MEMOS-010, BL-MEMOS-011 | Round 1 (commit `2f4d584`): NEEDS REVISION, 3 critical — answered in ADR v0.1.1b / design v0.3.1b. Round 2 (commit `92cb591`): NEEDS REVISION, 1 critical (wire values still did not match the shipped stage-1 code) — answered in ADR v0.1.2b / design v0.3.2b. Round 3 (commit `6d1a801`): NEEDS REVISION, 1 critical (the delivery grant's real claim set) — answered in ADR v0.1.3b / design v0.3.3b. Round 4 (commit `1c4a62f`): **APPROVED, 0 critical**, 9 warnings folded into ADR v0.1.4b / design v0.3.4b ahead of merge. Stage-1 code review round 2 (commit `445bd90`): a CRITICAL room-claim-required gap on the code (KIN fixing it), plus `DEC-MEMOS-16` and sweep/worker-grant corrections, folded into ADR v0.1.5b / design v0.3.5b | in-progress |
 | BL-MEMOS-013 | TASK-MEMOS-001 | Commit ADR and design; PR; merge | COORD | BL-MEMOS-012 | PR merged with CI green | planned |
-| BL-MEMOS-014 | TASK-MEMOS-001 | Owner confirmation request for DEC-MEMOS-01..16, raised with the recommendation for each | COORD/OWNER | BL-MEMOS-013 | owner's answers recorded in the ADR; not required to start PH-MEMOS-2..6; required for GATE-MEMOS-7 | planned |
+| BL-MEMOS-014 | TASK-MEMOS-001 | Owner confirmation request for DEC-MEMOS-01..16, raised with the recommendation for each | COORD/OWNER | BL-MEMOS-013 | owner's answers recorded in the ADR; not required to start PH-MEMOS-2..6; required for GATE-MEMOS-7 | done (owner confirmed DEC-MEMOS-01..16 on 2026-09-14) |
 
 ### PH-MEMOS-2 — Thread memory safe for many users (TASK-MEMOS-002 stage 1, SPR-MEMOS-01/02)
 
@@ -302,7 +302,7 @@ Columns: **Owner**, **Depends** (items that must be done first) and **Proof** (w
 | BL-MEMOS-084 | TASK-MEMOS-010 | Gate A re-baseline: "vault and thread isolation" row, suite counts, migration lineage 0008–0011 | ATHER | BL-MEMOS-083 | `docs/GATE-A.md` updated with evidence | planned |
 | BL-MEMOS-085 | TASK-MEMOS-010 | Client release: `@freshair129/msp-client-js` version, CHANGELOG, env allowlist names, `npm run pack:client` clean | JANUS | BL-MEMOS-083 | pack dry-run output | planned |
 | BL-MEMOS-086 | TASK-MEMOS-010 | Documentation closure: README, ARCHITECTURE layering for thread and vault surfaces, NOTES gaps closed (API-009 caller identity, context-tool ownership) | ATHER | BL-MEMOS-083 | frontmatter and CHANGELOG rows | planned |
-| BL-MEMOS-087 | TASK-MEMOS-001 | Owner confirms or amends DEC-MEMOS-01..16; ADR status → accepted; amendments re-reviewed | OWNER/RKOI | BL-MEMOS-014 | ADR updated | planned |
+| BL-MEMOS-087 | TASK-MEMOS-001 | Owner confirms or amends DEC-MEMOS-01..16; ADR status → accepted; amendments re-reviewed | OWNER/RKOI | BL-MEMOS-014 | ADR updated | done for DEC-MEMOS-01..16 (confirmed 2026-09-14, no amendments); ADR status becomes accepted when BL-MEMOS-013 merges |
 | BL-MEMOS-088 | TASK-MEMOS-010 | Release review and merge; tag the release | RKOI/COORD | BL-MEMOS-083..087 | GATE-MEMOS-7 met | planned |
 
 ### PH-MEMOS-8 — Channel activation (deferred; TASK-MEMOS-005..007)
@@ -319,9 +319,9 @@ Columns: **Owner**, **Depends** (items that must be done first) and **Proof** (w
 | BL-MEMOS-106 | TASK-MEMOS-005 | zuri-ai's API-009 port sends `access_context` on `msp_memory_*` calls (design v0.2.3b §5.1) — required before a principal vault is usable in production | zuri-ai owner | BL-MEMOS-063 | zuri-ai PR; `api-009-conformance.test.mjs` case exercised against a real zuri-ai payload | deferred |
 | BL-MEMOS-107 | TASK-MEMOS-005 | **Narrowed to stage-2 flags only** (`assertParticipants` is already shipped in stage 1 and needs no zuri-ai change — see BL-MEMOS-023): zuri-ai's signer starts sending `agentId`, `workspaceId` and a `nonce` on the grant, and sets `assertAgents` where design §8 requires it, once stage 2 exists (ADR `RSK-MEMOS-01`) | zuri-ai owner | BL-MEMOS-090 | zuri-ai PR; cross-repo acceptance test | deferred |
 
-## 6. Decisions (adopted defaults, pending owner confirmation)
+## 6. Decisions (confirmed by the owner, 2026-09-14)
 
-These ten were raised by RKOI's reconciliation. The owner has not answered them. Per the owner's 2026-09-14 direction to proceed, implementation uses the recommended default for each. BL-MEMOS-014 asks for confirmation, and BL-MEMOS-087 records the outcome.
+DEC-MEMOS-01..10 were raised by RKOI's reconciliation and DEC-MEMOS-11..16 by later reviews. Each was adopted as the recommended default, and **the owner confirmed all sixteen on 2026-09-14** with no amendments (BL-MEMOS-014, BL-MEMOS-087).
 
 | ID | Decision | Adopted default | Affects |
 |---|---|---|---|
@@ -380,6 +380,7 @@ The zuri-ai roadmap orders the epics for the LINE agent: 001 → 002 → 003 →
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.6b | 2026-09-14 | proposed | Records the owner's confirmation of DEC-MEMOS-01..16 (2026-09-14, no amendments): §6 heading and intro, the identifier table, GATE-MEMOS-1 and GATE-MEMOS-7 bullets, BL-MEMOS-010; BL-MEMOS-014 done; BL-MEMOS-087 done for DEC-01..16, with ADR acceptance at BL-MEMOS-013's merge. | working-tree | COORD |
 | 0.1.5b | 2026-09-15 | proposed | Folds RKOI's stage-1 code review round 2 (commit `445bd90`, spec items against the docs, not a docs re-review). **Widened `BL-MEMOS-111`, CRITICAL on the code, KIN fixing it**: the shipped guard's room-hash comparison only runs `if (grant.externalRoomRef)`, so a grant with no room claim at all currently skips the check and passes on tenant/business/account alone; fixed to require the claim outright (`thread_scope_denied` when absent) on all eight thread-bound tools plus `sweep`; added the "no room claim" case to `GATE-MEMOS-2`'s bullet list and `BL-MEMOS-111`'s acceptance column. Added **DEC-MEMOS-16** (a `channel_type` mismatch against an existing `ACTIVE` thread's stored value, same tenant/account/room hash, is refused `conflict`, replacing the design's "regardless of transport label" claim) to the decisions table, `GATE-MEMOS-2`, `BL-MEMOS-014`'s checklist and `BL-MEMOS-010`; updated every live `DEC-MEMOS-01..15` reference to `01..16`. Extended **`BL-MEMOS-102`** with six more schema items KIN is adding to `0008` directly: an `exchange_id`-leading index, typed errors with no foreign-tenant existence oracle on the `exchange_id`/`reply_to` triggers, `thread_summary_invalidations` fully immutable, an injection's `exchange_id`-belongs-to-its-thread check, `threads` not deletable, and delivery receipts referencing `OUTBOUND` messages only. Corrected §9.2's `msp_session_sweep` claim from "stays tenant-scoped" to room-scoped (confirmed against `thread-guard.mjs:274-280`, which overwrites `channel_account_id`/`external_room_ref` from the grant same as `tenant_id`/`business_id`) and added sweep's own "no room claim" refusal case to `GATE-MEMOS-2`. Replaced the wrong "`BL-MEMOS-033` confirms zuri-ai's worker grant carries `audienceKind`" claim with the fact that zuri-ai has no `msp_session_*` caller at all (confirmed against `origin/main@1ddccb70`) — the only worker is MSP's own `thread-summary-worker.mjs`. Added **RSK-MEMOS-09** (foreign-tenant `receipt_id` existence oracle on `thread_pending_deliveries`, low severity, KIN may close it) and **RSK-MEMOS-10** (`outputSchema` enforced by a contract test only, never at runtime) as named stage-1 gaps, tracked rather than silently accepted. Updated `BL-MEMOS-012`'s round-tracking row, `RSK-MEMOS-03` (the room-claim gap is exactly the prose/inference-vs-code drift this risk names, found only by reading `thread-guard.mjs` directly), and every stale `v0.3.4b`/`v0.1.4b` "current version" pointer in this plan to `v0.3.5b`/`v0.1.5b`, while leaving historical CHANGELOG and round-tracking text describing what earlier rounds actually said unchanged. No id renumbered or reused. | working-tree | ATHER |
 | 0.1.4b | 2026-09-15 | proposed | Folds RKOI's nine round-four warnings (docs **APPROVED, 0 critical**, commit `1c4a62f`) ahead of merge. Added **`BL-MEMOS-111`**: the room-hash check must run on every thread-bound call including `claim`/`commit`/`retry` via the job's own thread — a cross-room gap with no prior backlog row, since `msp_session_compaction_claim` had no scope check of any kind. Made it a `BL-MEMOS-033` dependency and added a `GATE-MEMOS-2` bullet. Corrected `BL-MEMOS-102`'s `thread_summary_invalidations` diagnosis (the old `DEFAULT ''` refused the mismatched insert via the trigger, it did not succeed silently; the real bug is `INSERT OR IGNORE` swallowing a `NOT NULL` violation once the column is `NOT NULL`, fixed by `ON CONFLICT(summary_id) DO NOTHING` and an `IS NOT` comparison) and added the "at most one `OPEN` session per thread" invariant (never a claim about `CLOSING`, conditional on `BL-MEMOS-033` proving every flow preserves it). Rewrote `BL-MEMOS-021` (no `thread_bindings` table to restore — contradicted `BL-MEMOS-100`'s own cancellation) and `BL-MEMOS-023` (assurance upgrade per DEC-MEMOS-15, not "only via the lifecycle tool"); scanned `BL-MEMOS-020..033` as a block and fixed stale `v0.3.1b`/`v0.3.2b` version pins. Changed `BL-MEMOS-109`'s audience rule from "check only when present" to **`audienceKind` required on every thread tool except `msp_thread_delivery_record`**, per owner direction; added the `docs/API-011-THREAD-MEMORY-CONTRACT.md:54,196` and cross-test-header update to its scope. Reworded `BL-MEMOS-110`: the script and the test already exist, this item is about making `test:cross-zuri` pass and gating `GATE-MEMOS-2` on it. Stated the `personId`-change lock-up mechanism directly in `RSK-MEMOS-01`'s own row (previously only pointed at from elsewhere without actually being recorded there). Named suite files on `GATE-MEMOS-4/5/6`. Removed every citation of RKOI's session-scratch probe scripts as evidence, replacing each with the finding itself or the backlog item whose acceptance test proves it. No id renumbered or reused. | working-tree | ATHER |
 | 0.1.3b | 2026-09-14 | proposed | Answers RKOI's round-three NEEDS REVISION on commit `6d1a801` (1 critical). Added **DEC-MEMOS-15** (assurance self-upgrade needs no `assertParticipants` under four conditions; a downgrade is silently ignored) to the decisions table. Widened **BL-MEMOS-109** to cover both the audience-check skip and the removal of the `channelType` grant requirement, with an acceptance test using zuri-ai's exact delivery claims on both the inbound-already-seen and inbound-not-yet-seen paths, plus `npm run test:cross-zuri`. Added **BL-MEMOS-110** (the `tests/cross/zuri-thread-contract.test.mjs` cross-repo harness itself, reading a real `origin/main` extract via `MSP_TEST_ZURI_ROOT`) and made it a dependency of `BL-MEMOS-033` and `BL-MEMOS-109`. Extended **BL-MEMOS-102** with the additional consistency-trigger gaps RKOI's probes found (`thread_summary_invalidations.tenant_id` NOT NULL with no default, not a `DEFAULT ''`; `session_compaction_jobs`/`session_summaries`/`protected_memory_records` session-belongs-to-thread checks; a `thread_participants` tenant trigger that never existed; a delivery-reconcile-after-session-close acceptance case) and **BL-MEMOS-108** (the injection trigger must also pin `injection_id` itself, not only the other columns). Rewrote **RSK-MEMOS-01**: removed the sentence claiming `assertParticipants` "needs no zuri-ai change" (it contradicted items 4 and 5); item 5 (assurance-upgrade caller) is now stated as resolved MSP-side by DEC-MEMOS-15 with no BL id needed; item 4 (relink/merge caller) is unchanged and mapped to the existing zuri-owned `BL-MEMOS-092`. Kept **RSK-MEMOS-03** open — three rounds of prose/inference-vs-code drift, not two. Fixed `GATE-MEMOS-1`'s stale "design v0.3.0b" reference and `GATE-MEMOS-7`'s stale "`DEC-MEMOS-01..10`"; named concrete suite files (`thread-memory-scoping.security.mjs`, `thread-agent-scoping.security.mjs`) on `GATE-MEMOS-2`/`GATE-MEMOS-3`. No id was renumbered or reused; `BL-MEMOS-100` remains cancelled. | working-tree | ATHER |

@@ -1,7 +1,7 @@
 ---
-version: "0.1.5b"
+version: "0.1.6b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-15T03:00:00+07:00,ATHER"
+last_update: "2026-09-14T06:00:00+07:00,COORD"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -18,8 +18,9 @@ Proposed. Nothing here is merged and no code changes. This ADR records ten
 reconciliation decisions between two pieces of prior work that did not know
 about each other, adopts RKOI's recommended default for each, and specifies
 the multi-user/multi-agent model neither piece of prior work fully covered.
-Every adopted default is explicitly **pending owner confirmation** (see the
-checklist below) — this ADR authorizes design work, not a merge.
+**The owner confirmed decisions 1–16 (DEC-MEMOS-01..16) on 2026-09-14** (see the
+checklist below). RKOI's four rulings on the judgement calls are still pending
+owner confirmation. This ADR authorizes design work, not a merge.
 
 ## Revision note — RKOI NEEDS REVISION (2026-09-14)
 
@@ -186,15 +187,14 @@ and marks every one of them explicitly overturnable.
 
 ## Decision
 
-### The ten adopted defaults
+### The sixteen decisions
 
-Each is recorded as **adopted default, pending owner confirmation** — none
-of these is a final owner ruling.
+Each began as an adopted default. **The owner confirmed all sixteen on
+2026-09-14.**
 
 1. **API-010 stays `msp_vault_resolve`** (zuri-ai ADR-022's name). The
    branch's thread/session/memory surface is renamed **API-011** wherever
-   it is specified or implemented. — *adopted default, pending owner
-   confirmation.*
+   it is specified or implemented. — *confirmed by the owner, 2026-09-14.*
 2. **The branch's six zuri-ai-facing tool names and business wire shapes
    are canonical.** No request or response field zuri-ai sends on
    `msp_thread_resolve`, `msp_thread_message_append`,
@@ -202,27 +202,26 @@ of these is a final owner ruling.
    `msp_thread_injection_record` or `msp_thread_delivery_record` may
    change. (The signed `access` envelope that wraps every call is MSP's own
    authorization envelope, not a zuri-ai business field, and may grow — see
-   "Judgement calls" below.) — *adopted default, pending owner
-   confirmation.*
+   "Judgement calls" below.) — *confirmed by the owner, 2026-09-14.*
 3. **Instances and the agent leg from design §7 are dropped for server
    channels.** A LINE/web/CLI worker never opens an MSP-tracked instance
    lease to reach a thread; the signed per-room grant, checked against a
    `thread_agents` relation (below), is the recorded relation between an
-   agent and a thread. — *adopted default, pending owner confirmation.*
+   agent and a thread. — *confirmed by the owner, 2026-09-14.*
 4. **MSP provides a participant lifecycle tool** (leave / relink) gated by
    an explicit claim, so a relinked or merged Person cannot silently
    inherit another Person's membership (closing the scenario behind C-1's
    `subject_person_id` leak). Wiring zuri-ai or Zuri to call it is deferred
    to a later packet — the tool exists in this design; nothing calls it
-   yet. — *adopted default, pending owner confirmation.*
+   yet. — *confirmed by the owner, 2026-09-14.*
 5. **Erasure must exist before any channel activation.** No LINE OA
    connection work starts until a principal's thread-scoped data
    (messages, protected records, summaries, delivery text) can be
-   tombstoned end to end. — *adopted default, pending owner confirmation.*
+   tombstoned end to end. — *confirmed by the owner, 2026-09-14.*
 6. **External room refs are stored as HMAC at rest**, never raw, which
    makes `MSP_IDENTITY_HMAC_KEY` a hard requirement of the thread surface
    (design §6.2's existing rotation and fail-closed rules apply unchanged).
-   — *adopted default, pending owner confirmation.*
+   — *confirmed by the owner, 2026-09-14.*
 7. **Delivery order: thread memory first.** The branch's `0008`+`0009` are
    folded into one corrected migration, shipped as root migration **0008**,
    containing **stage 1 only** (no agent fields, no `grant_nonces` — see
@@ -232,22 +231,20 @@ of these is a final owner ruling.
    assigned in actual merge order, not pre-bound. Principal vault types
    ship whenever their phase merges, under whatever number the runner
    assigns then, expected (but not guaranteed) to be *after* the stage-2
-   multi-agent migration given the plan's phase order. — *adopted default,
-   pending owner confirmation.*
+   multi-agent migration given the plan's phase order. — *confirmed by the owner, 2026-09-14.*
 8. **Thread-scoped memory stays in thread tables.** Protected records and
    session summaries are not vault rows. A `CONFIRMED` protected record
    later *consolidates* into the relevant principal's vault, under that
    principal's own access context only (the same authority rule as design
    §9.1, generalized) — never written directly by a thread-scoped write. —
-   *adopted default, pending owner confirmation.*
+   *confirmed by the owner, 2026-09-14.*
 9. **Caller-supplied `now` is test-only on every tool** — never a
    production input — closing the lease-theft warning without removing the
    fake-clock testability the rest of the design already depends on. —
-   *adopted default, pending owner confirmation.*
+   *confirmed by the owner, 2026-09-14.*
 10. **No extractive fallback.** When no summary covers a stretch of
     messages, the response carries a `coverageGap` marker; MSP never
-    fabricates or truncates a stand-in summary. — *adopted default, pending
-    owner confirmation.*
+    fabricates or truncates a stand-in summary. — *confirmed by the owner, 2026-09-14.*
 11. **DEC-MEMOS-11, relink closes the thread.** A `DIRECT` thread whose
     channel account is reassigned to a different Person is **closed**; the
     channel binding then mints a **new** thread for the new principal.
@@ -255,7 +252,7 @@ of these is a final owner ruling.
     external ref can be re-bound the instant the old thread closes. The
     lifetime single-`HUMAN` trigger stays; the new principal never
     inherits the old thread's history, because it is a different
-    `thread_id` entirely. — *adopted default, pending owner confirmation.*
+    `thread_id` entirely. — *confirmed by the owner, 2026-09-14.*
 12. **DEC-MEMOS-12, first membership by append.** zuri-ai's frozen flow is
     resolve, then a `HUMAN` append — `msp_thread_resolve` carries no
     `participants` field. The first `HUMAN` membership of a thread is
@@ -263,20 +260,18 @@ of these is a final owner ruling.
     grant.principalId`, bound to the grant's own principal rather than
     asserted by the caller. Every other participant creation or change
     requires `grant.assertParticipants === true`. `AGENT` speakers are
-    never participants. — *adopted default, pending owner confirmation.*
+    never participants. — *confirmed by the owner, 2026-09-14.*
 13. **DEC-MEMOS-13, package placement.** The thread/session/protected-record
     store stays in `msp-core`, where the branch and stage 1 already put it
     — no separate `msp-thread-memory` package. An earlier draft of the
-    design proposed one; it is withdrawn. — *adopted default, pending
-    owner confirmation.*
+    design proposed one; it is withdrawn. — *confirmed by the owner, 2026-09-14.*
 14. **DEC-MEMOS-14, agent timing and migration numbering.** Stage 1
     (`0008`) has no `thread_agents`, no required `agentId`, no record
     `agent_id`/`visibility`, and no `grant_nonces`. Stage 2 adds all of
     these in its own later migration. Migration numbers after `0008` are
     assigned in merge order — this corrects decision 7's original
     "principal vaults = `0009`" wording, which pre-bound a number this
-    decision says must not be pre-bound. — *adopted default, pending owner
-    confirmation.*
+    decision says must not be pre-bound. — *confirmed by the owner, 2026-09-14.*
 15. **DEC-MEMOS-15, assurance self-upgrade needs no claim.** A later
     append's `PENDING → VERIFIED` transition is accepted with no
     `assertParticipants` only when `speaker_id === grant.principalId`,
@@ -308,8 +303,7 @@ of these is a final owner ruling.
     staying equal to the existing `principalId`) — for example an account
     merge into an existing Person — the lifetime single-`HUMAN` trigger
     locks the thread until the relink caller (item 4 of the cross-repo
-    change list below) exists. — *adopted default, pending owner
-    confirmation.*
+    change list below) exists. — *confirmed by the owner, 2026-09-14.*
 16. **DEC-MEMOS-16, `channel_type` mismatch is a typed conflict, never a
     silent cross-channel hit.** The room hash's three segments
     (`tenant_id`, `channel_account_id`, `external_room_ref`) alone do not
@@ -324,8 +318,7 @@ of these is a final owner ruling.
     thread. The room hash itself is unchanged (still three segments, no
     `channel_type`), and `channel_type` remains a pinned column on
     `threads` — this decision adds an independent mismatch check at
-    resolve time, not a fourth hash segment. — *adopted default, pending
-    owner confirmation.*
+    resolve time, not a fourth hash segment. — *confirmed by the owner, 2026-09-14.*
 
 ### The multi-user model
 
@@ -383,9 +376,9 @@ RKOI found (see the design's §6.1 for which mechanism was chosen and why).
 
 The first version of this ADR raised four judgement calls on its own
 authority. RKOI has now ruled on all four; none is an open question any
-longer, though each still carries the same "pending owner confirmation"
-status as the ten numbered defaults, since the owner has not been asked
-directly.
+longer, but each is still pending owner confirmation. The owner confirmed
+the sixteen numbered decisions on 2026-09-14 and has not yet been asked
+about these four rulings directly.
 
 1. **Grant capability growth — accepted narrowly.** Additive optional
    flags (`assertParticipants`, already shipped; `nonce`, `assertAgents`
@@ -518,22 +511,26 @@ instruction that every cross-repo change be listed in both places:
 
 ## Owner confirmation checklist
 
-- [ ] 1. API-010 = `msp_vault_resolve`; thread/session/memory surface = API-011.
-- [ ] 2. The branch's six `msp_thread_*` tool shapes are canonical (business fields frozen).
-- [ ] 3. Instances/agent-leg dropped for server channels; the signed grant + `thread_agents` is the relation.
-- [ ] 4. A participant lifecycle tool exists in MSP; wiring callers is deferred.
-- [ ] 5. Erasure ships before any channel activation.
-- [ ] 6. Room refs are HMAC-at-rest; `MSP_IDENTITY_HMAC_KEY` is required.
-- [ ] 7. Thread memory = migration 0008 (folded, corrected); principal vaults = migration 0009.
-- [ ] 8. Thread-scoped memory stays in thread tables; consolidation to principal vaults is later and owner-context-only.
-- [ ] 9. Caller-supplied `now` is test-only, never production.
-- [ ] 10. No extractive fallback; `coverageGap` is the mechanism.
-- [ ] 11. Relink closes the DIRECT thread and mints a new one for the new principal (DEC-MEMOS-11).
-- [ ] 12. First HUMAN membership is created by append, bound to the grant's own principal (DEC-MEMOS-12).
-- [ ] 13. The thread store lives in `msp-core`, no new package (DEC-MEMOS-13).
-- [ ] 14. Agent fields and `grant_nonces` ship in stage 2, not `0008`; migration numbers are assigned in merge order (DEC-MEMOS-14).
-- [ ] 15. A PENDING→VERIFIED self-upgrade on a later append needs no `assertParticipants` when the stated conditions hold on both the incoming request and the stored row, closing the old row and inserting a new one in one transaction; VERIFIED→PENDING is silently ignored, and MSP's own state does not implement revocation as a result (DEC-MEMOS-15).
-- [ ] 16. A `channel_type` mismatch against an existing ACTIVE thread's stored value is refused `conflict`, never a silent cross-channel hit, so a second channel type can never get its own thread for the same account and room ref; the room hash stays three segments (DEC-MEMOS-16).
+Items 1–16 were confirmed by the owner on 2026-09-14. Item 7's migration
+numbering is read as corrected by DEC-MEMOS-14: later migrations are
+numbered in merge order. RKOI rulings 1–4 are still open.
+
+- [x] 1. API-010 = `msp_vault_resolve`; thread/session/memory surface = API-011.
+- [x] 2. The branch's six `msp_thread_*` tool shapes are canonical (business fields frozen).
+- [x] 3. Instances/agent-leg dropped for server channels; the signed grant + `thread_agents` is the relation.
+- [x] 4. A participant lifecycle tool exists in MSP; wiring callers is deferred.
+- [x] 5. Erasure ships before any channel activation.
+- [x] 6. Room refs are HMAC-at-rest; `MSP_IDENTITY_HMAC_KEY` is required.
+- [x] 7. Thread memory = migration 0008 (folded, corrected); principal vaults = migration 0009.
+- [x] 8. Thread-scoped memory stays in thread tables; consolidation to principal vaults is later and owner-context-only.
+- [x] 9. Caller-supplied `now` is test-only, never production.
+- [x] 10. No extractive fallback; `coverageGap` is the mechanism.
+- [x] 11. Relink closes the DIRECT thread and mints a new one for the new principal (DEC-MEMOS-11).
+- [x] 12. First HUMAN membership is created by append, bound to the grant's own principal (DEC-MEMOS-12).
+- [x] 13. The thread store lives in `msp-core`, no new package (DEC-MEMOS-13).
+- [x] 14. Agent fields and `grant_nonces` ship in stage 2, not `0008`; migration numbers are assigned in merge order (DEC-MEMOS-14).
+- [x] 15. A PENDING→VERIFIED self-upgrade on a later append needs no `assertParticipants` when the stated conditions hold on both the incoming request and the stored row, closing the old row and inserting a new one in one transaction; VERIFIED→PENDING is silently ignored, and MSP's own state does not implement revocation as a result (DEC-MEMOS-15).
+- [x] 16. A `channel_type` mismatch against an existing ACTIVE thread's stored value is refused `conflict`, never a silent cross-channel hit, so a second channel type can never get its own thread for the same account and room ref; the room hash stays three segments (DEC-MEMOS-16).
 - [ ] RKOI ruling 1: grant capability growth is additive-only; new required/nested/re-encoded fields are cross-repo.
 - [ ] RKOI ruling 2: per-tenant keyring, with the stated selection/fallback/rotation/defense-in-depth conditions.
 - [ ] RKOI ruling 3: nonce required on every mutating tool except append, with the stated transaction/conflict/pruning conditions, and the named stage-1 gap.
@@ -557,6 +554,7 @@ mapping table (§3.1).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.6b | 2026-09-14 | proposed | Records the owner's confirmation of DEC-MEMOS-01..16 (2026-09-14): every decision marker and checklist item 1–16 now reads confirmed; item 7 is read as corrected by DEC-MEMOS-14. RKOI rulings 1–4 stay pending owner confirmation. Status stays proposed until BL-MEMOS-013 merges. | working-tree | COORD |
 | 0.1.5b | 2026-09-15 | proposed | Folds RKOI's stage-1 code-review round-2 spec items (commit `445bd90`). Added **decision 16, `channel_type` mismatch** (pending owner confirmation): a resolve whose `channel_type` differs from an existing `ACTIVE` thread's stored value, for the same tenant/account/room hash, is refused `conflict`, never a silent cross-channel hit — replacing the design's earlier, wrong "same room regardless of transport label" claim; the room hash itself stays three segments. Added owner checklist item 16. Confirmed and recorded (design-side, cross-referenced here): `msp_session_sweep` is room-scoped, not tenant-scoped; zuri-ai has no `msp_session_*` caller — the only worker signing these grants is MSP's own `thread-summary-worker.mjs`. Every `DEC-MEMOS-01..15` reference updated to `01..16`; every `v0.3.4b` design-version reference updated to `v0.3.5b`. | working-tree | ATHER |
 | 0.1.4b | 2026-09-15 | proposed | Folds RKOI's nine round-four warnings (docs **APPROVED, 0 critical**, commit `1c4a62f`) ahead of merge. Tightened **decision 15**: the self-upgrade check now also requires the *stored* participant row's own `person_id` (not only the incoming value), and states plainly that the transition is a mandatory close-old-row-plus-insert-new-row in one transaction, never an implementation choice — the append-only trigger permits nothing else; recorded that a silently-ignored downgrade means MSP's own state does not implement revocation. Moved the `personId`-change lock-up risk mechanism into `RSK-MEMOS-01`'s cross-repo item 4 directly, rather than only pointing at it from decision 15. Removed the evidence map's citation of RKOI's session-scratch probe scripts (never part of this repository); pointed every design version reference at v0.3.4b. Noted `BL-MEMOS-111` (a cross-room authorization gap with no prior backlog row) as a round-four finding on the code side. | working-tree | ATHER |
 | 0.1.3b | 2026-09-14 | proposed | Answers RKOI's round-three NEEDS REVISION on commit `6d1a801` (1 critical): zuri-ai's real delivery grant carries neither `channelType` nor `audienceKind` (`msp-thread-memory-port.js:420-422`) — corrected the design accordingly per owner direction (a), dropping `channel_type` from the room HMAC and every `channelType` grant requirement. Added **DEC-MEMOS-15** (assurance self-upgrade needs no `assertParticipants` under four stated conditions; a downgrade is silently ignored), closing a real correctness gap in the append flow. Corrected the cross-repo change list: removed the sentence claiming `assertParticipants` "needs no zuri-ai change" (it read as contradicting items 4 and 5); restated item 5 (assurance-upgrade caller) as resolved MSP-side by DEC-MEMOS-15, needing no zuri-ai change for the normal case; kept item 4 (relink/merge caller) as a real, still-open cross-repo change on the activation gate. Extended the owner confirmation checklist with DEC-MEMOS-15 and pointed every version reference at design v0.3.3b. | working-tree | ATHER |
