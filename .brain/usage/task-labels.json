@@ -87,6 +87,13 @@
             "BL-MEMOS-012"
           ],
           "label": "TASK-MEMOS-001 docs review, round 2 (1 critical)"
+        },
+        "15": {
+          "task_ids": [
+            "BL-MEMOS-012"
+          ],
+          "label": "TASK-MEMOS-001 docs review, round 3",
+          "status": "open"
         }
       }
     },
@@ -191,8 +198,7 @@
             "BL-MEMOS-010",
             "BL-MEMOS-011"
           ],
-          "label": "Docs revision round 3: frozen wire values, stage-1 alignment",
-          "status": "open"
+          "label": "Docs revision round 3: frozen wire values, aligned to stage-1 code (design v0.3.2b)"
         }
       }
     },
