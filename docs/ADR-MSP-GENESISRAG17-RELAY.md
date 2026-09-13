@@ -1,7 +1,7 @@
 ---
-version: "1.0.4b"
+version: "1.0.5b"
 created_at: "2026-09-08T00:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-11T00:00:00+07:00,KIN"
+last_update: "2026-09-13T00:00:00+07:00,KIN"
 status: "beta"
 superseded_by: null
 attributes:
@@ -214,6 +214,55 @@ This acceptance is one of the four notes (zuri-ai Tier 1, MSP Tier 2, GKS
 Tier 3, GenesisBlock worker Tier 4) the ADR-075 Phase 2 gate requires before
 implementation may start.
 
+## Child-environment decision — the `GKS_*` prefix (2026-09-13)
+
+Every GKS child MSP spawns receives an environment built from an explicit
+allowlist: OS basics matched by whole name, plus any variable whose name begins
+with `GKS_`. Both halves are matched without case, because Windows environment
+names are case-insensitive and arrive in whatever casing the parent used. MSP's
+own credentials are never forwarded; `MSP_GKS_PIPELINE_CREDENTIAL` travels only
+inside the request payload as `relayCredential`.
+
+This records why the `GKS_` half is a prefix, when the equivalent allowlist one
+hop up is not. zuri-ai's transport lists exact names and states its reason: a
+variable MSP starts reading later arrives only after it is named there, which
+fails closed instead of open. MSP diverges deliberately:
+
+- **GKS's configuration surface lives in another repository.** Pinning the four
+  names GKS reads today — `GKS_DB_PATH`, `GKS_DEFAULT_PORTFOLIO_ID`,
+  `GKS_AUTOMERGE_FLOOR`, `GKS_PIPELINE_RELAY_CREDENTIAL` — couples an MSP
+  release to a GKS release: GKS could not add a configuration variable without
+  MSP shipping a matching change first, and the failure mode would be a GKS
+  child starting with a silently missing setting.
+- **The prefix is load-bearing in this repository's own tests.** The GKS bridge
+  fixtures are configured through `GKS_FIXTURE_STATE_PATH`,
+  `GKS_FIXTURE_BAD_RESPONSE` and `GKS_FIXTURE_BAD_PAGE`. Narrowing the rule to
+  the four documented names fails four of the six cases in
+  `tests/integration/gks-provider-bridge.test.mjs`.
+- **The blast radius is bounded by construction.** Nothing MSP reads is named
+  `GKS_*`, so no MSP credential can qualify: `MSP_GKS_PIPELINE_CREDENTIAL`
+  contains `GKS_` without starting with it, and is asserted absent from the
+  child on all three spawn paths. The recipient is the process that owns that
+  namespace.
+
+**Risk accepted.** Any `GKS_*`-named variable present in MSP's environment
+reaches the GKS child, whether or not GKS reads it. That environment is not
+arbitrary: MSP's callers allowlist what they hand MSP, and MSP allowlists again
+here. The rule is therefore narrow in practice and broad only in principle.
+
+**Revisit this decision when** MSP itself starts reading a `GKS_*`-named value —
+the prefix would then forward an MSP secret to a process that has no use for it
+— or when MSP is started by a caller that does not allowlist its environment,
+since the argument above depends on that.
+
+**The narrower alternative, recorded so it is not re-derived.** Rename the
+bridge fixtures' variables out of the `GKS_` namespace (for example
+`MSP_GKS_FIXTURE_STATE_PATH`) and deliver them another way, then pin the four
+GKS names exactly. That buys a fail-closed rule at the cost of the cross-repo
+coupling above, and it is the right trade the moment either revisit condition
+is met.
+
+
 ## Consequences
 
 This decision keeps the boundary auditable and prevents a relay success from
@@ -237,6 +286,7 @@ state, and all four repositories must review a contract change together.
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
 | 1.0.0b | 2026-09-08 | beta | Accepted the MSP-only authenticated relay boundary, nine operations, exact grants/scope, ordered execution, Tier 4 query route and coordinated extension rules. | working-tree | ATHER |
+| 1.0.5b | 2026-09-13 | beta | Recorded why the GKS child-environment allowlist matches `GKS_*` as a prefix while zuri-ai's equivalent allowlist, one hop up, pins exact names: GKS's configuration surface lives in another repository, and the prefix is load-bearing for this repo's own bridge fixtures. States the accepted risk, the two conditions that should reopen the decision, and the narrower alternative. No code change. | docs/adr-gks-prefix-decision | KIN |
 | 1.0.2b | 2026-09-11 | beta | Accepted the GenesisRAG17 structured-record profile (ADR-075 contract revision 2, Option A) as relay-transparent — no MSP code change; recorded deferred Option B (`qualifiers`) as pass-through pending its own four-repo gate, and confirmed the `ontology_v2` rollout order needs nothing from MSP. One of the four repos' acceptance notes gating ADR-075 Phase 2. | working-tree | ATHER |
 | 1.0.3b | 2026-09-11 | beta | Added the recommended structured-batch relay case to `tests/contract/pipeline-relay.test.mjs`: byte-for-byte submit relay of `ontology_v2` chunks/mentions, unchanged claim/write_receipt relay of `PRICED_AT`/`HAS_COMPONENT`/`IN_CATEGORY` facts and a `PRICE_TIER` entity, and a direct proof that `validatePipelineRequest`/`validatePipelineResponse` add no nested validation for the profile (including the deferred `qualifiers` field). Fulfils the C-8 recommendation from the 1.0.2b acceptance note; no code change. | test/structured-batch-relay | CLAUDE |
 | 1.0.4b | 2026-09-11 | beta | Child-process environment construction for every GKS spawn (not only the pipeline relay) is now an explicit `GKS_*` + OS-basics allowlist instead of a fixed credential blocklist over a copy of MSP's own process environment. Security fix — MSP no longer relies on its caller (zuri-ai) never handing it production secrets. | fix/gks-child-env-allowlist | KIN |
