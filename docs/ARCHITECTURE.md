@@ -1,7 +1,7 @@
 ---
-version: "0.2.5b"
+version: "0.2.6b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-13T23:00:00+07:00,JANUS"
+last_update: "2026-09-14T00:20:00+07:00,JANUS"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -75,7 +75,7 @@ msp-client-js     (Node built-ins + local authority enforcement only)
 
 ## Migration ownership
 
-The repository-root `migrations/` directory is canonical. `msp-storage` owns the runner; `msp-server` resolves the canonical directory and supplies it to the runner. Tests may supply a temporary migration directory explicitly. Migration filenames, ordering, checksums, and SQL content are preserved from GoVibe. The runner also supports one explicit opt-in mode, `-- msp-migration: foreign-keys=off` (WP-E0), for a migration that rebuilds a table other tables reference by foreign key once the database can already hold rows the rebuild would otherwise orphan (see `docs/MIGRATION.md`).
+The repository-root `migrations/` directory is canonical. `msp-storage` owns the runner; `msp-server` resolves the canonical directory and supplies it to the runner. Tests may supply a temporary migration directory explicitly. Migration filenames, ordering, checksums, and SQL content are preserved from GoVibe. Every pending migration -- with or without a directive -- is run through a structural foreign-key check before it is allowed to commit; it is not directive-gated, because header scanning alone cannot catch every way a migration might dodge the directive (RKOI follow-up warning 2). The runner also supports one explicit opt-in mode, `-- msp-migration: foreign-keys=off` (WP-E0), which relaxes row-level foreign-key enforcement for a rebuild of a table other tables reference by foreign key, once the database can already hold rows the rebuild would otherwise orphan (see `docs/MIGRATION.md`).
 
 ## Security invariants
 
@@ -98,6 +98,7 @@ Risk is HIGH because code crosses package and repository boundaries and migratio
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.6b | 2026-09-14 | beta | Migration ownership paragraph corrected: the structural foreign-key check is not directive-gated -- it now runs for every pending migration, plain or directive (RKOI follow-up warning 2); `-- msp-migration: foreign-keys=off` (WP-E0) relaxes row-level enforcement only. | working-tree | JANUS |
 | 0.2.5b | 2026-09-13 | beta | Migration ownership paragraph now names the runner's `-- msp-migration: foreign-keys=off` mode (WP-E0), for rebuilding a table other tables reference by foreign key once the database can hold rows the rebuild would orphan. | working-tree | JANUS |
 | 0.2.3b | 2026-09-13 | beta | `createMspStdioCaller` now builds the MSP child environment from an explicit allowlist (MSP runtime names + `GKS_*` + OS basics) instead of defaulting to a full copy of the caller's `process.env`. Breaking for `@freshair129/msp-client-js` consumers that relied on unrelated variables reaching the MSP child — including `NODE_OPTIONS`, which is withheld deliberately because it can load code into the child, so an operator passing `--max-old-space-size` that way must now set it another way; client version 0.1.0 -> 0.2.0. | fix/client-transport-env-allowlist | KIN |
 | 0.2.2b | 2026-09-13 | beta | The GKS child-environment allowlist now matches names case-insensitively on both halves of its rule: previously OS basics were matched case-insensitively but the `GKS_` namespace was matched case-sensitively, so a lower-case `gks_db_path` was dropped on a platform whose environment names are case-insensitive. Fail-closed, never a leak. Test-only: every allowlisted OS-basic name is now proven individually against the exported allowlist. | fix/gks-prefix-case-and-test-coverage | KIN |

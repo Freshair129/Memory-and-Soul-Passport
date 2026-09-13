@@ -627,3 +627,197 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
     expect(db.pragma("foreign_keys", { simple: true })).toBe(0);
   });
 });
+
+// RKOI follow-up warning 2: scanning migration headers can never catch
+// every mistake. A C-style comment header, a comment ahead of the
+// directive, a leading real PRAGMA statement, or a marker misspelling that
+// doesn't even contain the substring "msp-migration" all still classify
+// "plain" and reach the plain path with no directive at all -- and the
+// plain path had no structural check of its own. These tests use their own
+// temporary migration directories; the root migrations/ files are never
+// touched.
+describe("db/migrate structural foreign-key check on the plain path (RKOI follow-up warning 2)", () => {
+  it("refuses the unsafe rename-away rebuild on the plain path with a populated parent and an EMPTY child and no directive at all -- this is the outage case", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    runMigrations(db, migrationsDir);
+    // Populate ONLY parent -- child stays empty, which is exactly the case
+    // a row-level check cannot catch and the plain path never even ran one.
+    db.prepare("INSERT INTO parent (id, kind) VALUES ('p1', 'a')").run();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM child").get().count).toBe(0);
+
+    addMigration0002(migrationsDir, renameAwayRebuildBody());
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:.*"child".*"parent_old"/s);
+
+    // Not recorded, not bumped.
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    expect(db.pragma("user_version", { simple: true })).toBe(1);
+
+    // Rolled back: child's schema still says REFERENCES parent, not
+    // parent_old.
+    const childSchema = db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'child'").get();
+    expect(childSchema.sql).toMatch(/REFERENCES parent\s*\(\s*id\s*\)/);
+    expect(db.prepare("SELECT id, kind FROM parent").all()).toEqual([{ id: "p1", kind: "a" }]);
+  });
+
+  // Each of these headers fails to be recognized as either the exact
+  // directive OR a near-miss "misplaced" line: a C-style comment isn't a
+  // "--" line at all, a leading PRAGMA statement isn't a comment at all,
+  // and the underscore spelling doesn't contain the marker substring
+  // "msp-migration". All four therefore reach the plain path with no
+  // directive -- and now refuse there instead of silently applying.
+  const PLAIN_PATH_MISS_SHAPE_HEADERS = [
+    ["a C-style /* msp-migration: foreign-keys=off */ header on line 1", "/* msp-migration: foreign-keys=off */"],
+    ["a /* header */ comment ahead of the directive", "/* header */\n-- msp-migration: foreign-keys=off"],
+    ["a leading real PRAGMA foreign_keys = OFF; statement", "PRAGMA foreign_keys = OFF;"],
+    ["the underscore spelling msp_migration (no \"msp-migration\" substring at all)", "-- msp_migration: foreign-keys=off"],
+  ];
+
+  it.each(PLAIN_PATH_MISS_SHAPE_HEADERS)(
+    "%s still refuses the unsafe rebuild -- through whichever path it reaches, the prefix is what matters",
+    (_description, header) => {
+      const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+      const db = freshDb();
+
+      runMigrations(db, migrationsDir);
+      db.prepare("INSERT INTO parent (id, kind) VALUES ('p1', 'a')").run();
+
+      addMigration0002(migrationsDir, `${header}\n${renameAwayRebuildBody()}`);
+
+      expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+      expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:/);
+
+      const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+      expect(rows).toEqual([{ version: 1 }]);
+      expect(db.pragma("user_version", { simple: true })).toBe(1);
+    },
+  );
+
+  it("applies the safe-order rebuild on the plain path with an empty child and no directive -- no false rejection", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    runMigrations(db, migrationsDir);
+    db.prepare("INSERT INTO parent (id, kind) VALUES ('p1', 'a')").run();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM child").get().count).toBe(0);
+
+    addMigration0002(migrationsDir, parentRebuildBody());
+
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(1);
+    expect(db.prepare("SELECT id, kind FROM parent").all()).toEqual([{ id: "p1", kind: "a" }]);
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }, { version: 2 }]);
+  });
+
+  it("refuses a plain migration adding a foreign key to a column that is not a key on the target table (no PK, no UNIQUE index)", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent.sql": "CREATE TABLE parent (code TEXT NOT NULL);" });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    // SQLite itself does not refuse CREATE TABLE for this -- the mismatch
+    // only surfaces when something actually checks the key, which is
+    // exactly what this test exercises.
+    writeFileSync(
+      path.join(migrationsDir, "0002_child.sql"),
+      "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_code TEXT NOT NULL REFERENCES parent(code));",
+      "utf8",
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_foreign_key_check_failed:.*"child".*"parent" columns \(code\)/s,
+    );
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+  });
+
+  it("refuses a partial UNIQUE index as an FK target on the plain path, as a prefixed SchemaVersionError, never a raw SqliteError", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent.sql": [
+        "CREATE TABLE parent (id TEXT NOT NULL);",
+        "CREATE UNIQUE INDEX parent_id_partial ON parent(id) WHERE id IS NOT NULL;",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_child.sql"),
+      "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));",
+      "utf8",
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:/);
+  });
+
+  it("refuses a partial UNIQUE index as an FK target on the directive path too, as a prefixed SchemaVersionError, never a raw SqliteError", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent.sql": [
+        "CREATE TABLE parent (id TEXT NOT NULL);",
+        "CREATE UNIQUE INDEX parent_id_partial ON parent(id) WHERE id IS NOT NULL;",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_child.sql"),
+      withDirective("CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));"),
+      "utf8",
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:/);
+  });
+
+  it("refuses a collation-mismatched UNIQUE index (COLLATE NOCASE on a BINARY column) as an FK target, prefixed", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent.sql": [
+        "CREATE TABLE parent (id TEXT NOT NULL);",
+        "CREATE UNIQUE INDEX parent_id_nocase ON parent(id COLLATE NOCASE);",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_child.sql"),
+      "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));",
+      "utf8",
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:/);
+  });
+
+  it("applies the real root migrations 0001-0007 cleanly under the new plain-path structural check, then a follow-on plain migration 0008 too -- an ordinary follow-on migration is not rejected", () => {
+    const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
+    const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
+    expect(migrationFileNames).toHaveLength(7);
+    const files = Object.fromEntries(
+      migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
+    );
+    const migrationsDir = setupMigrationsDir(files);
+    const db = freshDb();
+
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(7);
+
+    writeFileSync(
+      path.join(migrationsDir, "0008_trivial_followup.sql"),
+      "CREATE TABLE trivial_followup (id INTEGER PRIMARY KEY);",
+      "utf8",
+    );
+    const second = runMigrations(db, migrationsDir);
+    expect(second.appliedCount).toBe(1);
+    expect(second.currentVersion).toBe(8);
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_followup'").all()).toHaveLength(1);
+  });
+});

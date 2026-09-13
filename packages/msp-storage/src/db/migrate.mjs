@@ -71,6 +71,40 @@
 // turns off foreign-key enforcement is never silent. Content outside that
 // leading comment block -- the SQL body, or a comment after the file's
 // first non-comment statement -- is never scanned for this.
+//
+// RKOI review (follow-up warning 2): scanning the header can never catch
+// every mistake -- a C-style `/* msp-migration: foreign-keys=off */`
+// header, a `/* header */` comment ahead of the directive, a leading
+// `PRAGMA foreign_keys = OFF;` line, or a marker misspelling that doesn't
+// even contain the substring "msp-migration" (`msp_migration`, "msp
+// migration", `msp-migraton`) all still classify "plain" and reach the
+// PLAIN path below with no directive at all. Because of this,
+// `checkForeignKeyTargetsStructurallyValid` -- the structural half of step
+// 4a above -- now ALSO runs on the plain path, after `db.exec(file.sql)`
+// and before the `schema_migrations` insert and `user_version` bump,
+// inside that path's own `db.transaction(...)`. This is the durable
+// guarantee: it does not depend on any header being spelled correctly. The
+// row-level `PRAGMA foreign_key_check` is deliberately NOT run on the plain
+// path -- with `PRAGMA foreign_keys` ON there (connection.mjs always
+// enables it, and the plain path never turns it off), row-level violations
+// are already refused per statement as they happen, and a whole-database
+// row check on every ordinary migration would make any database that
+// already holds one pre-existing orphaned row unable to apply its next
+// migration at all. The structural check itself is schema-only, so it also
+// blocks a pending plain migration against a schema that was ALREADY
+// structurally invalid before this migration ran; the real root schema
+// (migrations 0001-0007) is confirmed structurally valid by
+// `tests/integration/migrate.test.mjs`, including the `entities_fts` FTS5
+// virtual table and its shadow tables. An already-applied migration never
+// re-runs this check (or any other guard below), so a database that is
+// fully migrated today boots exactly as it did before this change.
+// Because the structural check is now load-bearing on the plain path too,
+// `isKeyColumnSet` (below) was tightened to match what SQLite itself
+// accepts as a foreign-key parent key: a partial UNIQUE index is ignored
+// (`PRAGMA index_list` reports `partial = 1`), and an index whose declared
+// collation for a column (`PRAGMA index_xinfo`) does not match that
+// column's own declared collation (parsed from its `CREATE TABLE` text,
+// defaulting to `BINARY`) does not count as a key either.
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -192,19 +226,177 @@ function sameColumnSet(a, b) {
   return sortedA.every((name, index) => name === sortedB[index]);
 }
 
+// Splits the inside of a `CREATE TABLE (...)` at top-level commas only --
+// respecting nested parentheses (e.g. `DECIMAL(10, 2)`, `CHECK (a > b)`)
+// and quoted/bracketed identifiers and string literals, so a comma inside
+// any of those never splits a column or table-constraint definition.
+function splitTopLevelDefinitions(inner) {
+  const parts = [];
+  let depth = 0;
+  let current = "";
+  let quoteChar = null;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (quoteChar) {
+      current += ch;
+      if (ch === quoteChar) {
+        if (inner[i + 1] === quoteChar) {
+          current += inner[++i];
+        } else {
+          quoteChar = null;
+        }
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quoteChar = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === "[") {
+      const end = inner.indexOf("]", i);
+      if (end === -1) {
+        current += ch;
+        continue;
+      }
+      current += inner.slice(i, end + 1);
+      i = end;
+      continue;
+    }
+    if (ch === "(") {
+      depth++;
+      current += ch;
+      continue;
+    }
+    if (ch === ")") {
+      depth--;
+      current += ch;
+      continue;
+    }
+    if (ch === "," && depth === 0) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim() !== "") parts.push(current);
+  return parts;
+}
+
+// Extracts the text between the outermost, quote-aware, matching pair of
+// parentheses in a `CREATE TABLE` statement -- i.e. the column and
+// constraint list -- ignoring anything after it (`STRICT`, `WITHOUT
+// ROWID`, a trailing `;`).
+function extractColumnDefinitionsSection(createSql) {
+  const openIndex = createSql.indexOf("(");
+  if (openIndex === -1) return "";
+  let depth = 0;
+  let quoteChar = null;
+  for (let i = openIndex; i < createSql.length; i++) {
+    const ch = createSql[i];
+    if (quoteChar) {
+      if (ch === quoteChar) {
+        if (createSql[i + 1] === quoteChar) {
+          i++;
+          continue;
+        }
+        quoteChar = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quoteChar = ch;
+      continue;
+    }
+    if (ch === "[") {
+      const end = createSql.indexOf("]", i);
+      if (end !== -1) i = end;
+      continue;
+    }
+    if (ch === "(") {
+      depth++;
+      continue;
+    }
+    if (ch === ")") {
+      depth--;
+      if (depth === 0) return createSql.slice(openIndex + 1, i);
+      continue;
+    }
+  }
+  return createSql.slice(openIndex + 1);
+}
+
+function unquoteIdentifier(token) {
+  const trimmed = token.trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' && last === '"') || (first === "`" && last === "`")) {
+      return trimmed.slice(1, -1).replace(new RegExp(`\\${first}\\${first}`, "g"), first);
+    }
+    if (first === "[" && last === "]") return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+const IDENTIFIER_TOKEN_PATTERN = /^("(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|\S+)/;
+const TABLE_CONSTRAINT_KEYWORDS = new Set(["CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN"]);
+const COLLATE_CLAUSE_PATTERN = /\bCOLLATE\s+("(?:[^"]|"")*"|`(?:[^`]|``)*`|\[[^\]]*\]|\w+)/i;
+
+// A column's declared collation as it appears in its own CREATE TABLE
+// definition (`COLLATE <name>`), or SQLite's implicit default, "BINARY",
+// when the column carries no explicit COLLATE clause. Parsed from
+// sqlite_schema.sql rather than any PRAGMA, since none of table_info,
+// table_xinfo, or the foreign_key/index pragmas exposes a plain column's
+// declared collation.
+function columnCollation(db, table, column) {
+  const row = db.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?").get(table);
+  if (!row || !row.sql) return "BINARY";
+  const section = extractColumnDefinitionsSection(row.sql);
+  for (const definition of splitTopLevelDefinitions(section)) {
+    const trimmed = definition.trim();
+    if (trimmed === "") continue;
+    const firstTokenMatch = trimmed.match(IDENTIFIER_TOKEN_PATTERN);
+    if (!firstTokenMatch) continue;
+    const firstToken = unquoteIdentifier(firstTokenMatch[1]);
+    if (TABLE_CONSTRAINT_KEYWORDS.has(firstToken.toUpperCase())) continue; // table-level constraint, not a column
+    if (firstToken.toLowerCase() !== column.toLowerCase()) continue;
+    const collateMatch = trimmed.match(COLLATE_CLAUSE_PATTERN);
+    return collateMatch ? unquoteIdentifier(collateMatch[1]).toUpperCase() : "BINARY";
+  }
+  return "BINARY";
+}
+
 // True if `columns` (as a set, order not significant) is `table`'s
 // PRIMARY KEY or is exactly the column set of one of its UNIQUE indexes --
 // i.e. `columns` is actually a key on `table`, so a foreign key naming them
-// can resolve to at most one row.
+// can resolve to at most one row. Two refinements match what SQLite itself
+// accepts as a foreign-key parent key (RKOI, WP-E0 warning 1, back in scope
+// now that this check also gates the plain path):
+//   - a PARTIAL unique index (`PRAGMA index_list` reports `partial = 1`)
+//     does not cover every row, so it cannot resolve every possible foreign
+//     key value to at most one row and is ignored entirely.
+//   - the index's own collating sequence for each column (`PRAGMA
+//     index_xinfo`'s `coll`) must match that column's declared collation
+//     (`columnCollation`, above) -- an index built with a different
+//     COLLATE than the column's own does not compare the same way the
+//     column itself does, so it does not count as that column's key.
 function isKeyColumnSet(db, table, columns) {
   if (sameColumnSet(primaryKeyColumns(db, table), columns)) return true;
   for (const index of db.pragma(`index_list(${quoteIdentifier(table)})`)) {
     if (!index.unique) continue;
-    const indexColumns = db
-      .pragma(`index_info(${quoteIdentifier(index.name)})`)
-      .sort((a, b) => a.seqno - b.seqno)
-      .map((column) => column.name);
-    if (sameColumnSet(indexColumns, columns)) return true;
+    if (index.partial) continue;
+    const indexColumnRows = db
+      .pragma(`index_xinfo(${quoteIdentifier(index.name)})`)
+      .filter((column) => column.key === 1)
+      .sort((a, b) => a.seqno - b.seqno);
+    const indexColumns = indexColumnRows.map((column) => column.name);
+    if (!sameColumnSet(indexColumns, columns)) continue;
+    const collationsMatch = indexColumnRows.every(
+      (column) => String(column.coll).toUpperCase() === columnCollation(db, table, column.name).toUpperCase(),
+    );
+    if (collationsMatch) return true;
   }
   return false;
 }
@@ -283,6 +475,30 @@ function checkForeignKeyTargetsStructurallyValid(db, file) {
   }
 }
 
+// Belt-and-braces wrapper around `PRAGMA foreign_key_check` for the
+// directive path (RKOI, WP-E0 warning 1): SQLite itself can refuse to even
+// run that pragma with a raw `SqliteError` whose message contains "foreign
+// key mismatch" when some table's foreign key does not resolve to a real
+// key at all -- a case `checkForeignKeyTargetsStructurallyValid` above is
+// meant to catch first, but this belt-and-braces catch means a gap in that
+// check's own reasoning still surfaces as the same prefixed
+// `SchemaVersionError`, naming the migration, rather than an unhandled raw
+// driver error.
+function runForeignKeyCheck(db, file) {
+  try {
+    return db.pragma("foreign_key_check");
+  } catch (error) {
+    if (error instanceof Error && typeof error.message === "string" && error.message.includes("foreign key mismatch")) {
+      throw new SchemaVersionError(
+        `migration_foreign_key_check_failed: migration "${file.name}" cannot be checked -- PRAGMA foreign_key_check ` +
+          `itself refused with "${error.message}", meaning some table's foreign key does not resolve to a real key. ` +
+          `Refusing to start.`,
+      );
+    }
+    throw error;
+  }
+}
+
 // Applies a single migration file carrying the `foreign-keys=off` directive
 // (see the module header comment for the full sequence and why the
 // PRAGMA foreign_keys toggle happens outside db.transaction(...)).
@@ -310,7 +526,7 @@ function applyForeignKeysOffMigration(db, file, insertMigration) {
     // predates this migration (a previous foreign-keys=off migration, or
     // out-of-band tampering) and must not be misreported as something this
     // migration caused.
-    const preExistingViolations = db.pragma("foreign_key_check");
+    const preExistingViolations = runForeignKeyCheck(db, file);
     if (preExistingViolations.length > 0) {
       const [firstPreExistingViolation] = preExistingViolations;
       throw new SchemaVersionError(
@@ -332,7 +548,7 @@ function applyForeignKeysOffMigration(db, file, insertMigration) {
       // allowed to commit; any violation throws, which rolls the whole
       // transaction back (the migration's SQL, the schema_migrations
       // insert below, and the user_version bump never take effect).
-      const violations = db.pragma("foreign_key_check");
+      const violations = runForeignKeyCheck(db, file);
       if (violations.length > 0) {
         const [firstViolation] = violations;
         throw new SchemaVersionError(
@@ -434,6 +650,15 @@ export function runMigrations(db, migrationsDir) {
     } else {
       const applyOne = db.transaction(() => {
         db.exec(file.sql);
+
+        // RKOI follow-up warning 2: the structural check is not
+        // directive-only. Header scanning can never catch every mistake
+        // (see the module header comment for the shapes that still reach
+        // here with no directive at all), so the plain path enforces the
+        // same structural guarantee on its own, before this migration is
+        // allowed to commit.
+        checkForeignKeyTargetsStructurallyValid(db, file);
+
         insertMigration.run({
           version: file.version,
           name: file.name,
