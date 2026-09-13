@@ -6,6 +6,7 @@
   "exports": {
     "./*": "./src/contracts/*.mjs",
     "./api-009": "./schemas/API-009.tools.json",
+    "./api-011": "./schemas/API-011.tools.json",
     "./genesisrag17": "./schemas/GENESISRAG17.tools.json"
   },
   "files": [
@@ -13,6 +14,8 @@
     "schemas"
   ],
   "dependencies": {
-    "@freshair129/msp-core": "0.1.0"
+    "@freshair129/msp-core": "0.1.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1"
   }
 }
