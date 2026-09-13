@@ -117,6 +117,13 @@
             "BL-MEMOS-040..049"
           ],
           "label": "Stage 2 spec review, round 2 (APPROVED with warnings, 72e593f)"
+        },
+        "20": {
+          "task_ids": [
+            "BL-MEMOS-040..049"
+          ],
+          "label": "Stage 2 spec closure check (0f3f15a)",
+          "status": "open"
         }
       }
     },
@@ -269,8 +276,7 @@
             "BL-MEMOS-040..049",
             "BL-MEMOS-112"
           ],
-          "label": "Stage 2 spec: fold round-2 warnings (design v0.4.2b)",
-          "status": "open"
+          "label": "Stage 2 spec: fold round-2 warnings (design v0.4.2b, 0f3f15a)"
         }
       }
     },
