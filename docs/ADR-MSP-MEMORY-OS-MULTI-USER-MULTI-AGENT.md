@@ -1,7 +1,7 @@
 ---
-version: "0.1.1b"
+version: "0.1.2b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-14T14:00:00+07:00,ATHER"
+last_update: "2026-09-14T18:00:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -36,6 +36,21 @@ ADR is amended to: correct the C-2 citation (below), record RKOI's rulings
 on the four judgement calls this ADR previously raised on its own
 authority, add four new adopted defaults (DEC-MEMOS-11..14), and list the
 cross-repo wire changes stage 2 will require of zuri-ai.
+
+## Revision note — RKOI round two, NEEDS REVISION (2026-09-14)
+
+RKOI reviewed commit `92cb591` and returned **NEEDS REVISION, 1 critical**:
+this document and its companion design still described wire values
+(`operation`, `expiresAt`, `direction`) that never matched what KIN's
+now-existing stage-1 code (`feat/memos-002-thread-memory`) actually
+implements, and an incomplete injection-receipt state machine. The design
+is corrected against the shipped code directly
+(`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.2b §0.1); this ADR is
+corrected in two places RKOI named specifically: ruling 1's wording below
+(new required grant fields are a **cross-repo change to negotiate**, not
+"out of bounds" as if MSP could simply refuse them), and the cross-repo
+change list, which gains the assurance-upgrade and relink callers RKOI
+asked be recorded next to `agentId`/`workspaceId`/`nonce`.
 
 ## Context
 
@@ -266,12 +281,19 @@ status as the ten numbered defaults, since the owner has not been asked
 directly.
 
 1. **Grant capability growth — accepted narrowly.** Additive optional
-   flags (`agentId`, `workspaceId`, `nonce`, `assertAgents`,
-   `assertParticipants`) are MSP's own concern and may be added to the
-   grant without a cross-repo contract change. **New required fields,
-   nesting, or an encoding change are cross-repo and out of bounds** — the
-   grant's flat/epoch/hex layout, signed over zuri-ai's own
-   `JSON.stringify(grant)`, is frozen (design §6.1).
+   flags (`assertParticipants`, already shipped; `nonce`, `assertAgents`
+   if stage 2 needs them) are MSP's own concern and may be added to the
+   grant without a cross-repo contract change, since an existing signer
+   that does not yet know about them keeps signing correctly. **Correction
+   (RKOI, round two): a new *required* grant field — `agentId` and
+   `workspaceId` in stage 2 — is not "out of bounds."** It is a real
+   cross-repo wire change zuri-ai's signer must adopt, exactly like every
+   other item in the "Cross-repo changes stage 2 requires of zuri-ai" list
+   below; this ADR does not have the authority to refuse it, only to name
+   it, schedule it against `RSK-MEMOS-01`/`BL-MEMOS-090`, and gate
+   activation on it landing. The grant's flat/epoch-millisecond/hex layout
+   itself, signed over zuri-ai's own `JSON.stringify(grant)`, is frozen and
+   is not proposed to change (design §6.1).
 2. **Per-tenant keyring — accepted, with conditions.** The key is selected
    by the grant's own **unverified** `tenantId` and then the signature is
    verified against it; when a keyring is configured, **the single
@@ -312,11 +334,24 @@ instruction that every cross-repo change be listed in both places:
   a thread it did not create (design §8 rule 2).
 - **`assertParticipants`** must be set by zuri-ai for any participant
   creation or change beyond the first `HUMAN` append DEC-MEMOS-12 already
-  covers implicitly (design §7 rule 1).
+  covers implicitly (design §7 rule 1) — **already shipped and usable
+  today**, unlike the other items on this list, which are stage 2.
+- **A caller for `msp_thread_participant_lifecycle`'s `close_for_relink`
+  operation** (RKOI round two, warning 6/8): zuri-ai or Zuri must call it
+  on a Person relink/merge event once the tool exists (phase 003) — MSP
+  only provides the tool (decision 4); nothing calls it today, and a
+  relinked channel account's old thread stays open until something does.
+- **A caller for an `identity_assurance` upgrade** (RKOI round two,
+  warning 8): raising a participant from `PENDING`/`UNRESOLVED` to
+  `VERIFIED` also requires `assertParticipants` (design §7 rule 2) or the
+  lifecycle tool, and nothing in zuri-ai calls either path for this
+  purpose today — a participant that starts `PENDING` has no way to
+  become `VERIFIED` until zuri-ai is wired to ask for it.
 - None of the above changes any field zuri-ai already sends on the six
   frozen calls (decision 2) — they are strictly additive to the grant
-  envelope. No activation of these requirements happens before stage 2
-  merges, and no channel activation (PH-MEMOS-8) happens before that.
+  envelope or calls to tools zuri-ai does not invoke yet. No activation of
+  the stage-2-only requirements happens before stage 2 merges, and no
+  channel activation (PH-MEMOS-8) happens before that.
 
 ## Consequences
 
@@ -342,7 +377,7 @@ instruction that every cross-repo change be listed in both places:
 ## What this ADR does not decide
 
 - The exact corrected DDL for the folded migration — that is
-  `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.1b's job, not
+  `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.2b's job, not
   this ADR's.
 - Whether or when GoVibe or Zuri actually calls the participant lifecycle
   tool (decision 4 only says MSP must provide it).
@@ -377,12 +412,13 @@ instruction that every cross-repo change be listed in both places:
 - [ ] RKOI ruling 4: single persisted `thread_kind`, pinned by trigger, `ROOM` behaves as `GROUP`.
 
 Overturning any row above reopens the corresponding section of
-`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.1b named in its
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.2b named in its
 mapping table (§3.1).
 
 ## Evidence and implementation map
 
-- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.3.1b (superseded in relevant part by this ADR + the design's own §0.1 review response)
+- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.3.2b (superseded in relevant part by this ADR + the design's own §0.1 review response)
+- Stage-1 code, the new source of truth for wire/schema shapes: `feat/memos-002-thread-memory` (worktree `agent-ab508b7a790efd268`), especially `migrations/0008_thread_memory.sql`, `packages/msp-core/src/domain/thread-memory.mjs`, `packages/msp-contracts/src/contracts/thread-access.mjs`, `apps/msp-server/src/transport/handlers/thread-guard.mjs`, and `docs/API-011-THREAD-MEMORY-CONTRACT.md`
 - Unmerged branch (facts only, not read via git by this ADR's author): `origin/codex/msp-thread-memory`, commits `50859fb`, `e4303cb`
 - Existing guard pattern the design's C-2 fix follows: [`packages/msp-contracts/src/contracts/vault-scope-guard.mjs`](../packages/msp-contracts/src/contracts/vault-scope-guard.mjs) (the fix itself, `grant-scope-guard.mjs`, does not exist yet — see the corrected C-2 entry above)
 - Implementation plan: [`IMPLEMENTATION-PLAN-MEMORY-OS.md`](IMPLEMENTATION-PLAN-MEMORY-OS.md)
@@ -393,5 +429,6 @@ mapping table (§3.1).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.2b | 2026-09-14 | proposed | Answers RKOI's round-two NEEDS REVISION on commit `92cb591` (1 critical: wrong wire values, fixed in the design against KIN's now-shipped stage-1 code, not this ADR's decision list directly). Corrected ruling 1's wording: a new required grant field (`agentId`/`workspaceId` in stage 2) is a cross-repo change to negotiate via `RSK-MEMOS-01`/`BL-MEMOS-090`, not something this ADR can declare "out of bounds." Added two items to the cross-repo change list: a caller for `close_for_relink` (nothing calls it today) and a caller for an `identity_assurance` upgrade (nothing asks for one today) — both flagged by RKOI as missing next to the existing `agentId`/`nonce`/`assertAgents`/`assertParticipants` items. Pointed the evidence map at the actual stage-1 code as the new source of truth for wire/schema shapes. | working-tree | ATHER |
 | 0.1.1b | 2026-09-14 | proposed | Answers RKOI's NEEDS REVISION on commit `2f4d584` (3 critical findings, all in the companion design's DDL/wire shapes, not this ADR's decision list directly). Corrected the C-2 citation, which wrongly named an already-existing `thread-scope-guard.mjs`; the real fix is a new `grant-scope-guard.mjs`. Recorded RKOI's rulings on all four of ATHER's prior judgement calls (narrow capability growth, conditional per-tenant keyring, conditional nonce split with a named stage-1 gap, single persisted `thread_kind`). Added four new adopted defaults: DEC-MEMOS-11 (relink closes the thread and mints a new one), DEC-MEMOS-12 (first HUMAN membership created by append, bound to the grant's own principal — zuri-ai's resolve carries no `participants` field), DEC-MEMOS-13 (no separate `msp-thread-memory` package — the store stays in `msp-core`), DEC-MEMOS-14 (agent fields and `grant_nonces` ship in stage 2, not `0008`; migration numbers assigned in merge order, correcting decision 7's pre-bound `0009`). Added the cross-repo change list stage 2 requires of zuri-ai (`agentId`/`workspaceId` required, `nonce`, `assertAgents`, `assertParticipants`), cross-referenced with the plan's `RSK-MEMOS-01`. Extended the owner confirmation checklist accordingly. | working-tree | ATHER |
 | 0.1.0b | 2026-09-14 | proposed | Initial ADR: reconciled the unmerged `codex/msp-thread-memory` branch (API-010-labelled, ten tools, two migrations, C-1/C-2 critical findings) against `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.2.3b's from-scratch, unshipped design. Adopted RKOI's ten recommended defaults as pending-confirmation decisions, renamed the branch surface to API-011, and specified the multi-user (one human per DIRECT thread, subject-bound protected records, explicit-claim-only participation changes) and multi-agent (`thread_agents` relation, per-agent episodic vaults, AGENT/THREAD record visibility, shared passport and summaries) model neither prior effort fully covered. Flagged two judgement calls (grant capability growth; optional per-tenant keyring) for owner review. | working-tree | ATHER |
