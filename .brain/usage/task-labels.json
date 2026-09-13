@@ -111,6 +111,13 @@
             "BL-MEMOS-040..049"
           ],
           "label": "Stage 2 spec review, round 1 (2 critical: pending-delivery agent gate, record dedup/supersede leak)"
+        },
+        "19": {
+          "task_ids": [
+            "BL-MEMOS-040..049"
+          ],
+          "label": "Stage 2 spec review, round 2 (72e593f)",
+          "status": "open"
         }
       }
     },
@@ -253,10 +260,10 @@
         },
         "8": {
           "task_ids": [
-            "BL-MEMOS-040..049"
+            "BL-MEMOS-040..049",
+            "BL-MEMOS-112"
           ],
-          "label": "Stage 2 spec revision round 2 (design v0.4.1b)",
-          "status": "open"
+          "label": "Stage 2 spec revision round 2 (design v0.4.1b, 72e593f)"
         }
       }
     },
