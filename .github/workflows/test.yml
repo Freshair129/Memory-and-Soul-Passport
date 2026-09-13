@@ -12,12 +12,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Node 24 is deliberately absent: better-sqlite3 11.10.0 aborts on
-        # teardown under Node 24 ("Assertion failed: (env) != nullptr"), which
-        # fails a varying handful of the memory tests. Add 24 to this matrix in
-        # the same change that fixes that, not before — a gate that is red for
-        # reasons unrelated to the diff teaches everyone to ignore it.
-        node: ["20", "22"]
+        # Node 22 is the floor: better-sqlite3 13 declares engines >=22, and MSP's
+        # own package.json now matches. Node 24 is in: the better-sqlite3 11
+        # teardown abort that kept it out is gone at 13.
+        node: ["22", "24"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
