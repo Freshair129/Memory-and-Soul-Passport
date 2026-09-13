@@ -29,6 +29,8 @@ import { createLifecycleHandlers } from "./transport/handlers/lifecycle-handlers
 import { createMemoryHandlers } from "./transport/handlers/memory-handlers.mjs";
 import { createPipelineHandlers } from "./transport/handlers/pipeline-handlers.mjs";
 import { createGksProviderFromEnvironment } from "./providers/gks-stdio-provider.mjs";
+import { createThreadGuard } from "./transport/handlers/thread-guard.mjs";
+import { createThreadHandlers } from "./transport/handlers/thread-handlers.mjs";
 import { createVaultHandlers } from "./transport/handlers/vault-handlers.mjs";
 import { createStdioJsonRpcServer } from "./transport/stdio-jsonrpc-server.mjs";
 import { ToolRegistry } from "./transport/tool-registry.mjs";
@@ -65,6 +67,29 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const memoryHandlers = createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore });
   const pipelineHandlers = createPipelineHandlers({ gksProvider, journal, env });
 
+  // W1: whether a caller-supplied `now` may ever reach the thread-memory
+  // domain layer is decided ONCE, here, at the composition root -- never
+  // re-read per call, and never by the handler or guard themselves.
+  const allowTestClock = env.MSP_TEST_CLOCK === "1";
+  const parsePositiveEnv = (name, fallback) => {
+    const value = Number(env[name] ?? fallback);
+    return Number.isInteger(value) && value > 0 ? value : fallback;
+  };
+  const threadHandlers = createThreadHandlers({
+    db,
+    journal,
+    identityHmacKey: env.MSP_IDENTITY_HMAC_KEY ?? null,
+    idleTimeoutMinutes: parsePositiveEnv("MSP_THREAD_IDLE_TIMEOUT_MINUTES", 30),
+    recentExchangeCount: parsePositiveEnv("MSP_THREAD_RECENT_EXCHANGES", 6),
+    allowTestClock,
+  });
+  // RKOI review, item 9: verifyThreadGrant resolves its HMAC key through a
+  // `keyFor(tenantId)` function -- stage 1 always resolves to the single
+  // MSP_THREAD_SERVICE_KEY, ignoring the (untrusted, pre-verification)
+  // tenantId claim; stage 2 can add a real per-tenant keyring here without
+  // changing thread-guard.mjs or thread-access.mjs.
+  const guardThreadHandler = createThreadGuard({ db, key: () => env.MSP_THREAD_SERVICE_KEY });
+
   const toolRegistry = new ToolRegistry();
   toolRegistry.register("msp_ping", async () => ({ ok: true, timestamp: new Date().toISOString() }));
   for (const [name, handler] of Object.entries(vaultHandlers)) toolRegistry.register(name, handler);
@@ -72,6 +97,9 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   for (const [name, handler] of Object.entries(lifecycleHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(memoryHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(pipelineHandlers)) toolRegistry.register(name, handler);
+  for (const [name, handler] of Object.entries(threadHandlers)) {
+    toolRegistry.register(name, guardThreadHandler({ name, handler }));
+  }
 
   const transport = createStdioJsonRpcServer({ toolRegistry, input, output });
 
@@ -80,5 +108,5 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
     db.close();
   }
 
-  return { db, entityStore, journal, vaultRegistry, linksStore, retrievalService, vectorClient, toolRegistry, transport, close };
+  return { db, entityStore, journal, vaultRegistry, linksStore, retrievalService, vectorClient, threadHandlers, toolRegistry, transport, close };
 }
