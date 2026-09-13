@@ -86,8 +86,7 @@
           "task_ids": [
             "BL-MEMOS-012"
           ],
-          "label": "TASK-MEMOS-001 docs review, round 2",
-          "status": "open"
+          "label": "TASK-MEMOS-001 docs review, round 2 (1 critical)"
         }
       }
     },
@@ -186,6 +185,14 @@
             "BL-MEMOS-011"
           ],
           "label": "ADR/design/plan revision after RKOI round 1 (design v0.3.1b)"
+        },
+        "3": {
+          "task_ids": [
+            "BL-MEMOS-010",
+            "BL-MEMOS-011"
+          ],
+          "label": "Docs revision round 3: frozen wire values, stage-1 alignment",
+          "status": "open"
         }
       }
     },
@@ -208,6 +215,13 @@
             "BL-MEMOS-033"
           ],
           "label": "Stage 1 code review (thread memory, migration 0008, packaging)",
+          "status": "open"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Docs-review cross-check points for stage-1 code",
           "status": "open"
         }
       }
