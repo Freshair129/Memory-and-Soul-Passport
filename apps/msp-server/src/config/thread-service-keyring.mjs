@@ -87,7 +87,7 @@ function fail(message) {
 // occurrence of a repeated key before a reviver, or anything else, ever
 // sees the object. A reviver only ever walks the final, already-
 // deduplicated object. Detecting a duplicate (including an escaped
-// equivalent of a plain character, e.g. a literal "-" vs its - escape
+// equivalent of a plain character, e.g. a literal "-" vs its \u002d escape
 // in the same source) requires scanning the RAW source's own key tokens,
 // decoded, in source order. This tokenizer trusts that `raw` already
 // parsed successfully as JSON representing a top-level, non-array object

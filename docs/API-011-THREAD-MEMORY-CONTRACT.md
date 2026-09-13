@@ -327,7 +327,7 @@ decision about any one caller's grant):
   refused;
 - a **duplicate** tenant id among the raw JSON's own top-level keys,
   including one that only differs from another by JSON escaping (e.g. a
-  literal `-` versus its `-` escape) — detected by scanning the raw
+  literal `-` versus its `\u002d` escape) — detected by scanning the raw
   source's own key tokens, since JSON.parse (and any reviver run over its
   result) silently keeps only the *last* occurrence of a repeated key
   before either ever sees the object;
@@ -412,7 +412,7 @@ Added the optional per-tenant `MSP_THREAD_SERVICE_KEYRING` described in
 "Per-tenant service key keyring" above -- the one stage-2 item the ADR
 specified fully ahead of the rest of stage 2 (multi-agent: `thread_agents`,
 the agent gate, `agentId`/`nonce`/`assertAgents`, record visibility, worker
-identity), which waits on its own spec review. RKOI's code review round 2
+identity), which waits on its own spec review. RKOI's code review round 1
 found and closed a CRITICAL (an inverted `{key: tenantId}` map could echo
 the key itself through the startup error, reaching both the server's
 stderr and, via `msp-stdio-transport.mjs`'s crashed-child-stderr-in-error
@@ -452,7 +452,7 @@ GKS-as-DNA meaning is not imported into Zuri's GKS knowledge authority.
 
 | Version | Date | Status | Summary | Agent |
 |---|---|---|---|---|
-| 0.3.2b | 2026-09-15 | beta | TASK-MEMOS-002 stage 2, BL-MEMOS-049: optional per-tenant `MSP_THREAD_SERVICE_KEYRING` (opt-in, no fallback once configured, parsed/validated once at server start before the database is even opened); RKOI code review round 2 CRITICAL closed -- no rejection ever quotes anything read out of the keyring, only an entry's 1-based position, closing a path where an inverted `{key: tenantId}` map could echo the key through the startup crash into both the server's stderr and the calling application's own error | KIN |
+| 0.3.2b | 2026-09-15 | beta | TASK-MEMOS-002 stage 2, BL-MEMOS-049: optional per-tenant `MSP_THREAD_SERVICE_KEYRING` (opt-in, no fallback once configured, parsed/validated once at server start before the database is even opened); RKOI code review round 1 CRITICAL closed -- no rejection ever quotes anything read out of the keyring, only an entry's 1-based position, closing a path where an inverted `{key: tenantId}` map could echo the key through the startup crash into both the server's stderr and the calling application's own error | KIN |
 | 0.3.1b | 2026-09-14 | beta | RKOI review revision (2 CRITICALs, multiple WARNINGs, 4 rounds against zuri-ai `origin/main`): dropped `channel_type` from the room hash and removed `channelType` from the delivery grant (CRITICAL 1, zuri-ai's real delivery grant never sent one); added DEC-MEMOS-15's self-upgrade exception plus its stored-`person_id` tightening (CRITICAL 2); added the per-tool audience requirement (required on every tool except delivery) and the room-hash cross-check on every thread-bound tool including compaction claim/commit/retry; `person_id` constrained to `{null, principalId}` unconditionally; tenant-scoped uniqueness extended to `thread_injection_receipts`/`thread_summary_invalidations`/cross-references between messages, jobs, summaries and their sessions; `chat_sessions` uniqueness narrowed to "at most one OPEN" only (a schema-level "one CLOSING" constraint was tried and dropped -- late-delivery reconciliation legitimately produces two); tombstone-then-INSERT and `IS NOT`-safe tenant triggers; `ON CONFLICT DO NOTHING` replacing `INSERT OR IGNORE` where it could swallow a NOT NULL violation; output-contract validation removed (ran only after commit); typed grant-verification errors (`grant_unconfigured`/`grant_signature_invalid`/`grant_expired`/`grant_payload_mismatch`) | KIN |
 | 0.3.0b | 2026-09-13 | beta | TASK-MEMOS-002 stage 1: renamed API-010 -> API-011, tenant-scoped uniqueness, HMAC room refs, append-only participants with the one-human-per-DIRECT-thread invariant, `msp-contracts` decoupled from storage, required `source_event_id`, typed errors, test-only clock | KIN |
 | 0.2.0b | 2026-09-08 | beta | Approved cross-repository contract, scope, exchange, coverage and summary refinement; verify implementation per acceptance matrix | RWANG |
