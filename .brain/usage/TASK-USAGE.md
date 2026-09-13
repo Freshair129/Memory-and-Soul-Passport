@@ -12,7 +12,7 @@ A segment whose status is `open` was still running when the ledger was generated
 
 | Segments | Requests | Input (total) | input_tokens | Cache write | Cache read | Output |
 |---:|---:|---:|---:|---:|---:|---:|
-| 55 | 1,318 | 452,472,541 | 3,692 | 14,044,663 | 438,424,186 | 2,099,518 |
+| 56 | 1,327 | 457,913,820 | 3,714 | 15,076,397 | 442,833,709 | 2,122,765 |
 
 ## Per task id
 
@@ -26,12 +26,12 @@ A segment whose status is `open` was still running when the ledger was generated
 | BL-MEMOS-006 | 4 | 2026-09-13T18:58:09+07:00 | 2026-09-13T22:12:14+07:00 | 76 | 55,158,394 | 81,424 |
 | BL-MEMOS-010 | 6 | 2026-09-13T18:35:45+07:00 | 2026-09-14T00:25:38+07:00 | 147 | 67,352,948 | 354,373 |
 | BL-MEMOS-011 | 3 | 2026-09-13T23:06:39+07:00 | 2026-09-14T00:25:38+07:00 | 108 | 41,823,516 | 253,510 |
-| BL-MEMOS-012 | 4 | 2026-09-13T23:17:36+07:00 | 2026-09-14T00:26:23+07:00 | 38 | 32,487,461 | 126,355 |
+| BL-MEMOS-012 | 4 | 2026-09-13T23:17:36+07:00 | 2026-09-14T00:30:08+07:00 | 43 | 35,457,981 | 128,848 |
 | BL-MEMOS-020..032 | 1 | 2026-09-13T23:07:39+07:00 | 2026-09-14T00:06:19+07:00 | 278 | 97,571,170 | 314,980 |
-| BL-MEMOS-033 | 1 | 2026-09-14T00:07:42+07:00 | 2026-09-14T00:26:06+07:00 | 55 | 9,569,730 | 77,902 |
+| BL-MEMOS-033 | 2 | 2026-09-14T00:07:42+07:00 | 2026-09-14T00:29:57+07:00 | 57 | 10,122,006 | 90,938 |
 | OPS-MEMOS-000 | 2 | 2026-09-13T14:53:06+07:00 | 2026-09-13T14:53:06+07:00 | 0 | 0 | 0 |
 | OPS-MEMOS-001 | 2 | 2026-09-13T18:28:15+07:00 | 2026-09-13T23:00:09+07:00 | 26 | 4,190,696 | 17,365 |
-| OPS-MEMOS-002 | 1 | 2026-09-13T23:46:44+07:00 | 2026-09-14T00:26:32+07:00 | 24 | 21,848,846 | 49,009 |
+| OPS-MEMOS-002 | 1 | 2026-09-13T23:46:44+07:00 | 2026-09-14T00:30:07+07:00 | 26 | 23,767,329 | 56,727 |
 
 ## Per segment
 
@@ -87,8 +87,9 @@ A segment whose status is `open` was still running when the ledger was generated
 | 48 | BL-MEMOS-012 | coordinator | 25 | Write implementation plan, commit docs, dispatch RKOI docs review | done | 2026-09-13T23:17:36+07:00 | 2026-09-13T23:34:59+07:00 | 17m22s | 9 | 7,578,414 | 20 | 59,554 | 7,518,840 | 45,300 |
 | 49 | BL-MEMOS-012 | rkoi `a7cf259` | 13 | TASK-MEMOS-001 docs review, round 1 (3 critical) | done | 2026-09-13T23:23:44+07:00 | 2026-09-13T23:32:08+07:00 | 8m23s | 11 | 8,585,035 | 22 | 827,222 | 7,757,791 | 37,889 |
 | 50 | BL-MEMOS-010, BL-MEMOS-011 | ather `a2d9519` | 2 | ADR/design/plan revision after RKOI round 1 (design v0.3.1b) | done | 2026-09-13T23:34:10+07:00 | 2026-09-13T23:57:25+07:00 | 23m15s | 35 | 12,136,661 | 70 | 922,757 | 11,213,834 | 76,472 |
-| 51 | OPS-MEMOS-002 | coordinator | 26 | Task usage ledger | open | 2026-09-13T23:46:44+07:00 | 2026-09-14T00:26:32+07:00 | 39m48s | 24 | 21,848,846 | 52 | 84,173 | 21,764,621 | 49,009 |
+| 51 | OPS-MEMOS-002 | coordinator | 26 | Task usage ledger | open | 2026-09-13T23:46:44+07:00 | 2026-09-14T00:30:07+07:00 | 43m23s | 26 | 23,767,329 | 58 | 93,323 | 23,673,948 | 56,727 |
 | 52 | BL-MEMOS-012 | rkoi `a7cf259` | 14 | TASK-MEMOS-001 docs review, round 2 (1 critical) | done | 2026-09-13T23:58:12+07:00 | 2026-09-14T00:07:54+07:00 | 9m42s | 18 | 16,324,012 | 38 | 933,669 | 15,390,305 | 43,166 |
-| 53 | BL-MEMOS-033 | rkoi `afd6aa2` | 1 | Stage 1 code review (thread memory, migration 0008, packaging) | open | 2026-09-14T00:07:42+07:00 | 2026-09-14T00:26:06+07:00 | 18m23s | 55 | 9,569,730 | 110 | 264,436 | 9,305,184 | 77,902 |
+| 53 | BL-MEMOS-033 | rkoi `afd6aa2` | 1 | Stage 1 code review (2 critical: delivery refusal, VERIFIED lock-up) | done | 2026-09-14T00:07:42+07:00 | 2026-09-14T00:28:47+07:00 | 21m04s | 57 | 10,122,006 | 114 | 273,873 | 9,848,019 | 90,938 |
 | 54 | BL-MEMOS-010, BL-MEMOS-011 | ather `a2d9519` | 3 | Docs revision round 3: frozen wire values, aligned to stage-1 code (design v0.3.2b) | done | 2026-09-14T00:09:11+07:00 | 2026-09-14T00:25:38+07:00 | 16m27s | 55 | 27,082,919 | 110 | 995,101 | 26,087,708 | 89,263 |
-| 55 | BL-MEMOS-012 | rkoi `a7cf259` | 15 | TASK-MEMOS-001 docs review, round 3 | open | 2026-09-14T00:26:23+07:00 | 2026-09-14T00:26:23+07:00 | 0m00s | 0 | 0 | 0 | 0 | 0 | 0 |
+| 55 | BL-MEMOS-012 | rkoi `a7cf259` | 15 | TASK-MEMOS-001 docs review, round 3 | open | 2026-09-14T00:26:23+07:00 | 2026-09-14T00:30:08+07:00 | 3m45s | 5 | 2,970,520 | 12 | 1,013,147 | 1,957,361 | 2,493 |
+| 56 | BL-MEMOS-033 | kin `ab508b7` | 2 | Stage 1 revision: delivery/HMAC, VERIFIED upgrade, room check, schema integrity | open | 2026-09-14T00:29:57+07:00 | 2026-09-14T00:29:57+07:00 | 0m00s | 0 | 0 | 0 | 0 | 0 | 0 |

@@ -210,6 +210,13 @@
             "BL-MEMOS-020..032"
           ],
           "label": "TASK-MEMOS-002 stage 1: port thread memory, C-1/C-2 fixes, 14-item RKOI delta (delta queued into the same run)"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1 revision: delivery/HMAC, VERIFIED upgrade, room check, schema integrity",
+          "status": "open"
         }
       }
     },
@@ -220,15 +227,13 @@
           "task_ids": [
             "BL-MEMOS-033"
           ],
-          "label": "Stage 1 code review (thread memory, migration 0008, packaging)",
-          "status": "open"
+          "label": "Stage 1 code review (2 critical: delivery refusal, VERIFIED lock-up)"
         },
         "2": {
           "task_ids": [
             "BL-MEMOS-033"
           ],
-          "label": "Docs-review cross-check points for stage-1 code",
-          "status": "open"
+          "label": "Docs-review cross-check points for stage-1 code"
         }
       }
     }
