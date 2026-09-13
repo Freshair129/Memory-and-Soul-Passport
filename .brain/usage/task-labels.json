@@ -291,8 +291,7 @@
           "task_ids": [
             "BL-MEMOS-049"
           ],
-          "label": "Stage 2: per-tenant MSP_THREAD_SERVICE_KEYRING",
-          "status": "open"
+          "label": "Stage 2: per-tenant MSP_THREAD_SERVICE_KEYRING (707406d..0a7dd0d)"
         }
       }
     },
@@ -328,6 +327,13 @@
             "BL-MEMOS-033"
           ],
           "label": "Stage 1 follow-up confirmation (APPROVED, 3d5ea92)"
+        },
+        "6": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Review BL-MEMOS-049 keyring (0a7dd0d)",
+          "status": "open"
         }
       }
     }
