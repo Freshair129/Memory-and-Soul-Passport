@@ -1,7 +1,7 @@
 ---
-version: "0.1.4b"
+version: "0.1.5b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-15T00:00:00+07:00,ATHER"
+last_update: "2026-09-15T03:00:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -92,6 +92,23 @@ those files were never part of this repository. A cross-room authorization
 gap with no prior backlog row (`BL-MEMOS-111`, design §6.3/§12.1/§15) was
 also found in this round, on the code side rather than this ADR's own
 content.
+
+## Revision note — RKOI stage-1 code review round 2 (2026-09-15)
+
+RKOI's second round of reviewing the stage-1 code itself (not the docs)
+produced spec items feeding back into these documents at commit `445bd90`.
+Most directly relevant to this ADR: **decision 16, `channel_type`
+mismatch, is new** (below) — a resolve whose `channel_type` disagrees with
+an existing `ACTIVE` thread's stored value, for the same tenant/account/
+room hash, is refused `conflict` rather than silently treated as the same
+room. This corrects the design's own earlier, wrong claim (§6.2) that the
+tenant/account/room-hash triple alone made two calls "the same room
+regardless of transport label." Also confirmed: `msp_session_sweep` is
+room-scoped, not tenant-scoped (the shipped guard overwrites its room
+claims from the grant just as it does tenant/business); zuri-ai has no
+`msp_session_*` caller at all — the only worker signing these grants is
+MSP's own `thread-summary-worker.mjs`. Every `DEC-MEMOS-01..15` reference
+in this ADR is updated to `01..16`.
 
 ## Context
 
@@ -293,6 +310,22 @@ of these is a final owner ruling.
     locks the thread until the relink caller (item 4 of the cross-repo
     change list below) exists. — *adopted default, pending owner
     confirmation.*
+16. **DEC-MEMOS-16, `channel_type` mismatch is a typed conflict, never a
+    silent cross-channel hit.** The room hash's three segments
+    (`tenant_id`, `channel_account_id`, `external_room_ref`) alone do not
+    distinguish two different channels that happen to share an account id
+    and room reference. **This replaces an earlier claim in the design
+    (§6.2) that the same tenant/account/room-hash triple "names the same
+    room regardless of transport label"** — that claim was wrong on its
+    own terms. The rule: a `msp_thread_resolve` whose `channel_type`
+    differs from the `channel_type` already stored on the existing
+    `ACTIVE` thread for the same tenant, account and room hash is refused
+    with the typed `conflict` error; it never returns the other channel's
+    thread. The room hash itself is unchanged (still three segments, no
+    `channel_type`), and `channel_type` remains a pinned column on
+    `threads` — this decision adds an independent mismatch check at
+    resolve time, not a fourth hash segment. — *adopted default, pending
+    owner confirmation.*
 
 ### The multi-user model
 
@@ -470,7 +503,7 @@ instruction that every cross-repo change be listed in both places:
 ## What this ADR does not decide
 
 - The exact corrected DDL for the folded migration — that is
-  `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.4b's job, not
+  `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.5b's job, not
   this ADR's.
 - Whether or when GoVibe or Zuri actually calls the participant lifecycle
   tool (decision 4 only says MSP must provide it).
@@ -500,18 +533,19 @@ instruction that every cross-repo change be listed in both places:
 - [ ] 13. The thread store lives in `msp-core`, no new package (DEC-MEMOS-13).
 - [ ] 14. Agent fields and `grant_nonces` ship in stage 2, not `0008`; migration numbers are assigned in merge order (DEC-MEMOS-14).
 - [ ] 15. A PENDING→VERIFIED self-upgrade on a later append needs no `assertParticipants` when the stated conditions hold on both the incoming request and the stored row, closing the old row and inserting a new one in one transaction; VERIFIED→PENDING is silently ignored, and MSP's own state does not implement revocation as a result (DEC-MEMOS-15).
+- [ ] 16. A `channel_type` mismatch against an existing ACTIVE thread's stored value is refused `conflict`, never a silent cross-channel hit; the room hash stays three segments (DEC-MEMOS-16).
 - [ ] RKOI ruling 1: grant capability growth is additive-only; new required/nested/re-encoded fields are cross-repo.
 - [ ] RKOI ruling 2: per-tenant keyring, with the stated selection/fallback/rotation/defense-in-depth conditions.
 - [ ] RKOI ruling 3: nonce required on every mutating tool except append, with the stated transaction/conflict/pruning conditions, and the named stage-1 gap.
 - [ ] RKOI ruling 4: single persisted `thread_kind`, pinned by trigger, `ROOM` behaves as `GROUP`.
 
 Overturning any row above reopens the corresponding section of
-`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.4b named in its
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.5b named in its
 mapping table (§3.1).
 
 ## Evidence and implementation map
 
-- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.3.4b (superseded in relevant part by this ADR + the design's own §0.1 review response)
+- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.3.5b (superseded in relevant part by this ADR + the design's own §0.1 review response)
 - Stage-1 code, the new source of truth for wire/schema shapes: `feat/memos-002-thread-memory` (worktree `agent-ab508b7a790efd268`), especially `migrations/0008_thread_memory.sql`, `packages/msp-core/src/domain/thread-memory.mjs`, `packages/msp-contracts/src/contracts/thread-access.mjs`, `apps/msp-server/src/transport/handlers/thread-guard.mjs`, and `docs/API-011-THREAD-MEMORY-CONTRACT.md`
 - Unmerged branch (facts only, not read via git by this ADR's author): `origin/codex/msp-thread-memory`, commits `50859fb`, `e4303cb`
 - Existing guard pattern the design's C-2 fix follows: [`packages/msp-contracts/src/contracts/vault-scope-guard.mjs`](../packages/msp-contracts/src/contracts/vault-scope-guard.mjs) (the fix itself, `grant-scope-guard.mjs`, does not exist yet — see the corrected C-2 entry above)
@@ -523,6 +557,7 @@ mapping table (§3.1).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.5b | 2026-09-15 | proposed | Folds RKOI's stage-1 code-review round-2 spec items (commit `445bd90`). Added **decision 16, `channel_type` mismatch** (pending owner confirmation): a resolve whose `channel_type` differs from an existing `ACTIVE` thread's stored value, for the same tenant/account/room hash, is refused `conflict`, never a silent cross-channel hit — replacing the design's earlier, wrong "same room regardless of transport label" claim; the room hash itself stays three segments. Added owner checklist item 16. Confirmed and recorded (design-side, cross-referenced here): `msp_session_sweep` is room-scoped, not tenant-scoped; zuri-ai has no `msp_session_*` caller — the only worker signing these grants is MSP's own `thread-summary-worker.mjs`. Every `DEC-MEMOS-01..15` reference updated to `01..16`; every `v0.3.4b` design-version reference updated to `v0.3.5b`. | working-tree | ATHER |
 | 0.1.4b | 2026-09-15 | proposed | Folds RKOI's nine round-four warnings (docs **APPROVED, 0 critical**, commit `1c4a62f`) ahead of merge. Tightened **decision 15**: the self-upgrade check now also requires the *stored* participant row's own `person_id` (not only the incoming value), and states plainly that the transition is a mandatory close-old-row-plus-insert-new-row in one transaction, never an implementation choice — the append-only trigger permits nothing else; recorded that a silently-ignored downgrade means MSP's own state does not implement revocation. Moved the `personId`-change lock-up risk mechanism into `RSK-MEMOS-01`'s cross-repo item 4 directly, rather than only pointing at it from decision 15. Removed the evidence map's citation of RKOI's session-scratch probe scripts (never part of this repository); pointed every design version reference at v0.3.4b. Noted `BL-MEMOS-111` (a cross-room authorization gap with no prior backlog row) as a round-four finding on the code side. | working-tree | ATHER |
 | 0.1.3b | 2026-09-14 | proposed | Answers RKOI's round-three NEEDS REVISION on commit `6d1a801` (1 critical): zuri-ai's real delivery grant carries neither `channelType` nor `audienceKind` (`msp-thread-memory-port.js:420-422`) — corrected the design accordingly per owner direction (a), dropping `channel_type` from the room HMAC and every `channelType` grant requirement. Added **DEC-MEMOS-15** (assurance self-upgrade needs no `assertParticipants` under four stated conditions; a downgrade is silently ignored), closing a real correctness gap in the append flow. Corrected the cross-repo change list: removed the sentence claiming `assertParticipants` "needs no zuri-ai change" (it read as contradicting items 4 and 5); restated item 5 (assurance-upgrade caller) as resolved MSP-side by DEC-MEMOS-15, needing no zuri-ai change for the normal case; kept item 4 (relink/merge caller) as a real, still-open cross-repo change on the activation gate. Extended the owner confirmation checklist with DEC-MEMOS-15 and pointed every version reference at design v0.3.3b. | working-tree | ATHER |
 | 0.1.2b | 2026-09-14 | proposed | Answers RKOI's round-two NEEDS REVISION on commit `92cb591` (1 critical: wrong wire values, fixed in the design against KIN's now-shipped stage-1 code, not this ADR's decision list directly). Corrected ruling 1's wording: a new required grant field (`agentId`/`workspaceId` in stage 2) is a cross-repo change to negotiate via `RSK-MEMOS-01`/`BL-MEMOS-090`, not something this ADR can declare "out of bounds." Added two items to the cross-repo change list: a caller for `close_for_relink` (nothing calls it today) and a caller for an `identity_assurance` upgrade (nothing asks for one today) — both flagged by RKOI as missing next to the existing `agentId`/`nonce`/`assertAgents`/`assertParticipants` items. Pointed the evidence map at the actual stage-1 code as the new source of truth for wire/schema shapes. | working-tree | ATHER |
