@@ -71,6 +71,121 @@
 // turns off foreign-key enforcement is never silent. Content outside that
 // leading comment block -- the SQL body, or a comment after the file's
 // first non-comment statement -- is never scanned for this.
+//
+// RKOI review (follow-up warning 2): scanning the header can never catch
+// every mistake -- a C-style `/* msp-migration: foreign-keys=off */`
+// header, a `/* header */` comment ahead of the directive, a leading
+// `PRAGMA foreign_keys = OFF;` line, or a marker misspelling that doesn't
+// even contain the substring "msp-migration" (`msp_migration`, "msp
+// migration", `msp-migraton`) all still classify "plain" and reach the
+// PLAIN path below with no directive at all. Because of this,
+// `checkForeignKeysResolveOnPlainPath` (below; folds in
+// `checkForeignKeyTargetsStructurallyValid`, the structural half of step 4a
+// above) now ALSO runs on the plain path, after `db.exec(file.sql)` and
+// before the `schema_migrations` insert and `user_version` bump, inside
+// that path's own `db.transaction(...)`. This is the durable guarantee: it
+// does not depend on any header being spelled correctly. The
+// row-level `PRAGMA foreign_key_check` is deliberately NOT run on the plain
+// path -- with `PRAGMA foreign_keys` ON there (connection.mjs always
+// enables it, and the plain path never turns it off), row-level violations
+// are already refused per statement as they happen, and a whole-database
+// row check on every ordinary migration would make any database that
+// already holds one pre-existing orphaned row unable to apply its next
+// migration at all. The structural check itself is schema-only, so it also
+// blocks a pending plain migration against a schema that was ALREADY
+// structurally invalid before this migration ran; the real root schema
+// (migrations 0001-0007) is confirmed structurally valid by
+// `tests/integration/migrate.test.mjs`, including the `entities_fts` FTS5
+// virtual table and its shadow tables. An already-applied migration never
+// re-runs this check (or any other guard below), so a database that is
+// fully migrated today boots exactly as it did before this change.
+//
+// RKOI review (same follow-up, 1 critical, first revision): an earlier
+// revision of this file tried to decide whether a foreign key's target
+// column set was genuinely a usable key (the right PRIMARY KEY/UNIQUE
+// index, matching collation, generated-column and `WITHOUT ROWID` handling,
+// etc.) by re-implementing SQLite's own rules against parsed `CREATE TABLE`
+// text (`isKeyColumnSet`/`columnCollation`, since removed). It disagreed
+// with SQLite on 7 of 27 real parent-key shapes: 6 false REJECTIONS, where
+// the text merely LOOKED like it might mention `COLLATE` -- inside a
+// `CHECK` expression, a `DEFAULT` string, a block comment, or past an
+// apostrophe or a stray `(` inside a `--` comment, or a quoted `"check"`
+// column mistaken for the constraint keyword -- and 1 false ACCEPTANCE,
+// `PRIMARY KEY (id COLLATE NOCASE)` on an otherwise-`BINARY` column, whose
+// PRIMARY KEY short-circuit returned `true` before ever comparing a
+// collation.
+//
+// RKOI review (same critical, second revision): that fix's REPLACEMENT --
+// a per-constraint, CHILD-side `UPDATE "<child>" SET "<col>" = "<col>" ...
+// WHERE 0` probe -- introduced five NEW false rejections of its own, by
+// running a JS pre-filter (table/column existence, "is this a key" by
+// column-NAME matching) BEFORE ever consulting SQLite: a case-different
+// column name (`REFERENCES parent(ID)` where the column is `id`), a
+// case-different table name (`REFERENCES Parent(id)` where the table is
+// `parent`), a case-different UNIQUE index column (index on `Code`, FK
+// names `code`), a `GENERATED` parent key column (`PRAGMA table_info` omits
+// generated columns entirely), and a `GENERATED` CHILD FK column itself
+// (SQLite refuses to `UPDATE` a generated column at all, so the child-side
+// probe cannot even run against one). Both mistakes share a root cause:
+// deciding ANYTHING beyond bare table existence in JS, ahead of SQLite,
+// risks disagreeing with SQLite's own rules. The fix removes every such
+// pre-filter except the one JS cannot avoid keeping (below), and moves the
+// probe to the PARENT side, which cannot fail this way -- it names no
+// column at all, so there is no column-name or generated-column mismatch
+// for JS to get wrong, and SQLite still resolves every foreign key any
+// child declares against that parent, regardless of casing or generated
+// columns, when asked to prepare a statement against the parent itself:
+//   - JS keeps EXACTLY ONE check: does the target table exist at all,
+//     compared case-insensitively (`findMissingForeignKeyTargetTable`,
+//     below). This one cannot be delegated: on the PLAIN path, SQLite's own
+//     `.prepare()` reports a missing target only as a raw, unprefixed
+//     `no such table`; on the DIRECTIVE path, `PRAGMA foreign_key_check`
+//     with `PRAGMA foreign_keys` OFF never reports a missing target AT ALL
+//     when the referencing table happens to be empty -- exactly the case
+//     this whole check exists for (see above). Nothing else -- column
+//     existence, key-ness, collation -- is decided in JS anymore.
+//   - PLAIN path (`PRAGMA foreign_keys` is ON the whole time here): for
+//     every DISTINCT existing target table any foreign key in the schema
+//     names, `findParentSideForeignKeyProbeFailure`, below, prepares -- but
+//     never executes -- `DELETE FROM "<target>" WHERE 0`. Preparing a
+//     DELETE against the PARENT table makes SQLite resolve every foreign
+//     key any child declares against it, in ONE statement per parent,
+//     regardless of casing, columns, or how many children or constraints
+//     reference it; `WHERE 0` guarantees zero rows are ever touched even if
+//     the statement somehow ran, which it never does. If ANY foreign key
+//     naming that parent does not actually resolve, `.prepare()` throws a
+//     `SqliteError` synchronously, before anything executes -- most
+//     commonly `foreign key mismatch - ...`, but a raw `SqliteError` of any
+//     other message (e.g. an `ON DELETE` trigger on the parent referencing
+//     a table that no longer exists) means something about that table's
+//     schema is broken too, so it is rethrown prefixed as well, never left
+//     raw.
+//   - DIRECTIVE path (`PRAGMA foreign_keys` is OFF while the migration's SQL
+//     runs): the parent-side probe does NOT resolve foreign keys while the
+//     pragma reads OFF, so it is not used there -- no functional change
+//     from the previous revision. `PRAGMA foreign_key_check` (already run
+//     on this path both before and after the migration's SQL,
+//     `runForeignKeyCheck`, below) already raises the identical
+//     `SqliteError: foreign key mismatch - ...` regardless of the pragma's
+//     current value for every one of these classes, and that is already
+//     caught and rethrown, prefixed.
+//
+// RKOI review (same round, warning 1): a structural defect that PREDATES
+// this migration -- introduced out-of-band, or by an earlier migration --
+// must not be blamed on this one. BOTH of the checks above -- the missing-
+// table check, and the parent-side probe -- therefore also run once
+// against the CURRENT schema, before `db.exec(file.sql)`, on BOTH paths
+// (`assertNoPreexistingStructuralForeignKeyViolation`, below). On the
+// directive path this runs before `PRAGMA foreign_keys` is ever turned
+// OFF (see `applyForeignKeysOffMigration`'s call order, below -- do not
+// reorder it), so the parent-side probe is meaningful there too, not just
+// the missing-table check. A violation found here throws prefixed
+// `migration_preexisting_structural_violation:` instead of
+// `migration_foreign_key_check_failed:`, naming the table and target, and
+// the migration's own SQL never runs -- mirroring the existing
+// `migration_preexisting_foreign_key_violation:` guard for row-level
+// violations on the directive path, just for the structural question and on
+// both paths.
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -177,109 +292,174 @@ function quoteIdentifier(name) {
   return `"${String(name).replace(/"/g, '""')}"`;
 }
 
-function primaryKeyColumns(db, table) {
+// Every ordinary (non-`sqlite_*`) table currently in the schema, in the
+// exact case SQLite itself recorded it under.
+function allTableNames(db) {
   return db
-    .pragma(`table_info(${quoteIdentifier(table)})`)
-    .filter((column) => column.pk > 0)
-    .sort((a, b) => a.pk - b.pk)
-    .map((column) => column.name);
-}
-
-function sameColumnSet(a, b) {
-  if (a.length === 0 || a.length !== b.length) return false;
-  const sortedA = [...a].sort();
-  const sortedB = [...b].sort();
-  return sortedA.every((name, index) => name === sortedB[index]);
-}
-
-// True if `columns` (as a set, order not significant) is `table`'s
-// PRIMARY KEY or is exactly the column set of one of its UNIQUE indexes --
-// i.e. `columns` is actually a key on `table`, so a foreign key naming them
-// can resolve to at most one row.
-function isKeyColumnSet(db, table, columns) {
-  if (sameColumnSet(primaryKeyColumns(db, table), columns)) return true;
-  for (const index of db.pragma(`index_list(${quoteIdentifier(table)})`)) {
-    if (!index.unique) continue;
-    const indexColumns = db
-      .pragma(`index_info(${quoteIdentifier(index.name)})`)
-      .sort((a, b) => a.seqno - b.seqno)
-      .map((column) => column.name);
-    if (sameColumnSet(indexColumns, columns)) return true;
-  }
-  return false;
-}
-
-// Structural companion to PRAGMA foreign_key_check (see the module header
-// comment for why the row-level check alone is not enough): for every
-// table in the schema, every foreign key's target table must still exist,
-// every explicitly named target column must exist on it, and the target
-// column set must actually be a key on the target table (its PRIMARY KEY,
-// or covered by a UNIQUE index) -- otherwise the "foreign key" can silently
-// resolve to zero or many rows instead of at most one. Checked across the
-// WHOLE schema, not just tables this migration's SQL touched, because a
-// rebuild can break a REFERENCES clause on an unrelated table simply by
-// renaming the table that clause names.
-function checkForeignKeyTargetsStructurallyValid(db, file) {
-  const tables = db
     .prepare("SELECT name FROM sqlite_schema WHERE type = 'table'")
     .all()
     .map((row) => row.name)
     .filter((name) => !name.startsWith("sqlite_"));
-  const tableSet = new Set(tables);
+}
 
-  for (const table of tables) {
-    const foreignKeys = db.pragma(`foreign_key_list(${quoteIdentifier(table)})`);
-    if (foreignKeys.length === 0) continue;
-
-    const byConstraintId = new Map();
-    for (const foreignKey of foreignKeys) {
-      if (!byConstraintId.has(foreignKey.id)) byConstraintId.set(foreignKey.id, []);
-      byConstraintId.get(foreignKey.id).push(foreignKey);
+// Finds the first foreign key in the CURRENT schema whose target table does
+// not exist -- compared CASE-INSENSITIVELY, since SQLite itself resolves
+// table names that way, and a mismatch here used to be a false rejection
+// (RKOI: `REFERENCES Parent(id)` against an actual table `parent`). This is
+// the ONE thing this module still decides in JS rather than asking SQLite
+// (see the module header comment for why): SQLite's own `.prepare()` on the
+// plain path reports a missing target table only as a raw, unprefixed
+// `no such table`, and `PRAGMA foreign_key_check` with `PRAGMA foreign_keys`
+// OFF never reports it at all when the referencing table happens to be
+// empty (the exact case this whole check exists for -- see the module
+// header comment). Checked across the WHOLE schema, not just tables a
+// migration's SQL touched, because a rebuild can break a REFERENCES clause
+// on an unrelated table simply by renaming the table that clause names.
+// Shared by the four callers below (post-migration and pre-existing, on
+// both paths) so all four agree on what counts as "missing".
+function findMissingForeignKeyTargetTable(db) {
+  const tableNames = allTableNames(db);
+  const lowerTableNames = new Set(tableNames.map((name) => name.toLowerCase()));
+  for (const table of tableNames) {
+    for (const foreignKey of db.pragma(`foreign_key_list(${quoteIdentifier(table)})`)) {
+      if (!lowerTableNames.has(foreignKey.table.toLowerCase())) {
+        return { table, targetTable: foreignKey.table };
+      }
     }
+  }
+  return null;
+}
 
-    for (const constraintRows of byConstraintId.values()) {
-      const targetTable = constraintRows[0].table;
-      if (!tableSet.has(targetTable)) {
-        throw new SchemaVersionError(
-          `migration_foreign_key_check_failed: migration "${file.name}" left table "${table}" with a foreign key ` +
-            `pointing at table "${targetTable}", which does not exist after the rebuild. Refusing to start.`,
-        );
-      }
+// Everything else about whether a foreign key's parent key is genuinely
+// usable -- the right PRIMARY KEY/UNIQUE index actually existing, matching
+// collation, generated columns, composite keys, `WITHOUT ROWID`, every
+// other nuance SQLite itself cares about -- is answered by SQLite, not by
+// re-implementing its rules (see the module header comment for the parser
+// this replaced and why). For every DISTINCT existing target table any
+// foreign key in the schema names, this prepares -- but never executes --
+// `DELETE FROM "<target>" WHERE 0`. Preparing a DELETE against the PARENT
+// table makes SQLite resolve EVERY foreign key ANY child table declares
+// against it, in one statement, regardless of which child or which
+// columns; `WHERE 0` guarantees zero rows are ever touched even if the
+// statement somehow ran, which it never does. A target already found
+// missing by `findMissingForeignKeyTargetTable` is skipped here -- there is
+// no real name left to quote and prepare against. Returns `{ targetTable,
+// message }` for the first table SQLite itself refuses to resolve or even
+// prepare a DELETE against (a raw `SqliteError` here -- not only "foreign
+// key mismatch" -- means something about that table's schema is broken,
+// e.g. an ON DELETE trigger referencing a table that no longer exists), or
+// `null` if every distinct target resolves cleanly.
+function findParentSideForeignKeyProbeFailure(db) {
+  const tableNames = allTableNames(db);
+  const targetTableNames = new Set();
+  for (const table of tableNames) {
+    for (const foreignKey of db.pragma(`foreign_key_list(${quoteIdentifier(table)})`)) {
+      targetTableNames.add(foreignKey.table);
+    }
+  }
 
-      // to === null on every row of a constraint means SQLite resolves it
-      // implicitly against the target's PRIMARY KEY.
-      const explicitTargetColumns = constraintRows.map((foreignKey) => foreignKey.to);
-      const targetColumns = explicitTargetColumns.every((to) => to === null)
-        ? primaryKeyColumns(db, targetTable)
-        : explicitTargetColumns;
+  for (const targetTable of targetTableNames) {
+    const realName = tableNames.find((candidate) => candidate.toLowerCase() === targetTable.toLowerCase());
+    if (!realName) continue; // reported separately, by findMissingForeignKeyTargetTable
 
-      if (targetColumns.length === 0) {
-        throw new SchemaVersionError(
-          `migration_foreign_key_check_failed: migration "${file.name}" left table "${table}" with a foreign key to ` +
-            `table "${targetTable}", which has no PRIMARY KEY to resolve the implicit reference against. Refusing to start.`,
-        );
-      }
+    try {
+      db.prepare(`DELETE FROM ${quoteIdentifier(realName)} WHERE 0`);
+    } catch (error) {
+      if (error instanceof Error) return { targetTable: realName, message: error.message };
+      throw error;
+    }
+  }
+  return null;
+}
 
-      const targetColumnNames = new Set(
-        db.pragma(`table_info(${quoteIdentifier(targetTable)})`).map((column) => column.name),
+// Post-migration missing-target-table check (see the module header comment
+// for why the row-level check alone is not enough). Throws the existing
+// `SchemaVersionError` prefixed `migration_foreign_key_check_failed:`,
+// naming the migration and the offending table. Used on BOTH paths: the
+// directive path's own `db.transaction(...)` (this is the original WP-E0
+// structural check, unchanged), and folded into
+// `checkForeignKeysResolveOnPlainPath`, below, for the plain path.
+function checkForeignKeyTargetsStructurallyValid(db, file) {
+  const missing = findMissingForeignKeyTargetTable(db);
+  if (!missing) return;
+  throw new SchemaVersionError(
+    `migration_foreign_key_check_failed: migration "${file.name}" left table "${missing.table}" with a foreign key ` +
+      `pointing at table "${missing.targetTable}", which does not exist after the rebuild. Refusing to start.`,
+  );
+}
+
+// PLAIN-path-only companion (see the module header comment for why): the
+// missing-table check above, plus SQLite's own parent-side resolution of
+// everything else a foreign key's parent key needs to be. `PRAGMA
+// foreign_keys` is ON for the whole plain path (connection.mjs always
+// enables it, and this path never turns it off), which is what makes
+// `findParentSideForeignKeyProbeFailure`'s prepare-only probe meaningful
+// here.
+function checkForeignKeysResolveOnPlainPath(db, file) {
+  checkForeignKeyTargetsStructurallyValid(db, file);
+  const failure = findParentSideForeignKeyProbeFailure(db);
+  if (!failure) return;
+  throw new SchemaVersionError(
+    `migration_foreign_key_check_failed: migration "${file.name}" left table "${failure.targetTable}" with a foreign ` +
+      `key SQLite itself refuses to resolve -- "${failure.message}". Refusing to start.`,
+  );
+}
+
+// Pre-migration check (RKOI follow-up, warning 1): the SAME two questions
+// as above -- missing target table, then SQLite's own parent-side
+// resolution of everything else -- asked against the CURRENT schema BEFORE
+// this migration's SQL runs at all, on BOTH paths. A defect found here
+// predates this migration -- an earlier migration, or out-of-band
+// tampering -- and must not be blamed on it, mirroring the existing
+// `migration_preexisting_foreign_key_violation:` guard for row-level
+// violations on the directive path (`runForeignKeyCheck`/
+// `applyForeignKeysOffMigration`, below), just for the structural question
+// and on both paths. Throws prefixed `migration_preexisting_structural_violation:`
+// -- a distinct prefix from `migration_foreign_key_check_failed:`, since
+// this migration's own SQL never even ran. On the directive path this runs
+// before `PRAGMA foreign_keys` is ever turned OFF (see
+// `applyForeignKeysOffMigration`, below, and do not reorder that), so the
+// parent-side probe is meaningful there too.
+function assertNoPreexistingStructuralForeignKeyViolation(db, file) {
+  const missing = findMissingForeignKeyTargetTable(db);
+  if (missing) {
+    throw new SchemaVersionError(
+      `migration_preexisting_structural_violation: migration "${file.name}" cannot run -- the schema already has table ` +
+        `"${missing.table}" with a foreign key pointing at table "${missing.targetTable}", which does not exist, before ` +
+        `this migration's SQL ran. Refusing to start.`,
+    );
+  }
+  const failure = findParentSideForeignKeyProbeFailure(db);
+  if (failure) {
+    throw new SchemaVersionError(
+      `migration_preexisting_structural_violation: migration "${file.name}" cannot run -- the schema already has table ` +
+        `"${failure.targetTable}" with a foreign key SQLite itself refuses to resolve -- "${failure.message}", before ` +
+        `this migration's SQL ran. Refusing to start.`,
+    );
+  }
+}
+
+// Belt-and-braces wrapper around `PRAGMA foreign_key_check` for the
+// directive path (RKOI, WP-E0 warning 1): SQLite itself can refuse to even
+// run that pragma with a raw `SqliteError` whose message contains "foreign
+// key mismatch" when some table's foreign key does not resolve to a real
+// key at all -- a case `checkForeignKeyTargetsStructurallyValid` above is
+// meant to catch first, but this belt-and-braces catch means a gap in that
+// check's own reasoning still surfaces as the same prefixed
+// `SchemaVersionError`, naming the migration, rather than an unhandled raw
+// driver error.
+function runForeignKeyCheck(db, file) {
+  try {
+    return db.pragma("foreign_key_check");
+  } catch (error) {
+    if (error instanceof Error && typeof error.message === "string" && error.message.includes("foreign key mismatch")) {
+      throw new SchemaVersionError(
+        `migration_foreign_key_check_failed: migration "${file.name}" cannot be checked -- PRAGMA foreign_key_check ` +
+          `itself refused with "${error.message}", meaning some table's foreign key does not resolve to a real key. ` +
+          `Refusing to start.`,
       );
-      for (const column of targetColumns) {
-        if (!targetColumnNames.has(column)) {
-          throw new SchemaVersionError(
-            `migration_foreign_key_check_failed: migration "${file.name}" left table "${table}" with a foreign key ` +
-              `naming column "${column}" on table "${targetTable}", which does not exist after the rebuild. Refusing to start.`,
-          );
-        }
-      }
-
-      if (!isKeyColumnSet(db, targetTable, targetColumns)) {
-        throw new SchemaVersionError(
-          `migration_foreign_key_check_failed: migration "${file.name}" left table "${table}" with a foreign key to ` +
-            `table "${targetTable}" columns (${targetColumns.join(", ")}), which are neither that table's PRIMARY KEY ` +
-            `nor covered by a UNIQUE index after the rebuild. Refusing to start.`,
-        );
-      }
     }
+    throw error;
   }
 }
 
@@ -293,6 +473,11 @@ function applyForeignKeysOffMigration(db, file, insertMigration) {
         `connection is already inside a transaction -- PRAGMA foreign_keys cannot be changed there. Refusing to start.`,
     );
   }
+
+  // RKOI follow-up warning 1: check the CURRENT schema, before this
+  // migration's SQL runs at all, so a defect that predates this migration
+  // is never blamed on it.
+  assertNoPreexistingStructuralForeignKeyViolation(db, file);
 
   const previousForeignKeys = db.pragma("foreign_keys", { simple: true });
   db.pragma("foreign_keys = OFF");
@@ -310,7 +495,7 @@ function applyForeignKeysOffMigration(db, file, insertMigration) {
     // predates this migration (a previous foreign-keys=off migration, or
     // out-of-band tampering) and must not be misreported as something this
     // migration caused.
-    const preExistingViolations = db.pragma("foreign_key_check");
+    const preExistingViolations = runForeignKeyCheck(db, file);
     if (preExistingViolations.length > 0) {
       const [firstPreExistingViolation] = preExistingViolations;
       throw new SchemaVersionError(
@@ -332,7 +517,7 @@ function applyForeignKeysOffMigration(db, file, insertMigration) {
       // allowed to commit; any violation throws, which rolls the whole
       // transaction back (the migration's SQL, the schema_migrations
       // insert below, and the user_version bump never take effect).
-      const violations = db.pragma("foreign_key_check");
+      const violations = runForeignKeyCheck(db, file);
       if (violations.length > 0) {
         const [firstViolation] = violations;
         throw new SchemaVersionError(
@@ -432,8 +617,25 @@ export function runMigrations(db, migrationsDir) {
     if (directive.state === "off") {
       applyForeignKeysOffMigration(db, file, insertMigration);
     } else {
+      // RKOI follow-up warning 1: check the CURRENT schema, before this
+      // migration's SQL runs at all, so a defect that predates this
+      // migration is never blamed on it. Outside the transaction on
+      // purpose -- if this throws, db.exec(file.sql) below never runs, so
+      // there is nothing to roll back.
+      assertNoPreexistingStructuralForeignKeyViolation(db, file);
+
       const applyOne = db.transaction(() => {
         db.exec(file.sql);
+
+        // RKOI follow-up warning 2 (missing-table half) and the later
+        // critical review (parent-side SQLite delegation half): header
+        // scanning can never catch every mistake (see the module header
+        // comment for the shapes that still reach here with no directive
+        // at all), so the plain path enforces its own structural guarantee
+        // -- missing target table in JS, everything else delegated to
+        // SQLite -- before this migration is allowed to commit.
+        checkForeignKeysResolveOnPlainPath(db, file);
+
         insertMigration.run({
           version: file.version,
           name: file.name,
