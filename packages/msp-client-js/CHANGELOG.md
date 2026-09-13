@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2
+
+- `MSP_THREAD_SERVICE_KEY` and `MSP_IDENTITY_HMAC_KEY` are forwarded to the
+  MSP child (added to `MSP_RUNTIME_ENV_NAMES`). These are API-011 thread
+  memory's grant-signing and identity-hashing secrets
+  (`docs/API-011-THREAD-MEMORY-CONTRACT.md`); without them the thread-tool
+  surface fails closed (`thread_scope_denied` / `identity_hmac_unconfigured`)
+  rather than running unauthenticated or storing a raw channel reference.
+  Neither key is ever journaled or echoed back to a caller.
+
 ## 0.2.1
 
 - `NODE_EXTRA_CA_CERTS` is forwarded to the MSP child. Without it a child cannot
