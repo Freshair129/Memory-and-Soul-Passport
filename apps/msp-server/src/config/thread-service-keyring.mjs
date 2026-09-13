@@ -57,6 +57,29 @@
 // application -- so a leak here would reach not just an operator's log,
 // but the very caller the keyring's owner-tenant boundary is trying to
 // protect.
+//
+// GHOST QA finding (Node v24.19.0, this workspace's engine): V8's own
+// `JSON.parse` has a real, reproducible engine bug -- after one object has
+// been parsed, a LATER, differently-escaped object can come back from
+// `JSON.parse` with a corrupted non-first key name (a value is never
+// affected; the bug persists under `--jitless` and disappears after a GC).
+// Concretely: parsing `{"-":K,"\\":K}` and THEN parsing `{"-":K,"\"":K}` in
+// the same process can return the second object's second key as `\`
+// instead of `"`. This module never relied on native `Object.keys`/
+// `Object.entries` order or content for tenant ids in the first place (the
+// duplicate-detection comment below already explains why), but it DID
+// still read each entry's VALUE via `parsed[tenantId]` -- indexing the
+// native result object with a key name taken from this file's OWN
+// independent scanner. A corrupted native key made that lookup miss
+// silently (`undefined`), which this parser's own `typeof key !== "string"`
+// check then reported as a false "must be a string" refusal: fail-closed
+// (a bad key can never leak, and a bad shape is never silently accepted),
+// but wrong. `scanTopLevelObjectEntries` below now decodes each entry's
+// VALUE the same way it already decoded each entry's tenant id, so
+// `JSON.parse(raw)`'s return value is used ONLY to confirm the raw text is
+// syntactically valid JSON and that its top level is a non-null,
+// non-array object -- two structural facts about the whole document, never
+// per-entry key or value material read back out of it.
 import { MspRuntimeError } from "@freshair129/msp-core/errors";
 
 const MIN_KEY_LENGTH = 32;
@@ -89,12 +112,27 @@ function fail(message) {
 // deduplicated object. Detecting a duplicate (including an escaped
 // equivalent of a plain character, e.g. a literal "-" vs its \u002d escape
 // in the same source) requires scanning the RAW source's own key tokens,
-// decoded, in source order. This tokenizer trusts that `raw` already
-// parsed successfully as JSON representing a top-level, non-array object
-// (both checked by the caller before this runs) -- it does not attempt to
-// validate JSON syntax itself, only to walk it.
-function scanTopLevelObjectKeys(raw) {
-  const keys = [];
+// decoded, in source order.
+//
+// This tokenizer decodes each top-level entry's VALUE as well as its
+// tenant id, using the exact same hand-rolled, engine-independent string
+// decoder for both (see the header comment's V8 JSON.parse finding) --
+// `parseThreadServiceKeyring` never indexes the native `JSON.parse(raw)`
+// result for key OR value material, only for the two whole-document
+// structural checks (valid JSON; top level is a non-null, non-array
+// object) that do not depend on any individual key's identity. This
+// tokenizer trusts that `raw` already parsed successfully as JSON
+// representing a top-level, non-array object (both checked by the caller
+// before this runs) -- it does not attempt to validate JSON syntax itself,
+// only to walk it.
+//
+// Exported so tests can use it as an independent oracle: comparing this
+// scanner's own tenant-id/duplicate findings against
+// parseThreadServiceKeyring's behavior is exactly how the fuzz coverage
+// below proves the parser trusts nothing about entry identity or order
+// from the engine's native `JSON.parse` object.
+export function scanTopLevelObjectEntries(raw) {
+  const entries = [];
   const len = raw.length;
   let i = 0;
 
@@ -172,8 +210,9 @@ function scanTopLevelObjectKeys(raw) {
   }
 
   // Same traversal as readStringLiteral, but discards the decoded text --
-  // used for skipping string VALUES, and string literals nested inside an
-  // object/array value, where only correct traversal matters, not content.
+  // used for skipping string literals nested inside a non-string
+  // (object/array) value, where only correct traversal matters, not
+  // content.
   function skipStringLiteral() {
     i++; // opening quote
     while (i < len) {
@@ -190,12 +229,16 @@ function scanTopLevelObjectKeys(raw) {
     }
   }
 
-  function skipValue() {
+  // Reads the value starting at raw[i]. A string literal is decoded and
+  // returned (`isString: true`); anything else (object, array, number,
+  // true/false/null) is only skipped structurally -- this parser only ever
+  // accepts a string as a key, so a non-string value's own content never
+  // needs decoding, only correct traversal past it.
+  function readValue() {
     skipWhitespace();
     const ch = raw[i];
     if (ch === '"') {
-      skipStringLiteral();
-      return;
+      return { isString: true, value: readStringLiteral() };
     }
     if (ch === "{" || ch === "[") {
       const open = ch;
@@ -212,24 +255,26 @@ function scanTopLevelObjectKeys(raw) {
         else if (c === close) depth--;
         i++;
       }
-      return;
+      return { isString: false };
     }
     // number / true / false / null
     while (i < len && raw[i] !== "," && raw[i] !== "}" && raw[i] !== "]" && !isWhitespace(raw[i])) i++;
+    return { isString: false };
   }
 
   skipWhitespace();
-  if (raw[i] !== "{") return keys; // not a top-level object; caller already validated this can't happen
+  if (raw[i] !== "{") return entries; // not a top-level object; caller already validated this can't happen
   i++; // consume the top-level '{'
   skipWhitespace();
-  if (raw[i] === "}") return keys; // empty object
+  if (raw[i] === "}") return entries; // empty object
   while (i < len) {
     skipWhitespace();
     if (raw[i] !== '"') break; // malformed; JSON.parse would already have thrown
-    keys.push(readStringLiteral());
+    const tenantId = readStringLiteral();
     skipWhitespace();
     if (raw[i] === ":") i++;
-    skipValue();
+    const value = readValue();
+    entries.push({ tenantId, isString: value.isString, value: value.value });
     skipWhitespace();
     if (raw[i] === ",") {
       i++;
@@ -237,7 +282,7 @@ function scanTopLevelObjectKeys(raw) {
     }
     break;
   }
-  return keys;
+  return entries;
 }
 
 /**
@@ -276,17 +321,21 @@ export function parseThreadServiceKeyring(raw) {
   } catch {
     return fail("MSP_THREAD_SERVICE_KEYRING must be valid JSON.");
   }
+  // `parsed` is used ONLY for these two whole-document structural checks --
+  // never indexed by a key afterward (see the header comment's V8
+  // JSON.parse finding: a native object's per-key content cannot be
+  // trusted across parses in this engine).
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     return fail("MSP_THREAD_SERVICE_KEYRING must be a JSON object of {tenantId: key}.");
   }
 
-  const rawKeys = scanTopLevelObjectKeys(raw);
-  if (rawKeys.length === 0) {
+  const rawEntries = scanTopLevelObjectEntries(raw);
+  if (rawEntries.length === 0) {
     return fail("MSP_THREAD_SERVICE_KEYRING must not be empty once configured.");
   }
 
   const firstPositionOf = new Map();
-  rawKeys.forEach((tenantId, index) => {
+  rawEntries.forEach(({ tenantId }, index) => {
     if (firstPositionOf.has(tenantId)) {
       fail(`MSP_THREAD_SERVICE_KEYRING has a duplicate tenant id: entry ${firstPositionOf.get(tenantId) + 1} and entry ${index + 1} name the same tenant.`);
     }
@@ -294,18 +343,18 @@ export function parseThreadServiceKeyring(raw) {
   });
 
   const keyring = Object.create(null);
-  rawKeys.forEach((tenantId, index) => {
+  rawEntries.forEach(({ tenantId, isString, value }, index) => {
     const position = index + 1;
-    const key = parsed[tenantId];
     if (tenantId.trim() === "") {
       fail(`MSP_THREAD_SERVICE_KEYRING entry ${position} has an empty tenant id.`);
     }
     if (tenantId.trim() !== tenantId) {
       fail(`MSP_THREAD_SERVICE_KEYRING entry ${position}'s tenant id must not have leading or trailing whitespace.`);
     }
-    if (typeof key !== "string") {
+    if (!isString) {
       fail(`MSP_THREAD_SERVICE_KEYRING entry ${position}'s key must be a string.`);
     }
+    const key = value;
     if (key.trim() !== key || key.trim() === "") {
       fail(`MSP_THREAD_SERVICE_KEYRING entry ${position}'s key must not be blank, and must not have leading or trailing whitespace.`);
     }

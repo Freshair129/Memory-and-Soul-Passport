@@ -252,3 +252,52 @@ test("CRITICAL: a reversed keyring map ({key: tenantId}) never leaks the key int
     cleanup();
   }
 });
+
+// GHOST QA finding: V8's JSON.parse can hand back a corrupted non-first key
+// name for a later, differently-escaped object parsed in the same process
+// (values are unaffected). thread-service-keyring.mjs no longer reads a
+// value via `parsed[tenantId]` on the native JSON.parse result (see its
+// header comment) -- these end-to-end cases prove that fix reaches all the
+// way through resolveThreadServiceKeyFor -> thread-guard.mjs ->
+// verifyThreadGrant for the exact identifiers implicated (a literal quote,
+// a literal backslash), through the REAL spawned server process, not just
+// the pure parser in isolation (tests/contract/thread-service-keyring.test.mjs
+// covers the in-process "primed" regression itself, which only reproduces
+// within a single V8 instance and so cannot be shown across two spawned
+// processes here).
+test('BL-MEMOS-049: a tenant id that is a literal quote (") is accepted with its own correct key, through the real process', async () => {
+  const { dbPath, cleanup } = tempDbPath("quote-tenant");
+  const QUOTE = '"';
+  const call = spawnWithKeyring(dbPath, { [QUOTE]: KEY_TENANT_A, "tenant-b": KEY_TENANT_B });
+  try {
+    const result = await call(
+      "msp_thread_resolve",
+      signedWith(KEY_TENANT_A, "msp_thread_resolve", resolveInput("dm-quote", QUOTE), claimsFor("dm-quote", QUOTE, "alice")),
+    );
+    assert.ok(result.thread.threadId, 'a tenant id of literal " must verify correctly against its own configured key');
+    // Cross-check: the OTHER tenant's key must not verify this tenant's grant.
+    await assert.rejects(
+      call("msp_thread_resolve", signedWith(KEY_TENANT_B, "msp_thread_resolve", resolveInput("dm-quote-2", QUOTE), claimsFor("dm-quote-2", QUOTE, "mallory"))),
+      /grant_signature_invalid/,
+    );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("BL-MEMOS-049: a tenant id that is a literal backslash (\\) is accepted with its own correct key, through the real process", async () => {
+  const { dbPath, cleanup } = tempDbPath("backslash-tenant");
+  const BACKSLASH = "\\";
+  const call = spawnWithKeyring(dbPath, { "tenant-a": KEY_TENANT_A, [BACKSLASH]: KEY_TENANT_B });
+  try {
+    const result = await call(
+      "msp_thread_resolve",
+      signedWith(KEY_TENANT_B, "msp_thread_resolve", resolveInput("dm-backslash", BACKSLASH), claimsFor("dm-backslash", BACKSLASH, "bob")),
+    );
+    assert.ok(result.thread.threadId, "a tenant id of literal \\ must verify correctly against its own configured key");
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});

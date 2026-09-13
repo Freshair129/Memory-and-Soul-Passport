@@ -13,12 +13,15 @@ import { describe, expect, it } from "vitest";
 import {
   parseThreadServiceKeyring,
   resolveThreadServiceKeyFor,
+  scanTopLevelObjectEntries,
   ThreadServiceKeyringConfigError,
 } from "../../apps/msp-server/src/config/thread-service-keyring.mjs";
 
 const KEY_A = "tenant-a-service-key-0123456789ab"; // 34 chars
 const KEY_B = "tenant-b-service-key-0123456789cd"; // 34 chars
 const SHORT_KEY = "too-short";
+const QUOTE = '"';
+const BACKSLASH = "\\";
 
 describe("parseThreadServiceKeyring", () => {
   it("parses a well-formed keyring into a map", () => {
@@ -181,6 +184,190 @@ describe("parseThreadServiceKeyring", () => {
     const keyring = parseThreadServiceKeyring(JSON.stringify({ constructor: KEY_A }));
     expect(Object.hasOwn(keyring, "constructor")).toBe(true);
     expect(keyring.constructor).toBe(KEY_A);
+  });
+});
+
+// GHOST QA finding: on Node v24.19.0, V8's own JSON.parse has a real,
+// reproducible engine bug -- after one object has been parsed, a LATER,
+// differently-escaped object can come back from JSON.parse with a
+// corrupted non-first key name (values are never affected). Concretely,
+// parsing `{"-":K,"\\":K}` and then parsing `{"-":K,"\"":K}` in the same
+// process can return the second object's second key as `\` instead of
+// `"`. This module never trusted native JSON.parse for tenant id identity
+// or order in the first place, but until now it DID still read each
+// entry's VALUE via `parsed[tenantId]` -- indexing the native result
+// object with a key name taken from this file's OWN independent scanner.
+// A corrupted native key made that lookup silently miss, which surfaced
+// as a false "must be a string" refusal: fail-closed, but wrong. These
+// cases exercise exactly the identifiers GHOST's repro and fuzz found
+// implicated (a literal quote, a literal backslash, an id ending in a
+// backslash, and both orderings of the two together), plus the escaped-
+// equivalent duplicate cases the fix must still catch, and the primed,
+// cross-parse regression itself.
+describe("parseThreadServiceKeyring: quote/backslash tenant ids (V8 JSON.parse non-first-key corruption)", () => {
+  it('accepts a tenant id that is a literal quote (")', () => {
+    const keyring = parseThreadServiceKeyring(JSON.stringify({ [QUOTE]: KEY_A }));
+    expect(Object.hasOwn(keyring, QUOTE)).toBe(true);
+    expect(keyring[QUOTE]).toBe(KEY_A);
+  });
+
+  it("accepts a tenant id that is a literal backslash (\\)", () => {
+    const keyring = parseThreadServiceKeyring(JSON.stringify({ [BACKSLASH]: KEY_A }));
+    expect(Object.hasOwn(keyring, BACKSLASH)).toBe(true);
+    expect(keyring[BACKSLASH]).toBe(KEY_A);
+  });
+
+  it("accepts a tenant id ending in a backslash", () => {
+    const id = "a" + BACKSLASH;
+    const keyring = parseThreadServiceKeyring(JSON.stringify({ [id]: KEY_A }));
+    expect(Object.hasOwn(keyring, id)).toBe(true);
+    expect(keyring[id]).toBe(KEY_A);
+  });
+
+  it("accepts quote-then-backslash as two ids in one keyring, each with its own correct key", () => {
+    const keyring = parseThreadServiceKeyring(JSON.stringify({ [QUOTE]: KEY_A, [BACKSLASH]: KEY_B }));
+    expect(keyring[QUOTE]).toBe(KEY_A);
+    expect(keyring[BACKSLASH]).toBe(KEY_B);
+  });
+
+  it("accepts backslash-then-quote as two ids in one keyring, each with its own correct key", () => {
+    const keyring = parseThreadServiceKeyring(JSON.stringify({ [BACKSLASH]: KEY_A, [QUOTE]: KEY_B }));
+    expect(keyring[BACKSLASH]).toBe(KEY_A);
+    expect(keyring[QUOTE]).toBe(KEY_B);
+  });
+
+  it("refuses a quote id written as \\u0022 as a duplicate of the same character written as a literal \\\" escape", () => {
+    const raw = `{"\\u0022":"${KEY_A}","\\"":"${KEY_B}"}`;
+    expect(() => parseThreadServiceKeyring(raw)).toThrow(ThreadServiceKeyringConfigError);
+    expect(() => parseThreadServiceKeyring(raw)).toThrow(/duplicate tenant id/);
+  });
+
+  it("refuses a surrogate-pair-escaped emoji id as a duplicate of the literal emoji", () => {
+    const raw = `{"\\ud83d\\ude00":"${KEY_A}","\u{1F600}":"${KEY_B}"}`;
+    expect(() => parseThreadServiceKeyring(raw)).toThrow(ThreadServiceKeyringConfigError);
+    expect(() => parseThreadServiceKeyring(raw)).toThrow(/duplicate tenant id/);
+  });
+
+  // The regression test for the V8 engine bug itself: a first parse call
+  // "primes" the engine with a backslash-shaped key, then a second,
+  // differently-escaped parse call in the SAME process must still come
+  // back correct. This only reproduces when both calls run in the same
+  // process (a fresh child process is a fresh V8 instance, which is why
+  // this lives here, in-process, rather than as a security/real-process
+  // case). Confirmed against the pre-fix implementation (which read
+  // `parsed[tenantId]` off the native JSON.parse result): it threw
+  // "entry 2's key must be a string" for the second call, because V8
+  // handed back the corrupted key `\` instead of `"` for that object's
+  // second entry, so `parsed['"']` was `undefined`. This test fails
+  // against that implementation and passes against this file's current
+  // one.
+  it("PRIMED regression: a later, differently-escaped keyring still parses correctly after an earlier backslash-shaped one", () => {
+    const priming = JSON.stringify({ "-": KEY_A, [BACKSLASH]: KEY_B });
+    const target = JSON.stringify({ "-": KEY_A, [QUOTE]: KEY_B });
+
+    const primed = parseThreadServiceKeyring(priming);
+    expect(primed[BACKSLASH]).toBe(KEY_B);
+
+    const result = parseThreadServiceKeyring(target);
+    expect(Object.hasOwn(result, QUOTE)).toBe(true);
+    expect(result[QUOTE]).toBe(KEY_B);
+  });
+});
+
+// A short, fast, deterministic (seeded) fuzz pass using this module's own
+// scanTopLevelObjectEntries as an INDEPENDENT oracle -- never native
+// JSON.parse's Object.keys/Object.entries, which is exactly what this
+// investigation showed can be corrupted across calls in this engine.
+// Mirrors GHOST's much larger scratch fuzz (20,000 trials, 0 failures);
+// this one keeps the trial count small enough to run in the normal suite.
+describe("parseThreadServiceKeyring: fuzz (independent-oracle, deterministic seed)", () => {
+  it("0 false refusals, 0 missed duplicates, 0 key mismatches across 3000 generated keyrings", () => {
+    const B = "\\";
+    const Q = '"';
+    const NL = "\n";
+    const TAB = "\t";
+    let seed = 246813579;
+    const rnd = (n) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    const u = (code) => B + "u" + code.toString(16).padStart(4, "0");
+    const shortEsc = { [Q]: B + Q, [B]: B + B, "/": B + "/", [NL]: B + "n", [TAB]: B + "t" };
+    const encChar = (ch) => {
+      if (ch.length === 2) return rnd(2) ? ch : u(ch.charCodeAt(0)) + u(ch.charCodeAt(1));
+      const needs = ch === Q || ch === B || ch.charCodeAt(0) < 32;
+      const r = rnd(4);
+      if (r === 0 && !needs) return ch;
+      if (r === 1) return u(ch.charCodeAt(0));
+      if (r === 2) return u(ch.charCodeAt(0)).toUpperCase().replace(B + "U", B + "u");
+      return shortEsc[ch] ?? (needs ? u(ch.charCodeAt(0)) : ch);
+    };
+    const encodeKey = (k) => Q + [...k].map(encChar).join("") + Q;
+    const alphabet = ["a", "b", "-", "/", Q, B, "{", "}", "[", "]", ":", ",", " ", TAB, NL, "é", "😀", "_", "x"];
+    const genId = () => {
+      let s = "";
+      const n = 1 + rnd(8);
+      for (let i = 0; i < n; i++) s += alphabet[rnd(alphabet.length)];
+      if (s.trim() !== s || s.trim() === "") s = "t" + s.trim() + "t";
+      return s;
+    };
+    const key = () => Q + "K".repeat(32) + rnd(1e6) + Q;
+
+    const trials = 3000;
+    let dupCases = 0;
+    const failures = [];
+    for (let t = 0; t < trials; t++) {
+      const ids = [];
+      const n = 1 + rnd(5);
+      while (ids.length < n) {
+        const id = genId();
+        if (!ids.includes(id)) ids.push(id);
+      }
+      const entries = ids.map((id) => ({ id }));
+      const dup = rnd(3) === 0;
+      if (dup) {
+        entries.splice(rnd(entries.length + 1), 0, { id: entries[rnd(entries.length)].id });
+        dupCases++;
+      }
+      const raw =
+        "{" +
+        entries
+          .map((e) => {
+            const ws = [" ", NL, TAB, ""][rnd(4)];
+            return ws + encodeKey(e.id) + ws + ":" + ws + key() + ws;
+          })
+          .join(",") +
+        "}";
+      try {
+        JSON.parse(raw);
+      } catch {
+        continue; // must be syntactically valid JSON to reach the parser at all
+      }
+
+      const oracleEntries = scanTopLevelObjectEntries(raw);
+      const oracleIds = oracleEntries.map((e) => e.tenantId);
+      const oracleHasDup = new Set(oracleIds).size !== oracleIds.length;
+
+      let result;
+      let err;
+      try {
+        result = parseThreadServiceKeyring(raw);
+      } catch (e) {
+        err = e;
+      }
+      if (oracleHasDup) {
+        if (!err || !/duplicate/.test(err.message)) failures.push({ tag: "MISSED-DUP", raw });
+      } else if (err) {
+        failures.push({ tag: "FALSE-REFUSE", raw, message: err.message });
+      } else {
+        const expectedKeys = [...new Set(oracleIds)].sort().join("|");
+        const actualKeys = Object.keys(result).sort().join("|");
+        if (expectedKeys !== actualKeys) failures.push({ tag: "KEY-MISMATCH", raw });
+      }
+    }
+    expect(dupCases).toBeGreaterThan(0); // sanity: the generator actually exercises duplicates
+    expect(failures.slice(0, 5)).toEqual([]);
+    expect(failures).toHaveLength(0);
   });
 });
 

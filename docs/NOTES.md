@@ -1,7 +1,7 @@
 ---
-version: "0.2.1b"
+version: "0.2.3b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-14T00:10:00+07:00,KIN"
+last_update: "2026-09-15T00:10:00+07:00,KIN"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -214,10 +214,62 @@ The 11.10.0 numbers vary run to run — the abort is nondeterministic; the run
 recorded here is one sample. The full suite was run five consecutive times on
 the final tree, green every time.
 
+## V8 `JSON.parse` non-first-key corruption on Node v24.19.0
+
+Found by GHOST while fuzzing `apps/msp-server/src/config/thread-service-keyring.mjs`
+(BL-MEMOS-049's optional per-tenant `MSP_THREAD_SERVICE_KEYRING`). Recorded
+2026-09-15 on Windows 11, Node v24.19.0.
+
+V8's own `JSON.parse` has a real, reproducible engine bug: after one object
+has been parsed, a LATER, differently-escaped object parsed in the SAME
+process can come back with a corrupted **non-first** key name. Values are
+never affected. The bug persists under `node --jitless` and disappears
+after a garbage collection.
+
+Minimal repro (`K` is any 32+ character placeholder string; run both
+`JSON.parse` calls in the same process, in this order):
+
+```js
+JSON.parse('{"-":K,"\\":K}');   // priming call -- return value unused
+JSON.parse('{"-":K,"\"":K}');  // second key comes back as \ instead of "
+```
+
+The second call's `Object.keys(...)[1]` is the single character `\`
+(code point 92), not the expected `"` (code point 34) the source text
+actually names. Both objects otherwise parse without throwing; only the
+second object's second key is wrong.
+
+**How it hit the keyring.** `parseThreadServiceKeyring` already had its own
+independent, hand-rolled scanner (`scanTopLevelObjectEntries`) for tenant
+ids — added earlier specifically because a duplicate top-level JSON key
+cannot be detected from `JSON.parse`'s own return value at all (it silently
+keeps only the last occurrence). But the parser still read each entry's
+*value* by indexing the native `JSON.parse` result with a tenant id taken
+from that scanner: `parsed[tenantId]`. When the native object's key had
+been corrupted by this bug, that lookup silently missed (`undefined`),
+which the parser's own `typeof key !== "string"` check then reported as a
+false "entry N's key must be a string" refusal. This was always
+**fail-closed** — a corrupted key can never make a wrong key verify a
+grant, only refuse a valid start — but it was wrong, and GHOST's fuzz
+harness measured 149 false refusals across 20,000 generated keyrings.
+
+**Fix.** The keyring no longer depends on native `JSON.parse` object keys
+*or values* at all. `scanTopLevelObjectEntries` now decodes each entry's
+value the same way it already decoded each entry's tenant id, using its
+own engine-independent string decoder for both. `JSON.parse(raw)`'s return
+value is used only for two whole-document structural facts that do not
+depend on any individual key's identity: that `raw` is syntactically valid
+JSON, and that its top level is a non-null, non-array object. See
+`apps/msp-server/src/config/thread-service-keyring.mjs`'s header comment
+and `tests/contract/thread-service-keyring.test.mjs`'s "PRIMED regression"
+case (which fails against the pre-fix implementation and passes against
+the current one) for the full detail and proof.
+
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.3b | 2026-09-15 | beta | GHOST QA finding, fixed on `feat/memos-002-stage2-multi-agent`: V8's `JSON.parse` has a real engine bug on Node v24.19.0 (a later, differently-escaped object parsed in the same process can come back with a corrupted non-first key name; values are unaffected). `thread-service-keyring.mjs`'s `parseThreadServiceKeyring` used to read a value via `parsed[tenantId]` on the native `JSON.parse` result, which a corrupted key made miss silently, false-refusing an otherwise-valid keyring (149/20,000 in GHOST's fuzz) -- always fail-closed, never a wrong key. The keyring no longer depends on native `JSON.parse` key OR value content at all; see "V8 `JSON.parse` non-first-key corruption on Node v24.19.0" above. | working-tree | KIN |
 | 0.2.2b | 2026-09-14 | beta | RKOI code review round 2 revision (`feat/memos-002-thread-memory`): corrects the 0.2.1b row below -- under this workspace's non-strict npm 11.17, neither `npm approve-scripts` nor an interactive `npm install` prompt is "the actual gate"; an unlisted package's install script simply runs with a notice, nothing blocks it. Also closed the round-2 CRITICAL (a signed grant omitting `externalRoomRef` skipped the room-hash check entirely instead of being refused), added DEC-MEMOS-16 (a resolve naming a different `channel_type` than an existing ACTIVE thread's binding is a typed conflict, never the other channel's thread), and folded further schema/error-text fixes into the still-unshipped `migrations/0008_thread_memory.sql`. | working-tree | KIN |
 | 0.2.1b | 2026-09-14 | beta | Removed root `package.json`'s `allowScripts.better-sqlite3@13.0.3` entry (added earlier in this same stage to unblock a local `npm install`): npm 10 on Node 22 ignores `allowScripts` entirely, and this workspace's npm 11.17 treats it as non-strict (an unlisted package's script still runs with a warning, it does not block); the pinned-version key also goes stale the next time `better-sqlite3` bumps a patch. `npm approve-scripts` or an interactive `npm install` prompt remains the actual gate — corrected in 0.2.2b below: this claim is false under this workspace's npm. | working-tree | JANUS |
 | 0.2.0b | 2026-09-14 | beta | TASK-MEMOS-002 stage 1: folded the unmerged `origin/codex/msp-thread-memory` thread-memory design onto `main` as a single new `migrations/0008_thread_memory.sql` (nothing past `0007` had shipped), fixed C-1 (a second person could read a DIRECT thread) and C-2 (`msp-contracts` reading the database directly), closed W1/W5/W6/W7/W10, and folded in RKOI's post-implementation review: tenant-scoped consistency triggers, append-only participants with a lifetime one-HUMAN-per-DIRECT-thread invariant, a partial-unique ACTIVE-only channel binding (relink-ready), tombstone-only redaction triggers, a `keyFor(tenantId)` grant-verification hook, and typed `thread_audience_mismatch`/`record_subject_mismatch`/`compaction_lease_conflict`/`grant_*` error codes. Renamed API-010 (reserved for `msp_vault_resolve`) to API-011. Multi-agent (`agentId`, `thread_agents`, per-agent visibility) is stage 2, pending a separate ADR. | working-tree | KIN |
