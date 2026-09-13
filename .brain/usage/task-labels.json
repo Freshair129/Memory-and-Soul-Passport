@@ -1,0 +1,98 @@
+{
+  "_comment": "Maps transcript segments to plan ids (docs/IMPLEMENTATION-PLAN-MEMORY-OS.md). Segment numbers come from collect-task-usage.mjs: subagents split on coordinator messages, coordinator splits on user prompts. OPS-MEMOS-* ids cover coordination work that is not a backlog item. Update this file, then re-run the collector.",
+  "agents": {
+    "a7cf259ecb5eb9ea0": {
+      "actor": "rkoi",
+      "segments": {
+        "1": { "task_ids": ["BL-MEMOS-001"], "label": "Design v0.1.0b review, round 1 (13 critical)" },
+        "2": { "task_ids": ["BL-MEMOS-001"], "label": "Design v0.2.0b review, round 2 (2 critical)" },
+        "3": { "task_ids": ["BL-MEMOS-001"], "label": "Design v0.2.1b closure check (approved)" },
+        "4": { "task_ids": ["BL-MEMOS-002"], "label": "WP-E0 runner review, round 1 (1 critical)" },
+        "5": { "task_ids": ["BL-MEMOS-002"], "label": "WP-E0 revision confirmation (approved)" },
+        "6": { "task_ids": ["BL-MEMOS-003"], "label": "Directive near-miss fix review (approved)" },
+        "7": { "task_ids": ["BL-MEMOS-004"], "label": "Plain-path FK check review, round 1 (1 critical)" },
+        "8": { "task_ids": ["BL-MEMOS-004"], "label": "Plain-path FK check review, round 2 (1 critical)" },
+        "9": { "task_ids": ["BL-MEMOS-004"], "label": "Plain-path FK check review, round 3 (approved)" },
+        "10": { "task_ids": ["BL-MEMOS-005"], "label": "FK target-type follow-up review (conditional approval)" },
+        "11": { "task_ids": ["BL-MEMOS-005"], "label": "Shadow non-key fixup confirmation (approved)" },
+        "12": { "task_ids": ["BL-MEMOS-010"], "label": "Thread-memory branch vs design reconciliation (input to TASK-MEMOS-001)" },
+        "13": { "task_ids": ["BL-MEMOS-012"], "label": "TASK-MEMOS-001 docs review, round 1 (3 critical)" }
+      }
+    },
+    "a6a633b1e068abe6c": {
+      "actor": "janus",
+      "segments": {
+        "1": { "task_ids": ["BL-MEMOS-002"], "label": "WP-E0 migration-runner foreign-keys=off mode" },
+        "2": { "task_ids": ["BL-MEMOS-002"], "label": "WP-E0 revision (structural FK check, guards)" }
+      }
+    },
+    "a7bb5fc0a0bfc28e6": {
+      "actor": "janus",
+      "segments": {
+        "1": { "task_ids": ["BL-MEMOS-003"], "label": "Refuse near-miss directive spellings" }
+      }
+    },
+    "a765bbc71c9aa43a1": {
+      "actor": "janus",
+      "segments": {
+        "1": { "task_ids": ["BL-MEMOS-004"], "label": "Plain-path structural FK check (collation parser)" },
+        "2": { "task_ids": ["BL-MEMOS-004"], "label": "Revision 1: delegate to SQLite (child-side probe)" },
+        "3": { "task_ids": ["BL-MEMOS-004"], "label": "Revision 2: parent-side DELETE probe" }
+      }
+    },
+    "ad29a77e7f8ccce49": {
+      "actor": "janus",
+      "segments": {
+        "1": { "task_ids": ["BL-MEMOS-005"], "label": "FK target type via table_list, directive post-exec probe" },
+        "2": { "task_ids": ["BL-MEMOS-005"], "label": "Shadow non-key refusal, main. qualification, internal targets" }
+      }
+    },
+    "a4376640874a049e8": {
+      "actor": "explore",
+      "segments": {
+        "1": { "task_ids": ["OPS-MEMOS-001"], "label": "Trace LINE OA agent flow to MSP (investigation)" }
+      }
+    },
+    "a2d9519b2d3bcd6bf": {
+      "actor": "ather",
+      "segments": {
+        "1": { "task_ids": ["BL-MEMOS-010", "BL-MEMOS-011"], "label": "ADR + design v0.3.0b draft" },
+        "2": { "task_ids": ["BL-MEMOS-010", "BL-MEMOS-011"], "label": "ADR/design/plan revision after RKOI round 1", "status": "open" }
+      }
+    },
+    "ab508b7a790efd268": {
+      "actor": "kin",
+      "segments": {
+        "1": { "task_ids": ["BL-MEMOS-020..032"], "label": "TASK-MEMOS-002 stage 1: port thread memory, C-1/C-2 fixes", "status": "open" }
+      }
+    }
+  },
+  "coordinator": {
+    "1": { "task_ids": ["BL-MEMOS-001"], "label": "Explore repo and draft design v0.1.0b" },
+    "2": { "task_ids": ["BL-MEMOS-001"], "label": "Dispatch RKOI design review round 1" },
+    "3": { "task_ids": ["BL-MEMOS-001"], "label": "Revise design to v0.2.0b, dispatch round 2" },
+    "4": { "task_ids": ["BL-MEMOS-001"], "label": "Revise design to v0.2.1b, dispatch closure check" },
+    "5": { "task_ids": ["BL-MEMOS-001"], "label": "Fold warnings into v0.2.2b, commit, open PR #15" },
+    "6": { "task_ids": ["BL-MEMOS-002"], "label": "Merge PR #15, dispatch JANUS WP-E0" },
+    "7": { "task_ids": ["OPS-MEMOS-000"], "label": "/model command (no model call)" },
+    "8": { "task_ids": ["OPS-MEMOS-000"], "label": "/model command output (no model call)" },
+    "9": { "task_ids": ["BL-MEMOS-002"], "label": "Verify WP-E0, dispatch RKOI review" },
+    "10": { "task_ids": ["BL-MEMOS-002"], "label": "Dispatch WP-E0 revision" },
+    "11": { "task_ids": ["BL-MEMOS-002"], "label": "Confirm revision, open PR #16" },
+    "12": { "task_ids": ["BL-MEMOS-003"], "label": "Merge PR #16, dispatch near-miss fix" },
+    "13": { "task_ids": ["BL-MEMOS-003"], "label": "Open PR #17, dispatch plain-path check" },
+    "14": { "task_ids": ["BL-MEMOS-003"], "label": "Merge PR #17" },
+    "15": { "task_ids": ["BL-MEMOS-004"], "label": "Open PR #18, dispatch target-type follow-up" },
+    "16": { "task_ids": ["BL-MEMOS-004"], "label": "Merge PR #18" },
+    "17": { "task_ids": ["BL-MEMOS-005"], "label": "Open PR #19, dispatch LINE flow investigation" },
+    "18": { "task_ids": ["BL-MEMOS-010"], "label": "Dispatch RKOI branch vs design reconciliation" },
+    "19": { "task_ids": ["BL-MEMOS-006"], "label": "Write memory OS plan into zuri-ai roadmap" },
+    "20": { "task_ids": ["BL-MEMOS-006"], "label": "Merge PR #19, push and open zuri-ai PR #380" },
+    "21": { "task_ids": ["BL-MEMOS-006"], "label": "Renumber PR #380 to TASK-MEMOS" },
+    "22": { "task_ids": ["BL-MEMOS-006"], "label": "Rebase and merge PR #380" },
+    "23": { "task_ids": ["OPS-MEMOS-001"], "label": "Check whether MSP is wired to LINE OA" },
+    "24": { "task_ids": ["BL-MEMOS-010"], "label": "Adopt defaults, dispatch ATHER (001) and KIN (002 stage 1)" },
+    "25": { "task_ids": ["BL-MEMOS-012"], "label": "Write implementation plan, commit docs, dispatch RKOI docs review" },
+    "26": { "task_ids": ["OPS-MEMOS-002"], "label": "Task usage ledger", "status": "open" }
+  }
+}
