@@ -1,7 +1,7 @@
 ---
-version: "0.2.0b"
+version: "0.2.1b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-14T00:00:00+07:00,KIN"
+last_update: "2026-09-14T00:10:00+07:00,KIN"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -218,6 +218,7 @@ the final tree, green every time.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.1b | 2026-09-14 | beta | Removed root `package.json`'s `allowScripts.better-sqlite3@13.0.3` entry (added earlier in this same stage to unblock a local `npm install`): npm 10 on Node 22 ignores `allowScripts` entirely, and this workspace's npm 11.17 treats it as non-strict (an unlisted package's script still runs with a warning, it does not block); the pinned-version key also goes stale the next time `better-sqlite3` bumps a patch. `npm approve-scripts` or an interactive `npm install` prompt remains the actual gate. | working-tree | JANUS |
 | 0.2.0b | 2026-09-14 | beta | TASK-MEMOS-002 stage 1: folded the unmerged `origin/codex/msp-thread-memory` thread-memory design onto `main` as a single new `migrations/0008_thread_memory.sql` (nothing past `0007` had shipped), fixed C-1 (a second person could read a DIRECT thread) and C-2 (`msp-contracts` reading the database directly), closed W1/W5/W6/W7/W10, and folded in RKOI's post-implementation review: tenant-scoped consistency triggers, append-only participants with a lifetime one-HUMAN-per-DIRECT-thread invariant, a partial-unique ACTIVE-only channel binding (relink-ready), tombstone-only redaction triggers, a `keyFor(tenantId)` grant-verification hook, and typed `thread_audience_mismatch`/`record_subject_mismatch`/`compaction_lease_conflict`/`grant_*` error codes. Renamed API-010 (reserved for `msp_vault_resolve`) to API-011. Multi-agent (`agentId`, `thread_agents`, per-agent visibility) is stage 2, pending a separate ADR. | working-tree | KIN |
 | 0.1.9b | 2026-09-13 | beta | RKOI review revision: corrected the 0003/0005 claim -- foreign-key risk during a rebuild depends on child rows referencing the table, not rows within it; named exactly which of 0003's two rebuilds (`entities`, at risk from `entity_history`; `promotions`, at zero risk, guarded instead by its NOT NULL `vault_id` backfill) and 0005's rebuild (`entities` again, at risk from `entity_history` and `embeddings`) carried real risk, and confirmed both used the safe rebuild order. | working-tree | JANUS |
 | 0.1.8b | 2026-09-13 | beta | Recorded that root migrations 0003 and 0005 rebuilt child tables inside the transaction with foreign keys left on, which only worked because those tables were empty everywhere they ran, and that the design's 0008 (a `vaults` rebuild) is the first migration that needs the new `foreign-keys=off` runner mode (WP-E0, `docs/MIGRATION.md`). | working-tree | JANUS |

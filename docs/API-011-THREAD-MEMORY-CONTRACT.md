@@ -1,9 +1,9 @@
 ---
 doc_id: "API-011-THREAD-MEMORY-CONTRACT"
-version: "0.3.0b"
+version: "0.3.1b"
 status: "beta"
 created_at: "2026-09-08T00:25:00+07:00,RWANG"
-last_update: "2026-09-13T00:00:00+07:00,KIN"
+last_update: "2026-09-14T00:00:00+07:00,KIN"
 ---
 
 # API-011 Thread, Speaker, Session and Compaction Contract
@@ -50,13 +50,24 @@ tenant B's binding.
 ### Identity hashing
 
 The external room reference is never stored raw. `threads.external_room_ref_hmac`
-is `HMAC-SHA256` under `MSP_IDENTITY_HMAC_KEY`, computed over the literal
-string `"<tenant_id>|<channel_type>|<channel_account_id>|<external_room_ref>"`.
-A tool that must compute this hash with no `MSP_IDENTITY_HMAC_KEY` configured
-answers `identity_hmac_unconfigured` and writes nothing — the check happens
-before any row is inserted or updated. The same key HMACs every journal
-`actor` field (the raw speaker id, never written to the journal in the
-clear) — see "Errors and journaling" below.
+is `HMAC-SHA256` under `MSP_IDENTITY_HMAC_KEY` (at least 32 characters, the
+same bar as `MSP_THREAD_SERVICE_KEY`), computed over the literal string
+`"<tenant_id>|<channel_account_id>|<external_room_ref>"`. `channel_type` is
+deliberately **not** part of this hash (RKOI review: zuri-ai's own
+`msp_thread_delivery_record` grant never carries a `channelType` claim, so
+requiring one to compute this hash made every delivery receipt
+unreachable). A tool that must compute this hash with no
+`MSP_IDENTITY_HMAC_KEY` configured answers `identity_hmac_unconfigured` and
+writes nothing — the check happens before any row is inserted or updated.
+The same key HMACs every journal `actor` field (the raw speaker id, never
+written to the journal in the clear) — see "Errors and journaling" below.
+
+The guard also uses this same hash to confirm that a grant's OWN room
+(`tenantId`/`channelAccountId`/`externalRoomRef`) matches the SPECIFIC
+thread a request names, for every thread-bound tool (including compaction
+claim/commit/retry, resolved via the job's thread) — `channel_account_id`
+equality alone is not enough, since many threads can share one channel
+account.
 
 ### Thread kind and audience kind
 
@@ -90,13 +101,48 @@ read a DIRECT thread's transcript.
 Creating or changing a HUMAN participant (a first join, a `person_id` link,
 or an `identity_assurance` upgrade) requires the signed grant to carry an
 explicit `assertParticipants: true` claim, checked against the database's
-current participant row before the append is applied. A normal inbound
-append by the grant principal, on a thread where that principal is already
-the current human participant and nothing about their state changes, needs
-no such claim — there is nothing to create or change. Every other case
-answers `thread_scope_denied`. A HUMAN append's `speaker_id` must always
-equal the grant's `principalId`; a caller can never mint or act as a
-different person's speaker id.
+current participant row before the append is applied — with one exception
+(**DEC-MEMOS-15**): the grant principal upgrading their OWN participant row
+(`speaker_id === principalId`) needs no such claim, PROVIDED the request's
+`person_id` and the participant row's ALREADY-STORED `person_id` are both
+either absent or equal to that same principal. zuri-ai sends exactly this
+shape — `identity_assurance: VERIFIED`, `person_id = principalId` — once a
+LINE user verifies, with no `assertParticipants` claim at all; requiring one
+would lock the DIRECT thread up permanently the first time its user
+verifies. A downgrade (`VERIFIED` → `PENDING`) on a later append is likewise
+never gated, and is never stored as a change (the assurance in force stays
+the highest one ever recorded). Every other case — a different `speaker_id`,
+a `person_id` naming anyone but the principal, or a stored `person_id`
+already linking that speaker to a DIFFERENT identity — answers
+`thread_scope_denied`. A HUMAN append's `speaker_id` must always equal the
+grant's `principalId` unless `assertParticipants` is set; a caller can never
+mint or act as a different person's speaker id without it, and `person_id`
+itself may never name anyone but the grant's own principal, even under
+`assertParticipants`.
+
+### Audience and room scope, per tool
+
+`audienceKind` is a **required** grant claim on every thread tool except
+`msp_thread_delivery_record` — zuri-ai's own port sends it on the other five
+(`msp_thread_resolve`, `msp_thread_message_append`, `msp_thread_context`,
+`msp_thread_memory_record`, `msp_thread_injection_record`) and never on a
+delivery grant (verified against zuri-ai `origin/main`'s
+`createMspThreadMemoryPort#recordDelivery`). A tool that requires it and
+does not receive one, or receives one that disagrees with the named
+thread's own `thread_kind`, answers `thread_audience_mismatch` — this
+applies on mint (`msp_thread_resolve`) and on every later call against an
+existing thread. A delivery grant that DOES carry `audienceKind` is still
+checked; delivery's scope otherwise comes from the inbound message's own
+thread plus the room-hash check below.
+
+Independently of the audience check, every thread-bound tool (including
+`msp_session_compaction_claim`/`commit`/`retry`, resolved via the job's own
+thread) also verifies that the grant's own room —
+`HMAC(tenantId|channelAccountId|externalRoomRef)` — matches the SPECIFIC
+thread's stored hash. `channel_account_id` equality alone is not enough:
+many rooms can share one channel account, so a grant scoped to one room can
+never claim, read or write a different room's thread or compaction job even
+under the same tenant and channel account.
 
 ## Private context and protected memory (C-1)
 
@@ -191,21 +237,27 @@ that composes both. Read and protected-write grants are separate;
 group/unknown audiences cannot read private context. A service signer is
 trusted to supply current Zuri authorization; raw IDs are never grants.
 
-Two additional grant claims, additive and backward compatible with every
+One additional grant claim, additive and backward compatible with every
 claim zuri-ai already sends: `assertParticipants` (boolean; see
-"Participants" above) and `channelType` (string; carried on a
-`msp_thread_delivery_record` grant only, so a delivery received before its
-inbound message arrives can still be identity-hashed against the room it
-names, without guessing a channel type from a thread row that does not exist
-yet).
+"Participants" above). An earlier draft of this stage also added a
+`channelType` claim for `msp_thread_delivery_record`; that claim was removed
+once the room hash stopped needing `channel_type` at all (see "Identity
+hashing" above) — zuri-ai's real delivery grant never sent one, so requiring
+it made every delivery receipt unreachable (RKOI review, 2nd round,
+CRITICAL 1).
 
 ### Errors
 
 Every thread tool answers one of a fixed, typed vocabulary, matching the
 repo's existing convention (`vault_scope_denied`, `gks_provider_unconfigured`):
 `validation_failed`, `not_found`, `thread_scope_denied`, `conflict`,
-`identity_hmac_unconfigured`, `payload_too_large`. No error message embeds a
-raw `external_room_ref` or person id.
+`identity_hmac_unconfigured`, `payload_too_large`, `thread_audience_mismatch`,
+`record_subject_mismatch`, `compaction_lease_conflict`, `principal_erased`
+(reserved, not raised in stage 1), and four grant-verification-specific
+codes raised by `verifyThreadGrant` before any scope decision is even
+evaluated: `grant_unconfigured` (no key resolves for the grant's tenant),
+`grant_signature_invalid`, `grant_expired`, `grant_payload_mismatch`. No
+error message embeds a raw `external_room_ref` or person id.
 
 ### Journaling (W5)
 
@@ -242,10 +294,11 @@ Leases default to 120 seconds, maximum 300. A worker waits for active answer
 injection receipts or a pending reply grace of 120 seconds; expired active
 invocations become UNKNOWN. Claims/commits use database transactions and
 compare the current token/range. Sweep rediscovers retries and expired
-leases within the exact signed business/account/room — re-deriving each
-candidate thread's own room hash from ITS OWN `channel_type`, since a sweep
-can span threads whose `channel_type` differs even under the same
-`channel_account_id`. The production scheduler/model adapter is supplied by
+leases within the exact signed business/account/room, computing that room's
+hash once from the grant's own `tenantId`/`channelAccountId`/
+`externalRoomRef` and binding it directly into its query — the hash no
+longer depends on `channel_type`, so it is the same for every thread the
+sweep might touch. The production scheduler/model adapter is supplied by
 the host and is not activated in this repository change.
 
 Delivery receipts name the internal `inbound_message_id` and
@@ -300,6 +353,7 @@ GKS-as-DNA meaning is not imported into Zuri's GKS knowledge authority.
 
 | Version | Date | Status | Summary | Agent |
 |---|---|---|---|---|
+| 0.3.1b | 2026-09-14 | beta | RKOI review revision (2 CRITICALs, multiple WARNINGs, 4 rounds against zuri-ai `origin/main`): dropped `channel_type` from the room hash and removed `channelType` from the delivery grant (CRITICAL 1, zuri-ai's real delivery grant never sent one); added DEC-MEMOS-15's self-upgrade exception plus its stored-`person_id` tightening (CRITICAL 2); added the per-tool audience requirement (required on every tool except delivery) and the room-hash cross-check on every thread-bound tool including compaction claim/commit/retry; `person_id` constrained to `{null, principalId}` unconditionally; tenant-scoped uniqueness extended to `thread_injection_receipts`/`thread_summary_invalidations`/cross-references between messages, jobs, summaries and their sessions; `chat_sessions` uniqueness narrowed to "at most one OPEN" only (a schema-level "one CLOSING" constraint was tried and dropped -- late-delivery reconciliation legitimately produces two); tombstone-then-INSERT and `IS NOT`-safe tenant triggers; `ON CONFLICT DO NOTHING` replacing `INSERT OR IGNORE` where it could swallow a NOT NULL violation; output-contract validation removed (ran only after commit); typed grant-verification errors (`grant_unconfigured`/`grant_signature_invalid`/`grant_expired`/`grant_payload_mismatch`) | KIN |
 | 0.3.0b | 2026-09-13 | beta | TASK-MEMOS-002 stage 1: renamed API-010 -> API-011, tenant-scoped uniqueness, HMAC room refs, append-only participants with the one-human-per-DIRECT-thread invariant, `msp-contracts` decoupled from storage, required `source_event_id`, typed errors, test-only clock | KIN |
 | 0.2.0b | 2026-09-08 | beta | Approved cross-repository contract, scope, exchange, coverage and summary refinement; verify implementation per acceptance matrix | RWANG |
 | 0.1.0b | 2026-09-08 | candidate | Initial thread, speaker, session, protected memory and compaction contract | RWANG |
