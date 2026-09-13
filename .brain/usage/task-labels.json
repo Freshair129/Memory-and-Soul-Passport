@@ -231,6 +231,20 @@
             "BL-MEMOS-011"
           ],
           "label": "Docs round 6: required room claim, DEC-MEMOS-16, room-scoped sweep (design v0.3.5b, commits b822901, c6e2820)"
+        },
+        "7": {
+          "task_ids": [
+            "BL-MEMOS-040",
+            "BL-MEMOS-041",
+            "BL-MEMOS-042",
+            "BL-MEMOS-043",
+            "BL-MEMOS-044",
+            "BL-MEMOS-046",
+            "BL-MEMOS-048",
+            "BL-MEMOS-049"
+          ],
+          "label": "Stage 2 multi-agent spec (design v0.4.0b)",
+          "status": "open"
         }
       }
     },
@@ -272,6 +286,13 @@
             "BL-MEMOS-033"
           ],
           "label": "Stage 1: error code in reconcile_skipped journal entry (707406d)"
+        },
+        "6": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Stage 2: per-tenant MSP_THREAD_SERVICE_KEYRING",
+          "status": "open"
         }
       }
     },
@@ -474,6 +495,13 @@
         "BL-MEMOS-012"
       ],
       "label": "Triage reviews; dispatch KIN/ATHER; commit docs rounds 4-5 and closure edits; dispatch code re-review"
+    },
+    "28": {
+      "task_ids": [
+        "BL-MEMOS-040..049"
+      ],
+      "label": "Start stage 2: stacked branches, dispatch ATHER spec and KIN keyring",
+      "status": "open"
     }
   }
 }
