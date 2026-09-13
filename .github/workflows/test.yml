@@ -1,0 +1,34 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node 24 is back: better-sqlite3 11.10.0 aborted on teardown under
+        # Node 24.19+ ("Assertion failed: (env) != nullptr", nodejs/node#65446)
+        # because it was compiled against a broken node_object_wrap.h. The
+        # workspace now pins better-sqlite3 13 (N-API, prebuilt), which imports
+        # neither cleanup-hook symbol. Node 20 is dropped because
+        # better-sqlite3 13 and the workspace engines field both require >=22.
+        # See docs/NOTES.md "better-sqlite3 13 on Node 24".
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # Contract + integration, then the vault-isolation security proofs.
+      - run: npm test
+      # The publishable client must stay packable; it is the one artifact that
+      # leaves this repo.
+      - run: npm run pack:client

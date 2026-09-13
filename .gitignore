@@ -8,3 +8,9 @@ coverage/
 *.db-wal
 *.log
 .DS_Store
+
+# Environment files. MSP takes every credential from the environment its caller
+# passes it, so a stray .env in the tree is a secret one commit from the remote.
+.env
+.env.*
+!.env.example

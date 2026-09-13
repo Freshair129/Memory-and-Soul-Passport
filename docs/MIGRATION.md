@@ -39,7 +39,7 @@ The GoVibe MSP exports then re-export the client symbols from `@freshair129/msp-
 
 ### `close()` now returns a promise
 
-Shipped in `@freshair129/msp-client-js` 0.1.1.
+Shipped in `@freshair129/msp-client-js` 0.2.1 (additive on top of 0.2.0's environment allowlist).
 
 `createMspStdioCaller(...).close()` used to return `undefined` after sending the
 kill request; it now returns a promise that resolves once the runtime process
@@ -124,7 +124,7 @@ Revert the single dependency/re-export change and reinstall GoVibe dependencies.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
-| 0.1.4b | 2026-09-12 | beta | Documented `close()` returning a promise (client 0.1.1), and when a consumer must await it before touching the runtime's database file. | working-tree | Claude Opus 5 |
+| 0.1.4b | 2026-09-12 | beta | Documented `close()` returning a promise (client 0.2.1), and when a consumer must await it before touching the runtime's database file. | working-tree | Claude Opus 5 |
 | 0.1.3b | 2026-09-08 | beta | Replaced the retired hard-coded local path with an explicit checkout variable and documented the GenesisRAG17 relay handoff, role split, no-migration boundary and pinned contract. | working-tree | ATHER |
 | 0.1.2b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Added exact consumer diff, verified commands/results, and cleanup evidence. | 394a176 | ATHER |
