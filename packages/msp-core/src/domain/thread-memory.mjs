@@ -21,7 +21,9 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 
 import { mintRef } from "./ids.mjs";
 import {
+  AgentNotCurrentError,
   CompactionLeaseConflictError,
+  GrantReplayedError,
   IdentityHmacUnconfiguredError,
   RecordSubjectMismatchError,
   ThreadConflictError,
@@ -53,7 +55,7 @@ const MAX_SOURCE_REFS = 200;
 export class ThreadMemoryValidationError extends ThreadValidationError {}
 export class ThreadMemoryConflictError extends ThreadConflictError {}
 export class ThreadMemoryNotFoundError extends ThreadNotFoundError {}
-export { CompactionLeaseConflictError, IdentityHmacUnconfiguredError, RecordSubjectMismatchError, ThreadPayloadTooLargeError };
+export { AgentNotCurrentError, CompactionLeaseConflictError, GrantReplayedError, IdentityHmacUnconfiguredError, RecordSubjectMismatchError, ThreadPayloadTooLargeError };
 
 function requiredString(value, label) {
   if (typeof value !== "string" || !value.trim()) {

@@ -23,9 +23,13 @@ async function fixture(run) {
     env: { MSP_THREAD_SERVICE_KEY: key, MSP_TEST_CLOCK: '1', MSP_IDENTITY_HMAC_KEY: 'b'.repeat(40) },
   });
   let time = '2026-09-08T00:00:00.000Z';
+  // PH-MEMOS-3 stage 2: agentId/workspaceId are now required on every one
+  // of the ten API-011 tools; this fixture's worker and its serving agent
+  // are the same identity throughout, matching how a single always-current
+  // agent would actually call MSP end to end.
   const claims = { tenantId: 'tenant', businessId: 'business', channelAccountId: 'oa', externalRoomRef: 'dm',
     principalId: 'alice', policyRevision: 'v1', audienceKind: 'DIRECT', operator: true,
-    readPrivate: true, deliveryWriter: true };
+    readPrivate: true, deliveryWriter: true, agentId: 'agent-worker', workspaceId: 'workspace-worker' };
   const call = async (name, input = {}, scope = claims) => (await server.toolRegistry.dispatch(name,
     signThreadRequest(name, { ...input, now: time }, scope, key))).structuredContent;
   try {

@@ -6,7 +6,10 @@
 // error shapes this packet's contract-shaping/validation logic needs that
 // WP-12 had no occasion to define yet.
 export {
+  AgentNotCurrentError,
   CompactionLeaseConflictError,
+  GrantNonceRequiredError,
+  GrantReplayedError,
   IdentityHmacUnconfiguredError,
   MemoryConflictError,
   MemoryNotFoundError,

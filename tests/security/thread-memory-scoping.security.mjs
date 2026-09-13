@@ -58,7 +58,17 @@ function signed(name, input, claims) {
 
 // Grant claims are camelCase (ROOM); wire request bodies are snake_case
 // (ROOM_REQUEST) -- the two are never interchangeable.
-const ROOM = { channelAccountId: "oa-scoping", tenantId: "tenant-scoping" };
+//
+// PH-MEMOS-3 stage 2: agentId/workspaceId are now required on every one of
+// the ten API-011 tools (thread-access.mjs's verifyThreadGrant). A single
+// shared default here, reused via `...ROOM`, keeps every stage-1 test in
+// this file (about HUMAN/tenant/room scoping, not multi-agent behaviour)
+// meaningful without becoming a test about agent identity by accident --
+// exactly the same "shared baseline via ROOM" pattern channelAccountId/
+// tenantId already establish. A test that DOES care about agent identity
+// overrides agentId explicitly at its own call site, the same way tests
+// already override principalId today.
+const ROOM = { channelAccountId: "oa-scoping", tenantId: "tenant-scoping", agentId: "agent-scoping", workspaceId: "workspace-scoping" };
 const ROOM_REQUEST = { channel_type: "LINE", channel_account_id: "oa-scoping", tenant_id: "tenant-scoping" };
 
 test("C-1a: bob can never join alice's DIRECT thread as a second HUMAN participant, even asserting himself explicitly", async () => {
@@ -303,8 +313,8 @@ test("W6: tenant A's grant can never resolve, append to, or sweep tenant B's thr
   const { dbPath, cleanup } = tempDbPath("w6");
   const call = spawnRuntime(dbPath);
   try {
-    const claimsA = { channelAccountId: "oa-shared", tenantId: "tenant-a", externalRoomRef: "dm-shared", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1" };
-    const claimsB = { channelAccountId: "oa-shared", tenantId: "tenant-b", externalRoomRef: "dm-shared", audienceKind: "DIRECT", principalId: "carol", policyRevision: "v1" };
+    const claimsA = { channelAccountId: "oa-shared", tenantId: "tenant-a", externalRoomRef: "dm-shared", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1", agentId: "agent-a", workspaceId: "workspace-a" };
+    const claimsB = { channelAccountId: "oa-shared", tenantId: "tenant-b", externalRoomRef: "dm-shared", audienceKind: "DIRECT", principalId: "carol", policyRevision: "v1", agentId: "agent-b", workspaceId: "workspace-b" };
     const { thread: threadA } = await call(
       "msp_thread_resolve",
       signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa-shared", external_room_ref: "dm-shared", tenant_id: "tenant-a" }, claimsA),
@@ -494,7 +504,7 @@ test("RKOI review (docs round 4), item 1: a MISSING audienceKind is refused for 
         { inbound_message_id: (await call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, withAudience))).recentExchanges[0].messages[0].messageId,
           source_event_id: `${(await call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, withAudience))).recentExchanges[0].messages[0].messageId}:assistant`,
           receipt_id: "receipt-no-audience", outcome: "ACCEPTED", text: "reply" },
-        { tenantId: withAudience.tenantId, businessId: withAudience.businessId, channelAccountId: withAudience.channelAccountId, externalRoomRef: withAudience.externalRoomRef, principalId: "zuri-line-agent", policyRevision: "line-delivery-v1", deliveryWriter: true },
+        { tenantId: withAudience.tenantId, businessId: withAudience.businessId, channelAccountId: withAudience.channelAccountId, externalRoomRef: withAudience.externalRoomRef, principalId: "zuri-line-agent", policyRevision: "line-delivery-v1", deliveryWriter: true, agentId: withAudience.agentId, workspaceId: withAudience.workspaceId },
       ),
     );
     assert.equal(delivery.deduplicated, false);

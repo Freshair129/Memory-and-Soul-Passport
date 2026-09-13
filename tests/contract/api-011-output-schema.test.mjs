@@ -61,7 +61,9 @@ describe("API-011 outputSchema: real tool output against its own contract schema
 
   it("msp_thread_context and msp_thread_memory_record's real responses satisfy their own outputSchema", async () => {
     const room = { channelAccountId: "oa-out", tenantId: "tenant-out" };
-    const claims = { ...room, externalRoomRef: "dm-out-1", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1" };
+    // PH-MEMOS-3 stage 2: agentId/workspaceId are now required on every one
+    // of the ten API-011 tools.
+    const claims = { ...room, externalRoomRef: "dm-out-1", audienceKind: "DIRECT", principalId: "alice", policyRevision: "v1", agentId: "agent-out", workspaceId: "workspace-out" };
 
     const { thread } = await call(
       "msp_thread_resolve",

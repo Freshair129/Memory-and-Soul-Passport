@@ -73,8 +73,14 @@ function resolveInput(room, tenantId) {
   return { thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa-keyring", external_room_ref: room, tenant_id: tenantId };
 }
 
+// PH-MEMOS-3 stage 2: agentId/workspaceId are now required on every one of
+// the ten API-011 tools -- this file is about the KEYRING (which key
+// verifies which tenant's grant), orthogonal to agent identity, so every
+// grant shares one fixed default here (signThreadRequest auto-generates a
+// fresh, compliant nonce per call, so no test in this file needs to
+// construct one by hand either).
 function claimsFor(room, tenantId, principalId) {
-  return { channelAccountId: "oa-keyring", externalRoomRef: room, audienceKind: "DIRECT", tenantId, principalId, policyRevision: "v1" };
+  return { channelAccountId: "oa-keyring", externalRoomRef: room, audienceKind: "DIRECT", tenantId, principalId, policyRevision: "v1", agentId: "agent-keyring", workspaceId: "workspace-keyring" };
 }
 
 test("BL-MEMOS-049: a correctly keyed grant for each tenant succeeds once a keyring is configured", async () => {
