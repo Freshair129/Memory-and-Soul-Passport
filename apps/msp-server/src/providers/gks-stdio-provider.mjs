@@ -37,11 +37,12 @@ export const OS_BASIC_ENV_KEYS = new Set([
 
 // Every GKS child spawn (pipeline relay, promote, stage-evidence export)
 // gets an environment built from this explicit allowlist, never a copy of
-// MSP's own process.env. MSP's own environment arrives from its caller
-// (zuri-ai's web server today passes its ENTIRE environment on to MSP) and
+// MSP's own process.env. MSP's own environment arrives from its caller and
 // can carry production database URLs, chat-platform credentials and model
-// API keys that have no business reaching a GKS child. zuri-ai is fixing its
-// side separately; MSP must not rely on that fix.
+// API keys that have no business reaching a GKS child. zuri-ai's server and
+// edge transports allowlist what they hand MSP today, but this rule does not
+// rely on that: MSP is a standalone runtime and a future caller may hand it
+// everything it has.
 //
 // Besides the OS basics above, only variables in GKS's own configuration
 // namespace are forwarded: anything named `GKS_*`. That name is matched
