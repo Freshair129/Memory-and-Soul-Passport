@@ -271,8 +271,7 @@
           "task_ids": [
             "BL-MEMOS-033"
           ],
-          "label": "Stage 1: error code in reconcile_skipped journal entry",
-          "status": "open"
+          "label": "Stage 1: error code in reconcile_skipped journal entry (707406d)"
         }
       }
     },
@@ -474,8 +473,7 @@
         "BL-MEMOS-033",
         "BL-MEMOS-012"
       ],
-      "label": "Triage reviews; dispatch KIN/ATHER; commit docs rounds 4-5 and closure edits; dispatch code re-review",
-      "status": "open"
+      "label": "Triage reviews; dispatch KIN/ATHER; commit docs rounds 4-5 and closure edits; dispatch code re-review"
     }
   }
 }
