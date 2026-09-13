@@ -15,7 +15,7 @@
 //   - the single-key default path (no keyring set at all) is unchanged.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -160,7 +160,7 @@ test("BL-MEMOS-049: with no MSP_THREAD_SERVICE_KEYRING set, the single-key defau
   }
 });
 
-test("BL-MEMOS-049: a malformed keyring fails the real server process at start, before any request is served", () => {
+test("BL-MEMOS-049: a malformed keyring fails the real server process at start, before any request is served, and before a database file is created", () => {
   const { dbPath, cleanup } = tempDbPath("malformed-start");
   try {
     // A real, separate process (not createMspStdioCaller, which assumes a
@@ -174,7 +174,81 @@ test("BL-MEMOS-049: a malformed keyring fails the real server process at start, 
     });
     assert.notEqual(result.status, 0, "FAIL-CLOSED VIOLATION: the server process exited 0 (or is still running) with a malformed keyring");
     assert.match(result.stderr, /thread_keyring_config_invalid/, "the crash must name the typed configuration error, not a raw stack trace only");
+    // RKOI code review, WARNING 3: the keyring is parsed BEFORE open(dbPath)
+    // now -- a malformed keyring must never create (or migrate) a database
+    // file at all.
+    assert.equal(existsSync(dbPath), false, "FAIL-CLOSED VIOLATION: a database file was created despite a malformed keyring");
   } finally {
+    cleanup();
+  }
+});
+
+test("BL-MEMOS-049: an empty {} keyring fails the real server process at start (a keyring naming no tenant can never be honoured)", () => {
+  const { dbPath, cleanup } = tempDbPath("empty-start");
+  try {
+    const result = spawnSync(process.execPath, [binPath], {
+      env: { ...process.env, MSP_DB_PATH: dbPath, MSP_THREAD_SERVICE_KEYRING: "{}", MSP_IDENTITY_HMAC_KEY: IDENTITY_KEY },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.notEqual(result.status, 0, "FAIL-CLOSED VIOLATION: the server process exited 0 with an empty keyring");
+    assert.match(result.stderr, /thread_keyring_config_invalid/);
+    assert.equal(existsSync(dbPath), false);
+  } finally {
+    cleanup();
+  }
+});
+
+// RKOI review, CRITICAL: the exact reproduction -- a reversed map
+// ({key: tenantId} instead of {tenantId: key}) makes the KEY land where the
+// parser expects a tenant id. Before this fix, the short-key/non-string
+// error messages quoted that "tenant id" verbatim -- which, in a reversed
+// map, IS the secret key -- and bin/msp-server.mjs's uncaught-exception
+// handler wrote it to stderr, which
+// packages/msp-client-js/src/msp-stdio-transport.mjs then folds into the
+// error it raises to the calling application (msp-stdio-transport.mjs's
+// stderr-tail-in-error behavior). Both halves of that path are checked
+// directly against the REAL spawned process below: neither the child's own
+// stderr, nor the error the stdio client raises to its caller, may ever
+// contain the key.
+test("CRITICAL: a reversed keyring map ({key: tenantId}) never leaks the key into the real child's stderr", () => {
+  const { dbPath, cleanup } = tempDbPath("reversed-stderr");
+  const leakedKey = "reversed-map-leak-check-key-0123456789ab";
+  try {
+    const result = spawnSync(process.execPath, [binPath], {
+      env: { ...process.env, MSP_DB_PATH: dbPath, MSP_THREAD_SERVICE_KEYRING: JSON.stringify({ [leakedKey]: "tenant-a" }), MSP_IDENTITY_HMAC_KEY: IDENTITY_KEY },
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /thread_keyring_config_invalid/);
+    assert.equal(result.stderr.includes(leakedKey), false, "FAIL-CLOSED VIOLATION: the reversed map's key leaked into the child's stderr");
+    assert.equal(existsSync(dbPath), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("CRITICAL: a reversed keyring map ({key: tenantId}) never leaks the key into the stdio client's own thrown error", async () => {
+  const { dbPath, cleanup } = tempDbPath("reversed-client-error");
+  const leakedKey = "reversed-map-client-leak-check-key-0123456789";
+  const call = createMspStdioCaller({
+    command: process.execPath,
+    args: [binPath],
+    env: { ...process.env, MSP_DB_PATH: dbPath, MSP_THREAD_SERVICE_KEYRING: JSON.stringify({ [leakedKey]: "tenant-a" }), MSP_IDENTITY_HMAC_KEY: IDENTITY_KEY },
+    timeoutMs: 10_000,
+  });
+  try {
+    let caught;
+    try {
+      await call("msp_ping", {});
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught, "msp_ping must reject when the server process crashed at start");
+    assert.equal(caught.message.includes(leakedKey), false, "FAIL-CLOSED VIOLATION: the calling application's own error carried the reversed map's key");
+  } finally {
+    await call.close().catch(() => {});
     cleanup();
   }
 });

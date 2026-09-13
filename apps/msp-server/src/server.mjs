@@ -51,6 +51,13 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
     throw new TypeError("createServer requires dbPath (MSP_DB_PATH).");
   }
 
+  // RKOI code review, WARNING 3: parse and validate
+  // MSP_THREAD_SERVICE_KEYRING BEFORE opening the database (let alone
+  // migrating it) -- a malformed keyring must never create a database
+  // file, and must never leave an in-process caller holding an open DB
+  // handle it never asked for and has no way to close.
+  const threadServiceKeyFor = resolveThreadServiceKeyFor(env);
+
   const db = open(dbPath);
   runMigrations(db, migrationsDir);
 
@@ -88,14 +95,12 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   // `keyFor(tenantId)` function -- stage 1 always resolved to the single
   // MSP_THREAD_SERVICE_KEY, ignoring the (untrusted, pre-verification)
   // tenantId claim. BL-MEMOS-049 (stage 2) adds a real, OPTIONAL per-tenant
-  // keyring here, without changing thread-guard.mjs or thread-access.mjs at
-  // all: resolveThreadServiceKeyFor parses and validates
-  // MSP_THREAD_SERVICE_KEYRING synchronously, right here, so a malformed
-  // keyring fails server START, never a single request, and never silently
-  // falls back to the single-key default.
+  // keyring (threadServiceKeyFor, resolved above, before the database was
+  // even opened) here, without changing thread-guard.mjs or
+  // thread-access.mjs at all.
   const guardThreadHandler = createThreadGuard({
     db,
-    key: resolveThreadServiceKeyFor(env),
+    key: threadServiceKeyFor,
     // RKOI review (2nd round), WARNING 1: the guard recomputes a grant's own
     // room hash to compare against a resolved thread's stored one.
     identityHmacKey: env.MSP_IDENTITY_HMAC_KEY ?? null,
