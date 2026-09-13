@@ -1,7 +1,7 @@
 ---
-version: "0.1.4b"
+version: "0.1.5b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-12T12:00:00+07:00,Claude Opus 5"
+last_update: "2026-09-13T23:00:00+07:00,JANUS"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -116,6 +116,27 @@ and publication state. A new field or operation is a coordinated contract
 change across those repositories; it cannot be smuggled through the legacy
 memory tools or an unvalidated caller field.
 
+## Database schema migration runner
+
+### Foreign-keys=off mode (WP-E0)
+
+`packages/msp-storage/src/db/migrate.mjs` applies every `migrations/NNNN_*.sql` file inside `db.transaction(() => db.exec(file.sql))`, and `connection.mjs` always opens the database with `PRAGMA foreign_keys = ON`. Under those two facts, rebuilding a table that other tables reference by foreign key -- the standard `CREATE ..._new`, `INSERT ... SELECT`, `DROP`, `RENAME` sequence, run inside that transaction -- fails the moment the database has ever held a row on either side of the relationship: `DROP TABLE` on a referenced parent performs an implicit delete of every row, which the still-enabled foreign keys refuse, and `PRAGMA foreign_keys` cannot be changed while a transaction is open.
+
+A migration file whose **first line is exactly** `-- msp-migration: foreign-keys=off` opts into the standard SQLite 12-step procedure instead:
+
+1. `PRAGMA foreign_keys` is read and remembered.
+2. `PRAGMA foreign_keys = OFF` runs outside any transaction. SQLite ignores that pragma inside one, and better-sqlite3 does not raise an error if you try anyway, so getting the ordering right is the whole point.
+3. Inside the same `db.transaction(...)` every migration already runs in: the migration's SQL executes, then `PRAGMA foreign_key_check` must return zero rows.
+4. If it returns any rows, the runner throws the existing `SchemaVersionError` (`code = "db_unavailable"`; no new error code is introduced) with a message prefixed `migration_foreign_key_check_failed:` naming the migration file and the first violating table. Throwing inside the transaction rolls back the migration's SQL, so the database is left exactly as it was and the migration is never recorded in `schema_migrations`.
+5. Otherwise the `schema_migrations` row is inserted and `PRAGMA user_version` is bumped -- exactly as the plain path does today -- and the transaction commits.
+6. In a `finally`, `PRAGMA foreign_keys` is restored to the value read in step 1 -- in practice `ON`, since `connection.mjs` always enables it.
+
+A migration author must use this directive on any migration that rebuilds a table other tables reference by foreign key, once the database can already hold rows on either side of that relationship that the rebuild would orphan. A plain `ALTER TABLE ... ADD COLUMN` does not need it. A migration file without the directive -- or with it anywhere but the first line -- is applied exactly as before, on the plain path; the directive is part of the migration file's own text, so the existing checksum-drift guard covers it automatically, with no special case in the guard itself.
+
+The failure this mode can produce is a startup `SchemaVersionError` (`code = "db_unavailable"`) -- the server refuses to start rather than run against a schema it cannot prove is internally consistent -- and its message always begins `migration_foreign_key_check_failed:`, the same way the checksum-drift and downgrade guards each have their own recognizable prefix.
+
+See `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` §12.0 for the motivating case (0008's `vaults` rebuild, not yet shipped) and [`docs/NOTES.md`](NOTES.md#known-source-facts-and-gaps) for why root migrations 0003 and 0005 did not need this mode.
+
 ## Rollback
 
 Revert the single dependency/re-export change and reinstall GoVibe dependencies. The original `packages/govibe-core/src/msp-client.mjs` and `msp-stdio-transport.mjs` remain available until the consumer cutover is independently accepted.
@@ -124,6 +145,7 @@ Revert the single dependency/re-export change and reinstall GoVibe dependencies.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.5b | 2026-09-13 | beta | Documented the migration runner's `-- msp-migration: foreign-keys=off` mode (WP-E0): the exact sequence, when a migration author must use it, and the `migration_foreign_key_check_failed:`-prefixed `SchemaVersionError` it raises on failure. | working-tree | JANUS |
 | 0.1.4b | 2026-09-12 | beta | Documented `close()` returning a promise (client 0.2.1), and when a consumer must await it before touching the runtime's database file. | working-tree | Claude Opus 5 |
 | 0.1.3b | 2026-09-08 | beta | Replaced the retired hard-coded local path with an explicit checkout variable and documented the GenesisRAG17 relay handoff, role split, no-migration boundary and pinned contract. | working-tree | ATHER |
 | 0.1.2b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |

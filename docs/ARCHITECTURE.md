@@ -1,7 +1,7 @@
 ---
-version: "0.2.4b"
+version: "0.2.5b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-13T18:00:00+07:00,KIN"
+last_update: "2026-09-13T23:00:00+07:00,JANUS"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -75,7 +75,7 @@ msp-client-js     (Node built-ins + local authority enforcement only)
 
 ## Migration ownership
 
-The repository-root `migrations/` directory is canonical. `msp-storage` owns the runner; `msp-server` resolves the canonical directory and supplies it to the runner. Tests may supply a temporary migration directory explicitly. Migration filenames, ordering, checksums, and SQL content are preserved from GoVibe.
+The repository-root `migrations/` directory is canonical. `msp-storage` owns the runner; `msp-server` resolves the canonical directory and supplies it to the runner. Tests may supply a temporary migration directory explicitly. Migration filenames, ordering, checksums, and SQL content are preserved from GoVibe. The runner also supports one explicit opt-in mode, `-- msp-migration: foreign-keys=off` (WP-E0), for a migration that rebuilds a table other tables reference by foreign key once the database can already hold rows the rebuild would otherwise orphan (see `docs/MIGRATION.md`).
 
 ## Security invariants
 
@@ -98,6 +98,7 @@ Risk is HIGH because code crosses package and repository boundaries and migratio
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.5b | 2026-09-13 | beta | Migration ownership paragraph now names the runner's `-- msp-migration: foreign-keys=off` mode (WP-E0), for rebuilding a table other tables reference by foreign key once the database can hold rows the rebuild would orphan. | working-tree | JANUS |
 | 0.2.3b | 2026-09-13 | beta | `createMspStdioCaller` now builds the MSP child environment from an explicit allowlist (MSP runtime names + `GKS_*` + OS basics) instead of defaulting to a full copy of the caller's `process.env`. Breaking for `@freshair129/msp-client-js` consumers that relied on unrelated variables reaching the MSP child — including `NODE_OPTIONS`, which is withheld deliberately because it can load code into the child, so an operator passing `--max-old-space-size` that way must now set it another way; client version 0.1.0 -> 0.2.0. | fix/client-transport-env-allowlist | KIN |
 | 0.2.2b | 2026-09-13 | beta | The GKS child-environment allowlist now matches names case-insensitively on both halves of its rule: previously OS basics were matched case-insensitively but the `GKS_` namespace was matched case-sensitively, so a lower-case `gks_db_path` was dropped on a platform whose environment names are case-insensitive. Fail-closed, never a leak. Test-only: every allowlisted OS-basic name is now proven individually against the exported allowlist. | fix/gks-prefix-case-and-test-coverage | KIN |
 | 0.2.1b | 2026-09-11 | beta | Every GKS child spawn (pipeline relay, promote, stage-evidence export) now builds its environment from an explicit `GKS_*` + OS-basics allowlist instead of forwarding MSP's own process environment; previously only the pipeline relay path stripped a fixed credential blocklist, and `promote`/`exportStageEvidence` forwarded MSP's full environment unchanged. | working-tree | KIN |

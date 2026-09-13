@@ -1,7 +1,7 @@
 ---
-version: "0.1.7b"
+version: "0.1.8b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-12T12:00:00+07:00,Claude Opus 5"
+last_update: "2026-09-13T23:00:00+07:00,JANUS"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -65,6 +65,7 @@ Imports in copied tests may change only to address the new workspace package bou
 - Pipeline input parsing and raw lineage remain in zuri-ai stages 1–8; canonical decisions and quality remain in GKS; physical graph/vector/index writes and publication remain in the GenesisBlock worker and its DB. The Tier 4 query relay is the only pipeline operation that does not call GKS, and requires an explicit loopback worker origin and token.
 - Cross-repository acceptance is pinned to zuri-ai commit [`b64b46df`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257); the wire authority is the [`genesisrag17.v1` contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md).
 - `Freshair129/msp` currently resolves through GitHub CLI to `Freshair129/cognitive_system`. No remote will be attached until repository identity is resolved without overwriting or repurposing that repository.
+- Root migrations 0003 and 0005 each rebuild a child table (`CREATE ..._new`, `INSERT ... SELECT`, `DROP`, `RENAME`) inside the plain `db.transaction(...)` path in `packages/msp-storage/src/db/migrate.mjs`, with `PRAGMA foreign_keys` left `ON` the whole time. That only ever worked because both tables were empty in every environment those migrations ran in -- a real row on either side of the relationship would have made `DROP TABLE` perform an implicit delete the still-enabled foreign keys refuse, throwing `FOREIGN KEY constraint failed` and rolling the migration back. Neither file is edited to add the new `-- msp-migration: foreign-keys=off` directive; their checksums are lineage evidence per Gate A. `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`'s 0008 (a `vaults` rebuild, not yet shipped) is the first migration that runs against a database the runtime has actually populated, and is therefore the first to need that mode (WP-E0); see `docs/MIGRATION.md`.
 
 ## Bugs found during extraction
 
@@ -213,6 +214,7 @@ the final tree, green every time.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.8b | 2026-09-13 | beta | Recorded that root migrations 0003 and 0005 rebuilt child tables inside the transaction with foreign keys left on, which only worked because those tables were empty everywhere they ran, and that the design's 0008 (a `vaults` rebuild) is the first migration that needs the new `foreign-keys=off` runner mode (WP-E0, `docs/MIGRATION.md`). | working-tree | JANUS |
 | 0.1.7b | 2026-09-12 | beta | Recorded both Node 24.19 SQLite failure modes: the upstream `ObjectWrap` abort on `better-sqlite3` 11.x, and the `SQLITE_IOERR_TRUNCATE` WAL-index race that 12.x/13.x expose in tests that open a vault database while a killed runtime is still tearing down. Fixed by making `close()` await the child's real exit; storage pragmas unchanged. | working-tree | Claude Opus 5 |
 | 0.1.6b | 2026-09-08 | beta | Recorded the complete GenesisRAG17 relay boundary, source/worker grants, query loopback, code/test proof and pinned cross-repository acceptance. | working-tree | ATHER |
 | 0.1.5b | 2026-09-07 | beta | Added `msp_knowledge_evidence_export`, the relay of GKS's `gks_stage_evidence_export` for zuri-ai's evidence pull (`docs/TIER-BOUNDARY-17-STAGE.md` 0.2.0b): provider method, validated page, journal, fail-closed without a provider; reference fixture and bridge cases. The two 2026-08-30 QA design gaps above are unchanged. | working-tree | Claude Fable 5.1 |
