@@ -1079,9 +1079,11 @@ export class ThreadMemoryStore {
         // still succeeds outright as PENDING_INBOUND below, so a caller can
         // still tell "taken" from "free" by outcome alone. receipt_id has
         // no stage-1 keyring binding it to a tenant before this call, so
-        // that residual gap is recorded, not fixed, per RKOI's explicit
-        // choice of "leave as a named stage-1 gap" for whichever part of
-        // this is not cheap -- see docs/GATE-A.md.
+        // that residual gap is recorded, not fixed. RKOI ruled (code review
+        // round 3) that this leftover outcome-level oracle across the five
+        // caller-supplied global ids (receipt_id, exchange_id, message_id,
+        // injection_id, inbound_message_id) is accepted as low severity for
+        // stage 1 -- see RSK-MEMOS-09 in docs/IMPLEMENTATION-PLAN-MEMORY-OS.md.
         if (old.tenant_id !== scope.tenantId) {
           throw new ThreadMemoryConflictError('That identifier is already in use.');
         }
