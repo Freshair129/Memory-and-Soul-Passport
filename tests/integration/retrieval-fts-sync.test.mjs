@@ -48,16 +48,16 @@ describe("AC-01: migration 0004_retrieval.sql applies idempotently", () => {
   it("applies cleanly as migration version 4, alongside the prior three (and WP-16/WP-17's 0005/0006 that now follow it)", () => {
     const db = freshDb();
     const rows = db.prepare("SELECT version, name FROM schema_migrations ORDER BY version").all();
-    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(rows[3].name).toBe("0004_retrieval.sql");
-    expect(db.pragma("user_version", { simple: true })).toBe(7);
+    expect(db.pragma("user_version", { simple: true })).toBe(8);
   });
 
   it("re-running migrations against an already-migrated database is a no-op (idempotent)", () => {
     const db = freshDb();
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(0);
-    expect(second.currentVersion).toBe(7);
+    expect(second.currentVersion).toBe(8);
   });
 
   it("entities_fts and embeddings tables exist with the documented columns", () => {

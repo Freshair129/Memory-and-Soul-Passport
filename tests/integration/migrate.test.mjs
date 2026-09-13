@@ -97,7 +97,7 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(7);
+    expect(result.appliedCount).toBe(8);
     const tables = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN " +
@@ -136,7 +136,68 @@ describe("db/migrate (AC-03)", () => {
     runMigrations(db, migrationsDir);
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(0);
-    expect(second.currentVersion).toBe(7);
+    expect(second.currentVersion).toBe(8);
+  });
+
+  // TASK-MEMOS-002 stage 1: 0008_thread_memory.sql is a real, non-directive
+  // migration whose new tables (threads, thread_participants, ...) sit
+  // alongside 0001-0007's existing entities/vaults schema. Both a fresh
+  // database and one already populated through 0007 must apply 0008 with
+  // an EMPTY PRAGMA foreign_key_check and with every pre-existing row
+  // intact -- 0008 rebuilds nothing from an earlier migration.
+  it("0008_thread_memory.sql applies cleanly on a fresh database: 0001-0008 in order, zero foreign_key_check violations", () => {
+    const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
+    const db = freshDb();
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(8);
+    expect(result.currentVersion).toBe(8);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    const threadTables = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN " +
+          "('threads','thread_participants','chat_sessions','thread_messages','protected_memory_records'," +
+          "'session_compaction_jobs','session_summaries','thread_delivery_receipts','thread_injection_receipts'," +
+          "'thread_pending_deliveries','thread_summary_invalidations')",
+      )
+      .all();
+    expect(threadTables).toHaveLength(11);
+  });
+
+  it("0008_thread_memory.sql applies cleanly on a database already populated through 0007: pre-existing rows survive, zero foreign_key_check violations", () => {
+    const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
+    const migrationFileNames = readdirSync(rootMigrationsDir)
+      .filter((name) => /^\d{4}_.*\.sql$/.test(name))
+      .filter((name) => !name.startsWith("0008_"));
+    expect(migrationFileNames).toHaveLength(7);
+    const files = Object.fromEntries(migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]));
+    const migrationsDir = setupMigrationsDir(files);
+    const db = freshDb();
+
+    const first = runMigrations(db, migrationsDir);
+    expect(first.appliedCount).toBe(7);
+
+    // Populate a real row through the 0001-0007 schema before 0008 ever runs.
+    db.prepare("INSERT INTO vaults (vault_id, vault_type, status, created_at) VALUES (?, 'shared', 'active', ?)").run(
+      "vault-precedes-0008",
+      "2026-01-01T00:00:00.000Z",
+    );
+    db.prepare(
+      `INSERT INTO entities
+        (entity_id, vault_id, category, key, body_json, current_version, valid_from, recorded_at,
+         lifecycle_state, decay_score, access_count, source_hash, created_at, updated_at)
+       VALUES (?, ?, 'note', 'pre-0008', '{}', 1, ?, ?, 'active', 1.0, 0, ?, ?, ?)`,
+    ).run("entity-precedes-0008", "vault-precedes-0008", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", "a".repeat(64), "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z");
+
+    writeFileSync(path.join(migrationsDir, "0008_thread_memory.sql"), readFileSync(path.join(rootMigrationsDir, "0008_thread_memory.sql"), "utf8"), "utf8");
+    const second = runMigrations(db, migrationsDir);
+    expect(second.appliedCount).toBe(1);
+    expect(second.currentVersion).toBe(8);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+
+    // The pre-existing rows are untouched -- 0008 never rebuilds an
+    // earlier migration's table.
+    expect(db.prepare("SELECT vault_id FROM vaults WHERE vault_id = ?").get("vault-precedes-0008")).toBeTruthy();
+    expect(db.prepare("SELECT entity_id FROM entities WHERE entity_id = ?").get("entity-precedes-0008")).toBeTruthy();
   });
 
   it("WP-16 AC-01: the lifecycle_state CHECK constraint rejects an out-of-enum value", () => {
@@ -567,7 +628,7 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
   it("the real root migrations 0001-0007, copied into a temp directory, apply with no directive classification error -- none of their leading comment blocks mentions msp-migration", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
-    expect(migrationFileNames).toHaveLength(7);
+    expect(migrationFileNames).toHaveLength(8);
 
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
@@ -576,8 +637,8 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
     const db = freshDb();
 
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(7);
-    expect(result.currentVersion).toBe(7);
+    expect(result.appliedCount).toBe(8);
+    expect(result.currentVersion).toBe(8);
   });
 
   it("idempotency: a second runMigrations over the same directory applies 0 migrations and leaves foreign_keys at 1", () => {
@@ -803,7 +864,7 @@ describe("db/migrate structural foreign-key check on the plain path (RKOI follow
   it("applies the real root migrations 0001-0007 cleanly under the new plain-path structural check, then a follow-on plain migration 0008 too -- an ordinary follow-on migration is not rejected", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
-    expect(migrationFileNames).toHaveLength(7);
+    expect(migrationFileNames).toHaveLength(8);
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
     );
@@ -811,16 +872,16 @@ describe("db/migrate structural foreign-key check on the plain path (RKOI follow
     const db = freshDb();
 
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(7);
+    expect(result.appliedCount).toBe(8);
 
     writeFileSync(
-      path.join(migrationsDir, "0008_trivial_followup.sql"),
+      path.join(migrationsDir, "0009_trivial_followup.sql"),
       "CREATE TABLE trivial_followup (id INTEGER PRIMARY KEY);",
       "utf8",
     );
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(1);
-    expect(second.currentVersion).toBe(8);
+    expect(second.currentVersion).toBe(9);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_followup'").all()).toHaveLength(1);
   });
 
@@ -1511,7 +1572,7 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
   it("applies the real root migrations 0001-0007 -- including the real entities_fts virtual table and its shadow tables -- then a follow-on plain migration and a follow-on directive migration too, under the new type-aware check", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
-    expect(migrationFileNames).toHaveLength(7);
+    expect(migrationFileNames).toHaveLength(8);
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
     );
@@ -1519,7 +1580,7 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
     const db = freshDb();
 
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(7);
+    expect(result.appliedCount).toBe(8);
 
     // entities_fts is a real FTS5 virtual table with real shadow tables --
     // confirm at least one shadow table is present and typed correctly by
@@ -1530,20 +1591,20 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
     const shadowEntries = tableList.filter((row) => row.name.startsWith("entities_fts_") && row.type === "shadow");
     expect(shadowEntries.length).toBeGreaterThan(0);
 
-    writeFileSync(path.join(migrationsDir, "0008_trivial_plain_followup.sql"), "CREATE TABLE trivial_plain_followup (id INTEGER PRIMARY KEY);", "utf8");
+    writeFileSync(path.join(migrationsDir, "0009_trivial_plain_followup.sql"), "CREATE TABLE trivial_plain_followup (id INTEGER PRIMARY KEY);", "utf8");
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(1);
-    expect(second.currentVersion).toBe(8);
+    expect(second.currentVersion).toBe(9);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_plain_followup'").all()).toHaveLength(1);
 
     writeFileSync(
-      path.join(migrationsDir, "0009_trivial_directive_followup.sql"),
+      path.join(migrationsDir, "0010_trivial_directive_followup.sql"),
       withDirective("CREATE TABLE trivial_directive_followup (id INTEGER PRIMARY KEY);"),
       "utf8",
     );
     const third = runMigrations(db, migrationsDir);
     expect(third.appliedCount).toBe(1);
-    expect(third.currentVersion).toBe(9);
+    expect(third.currentVersion).toBe(10);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_directive_followup'").all()).toHaveLength(1);
   });
 });

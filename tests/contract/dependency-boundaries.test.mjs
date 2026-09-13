@@ -29,6 +29,13 @@ function importSpecifiers(source) {
   return [...source.matchAll(/(?:from\s+|import\s*\()["'](.+?)["']/g)].map((match) => match[1]);
 }
 
+// Strips `//` and `/* */` comments before a source-text scan -- so a
+// comment that NAMES a forbidden pattern (documenting the coupling a fix
+// removed, for instance) never trips the very check it documents.
+function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+}
+
 function packageImports(dir) {
   return collectFiles(dir).flatMap((file) =>
     importSpecifiers(readFileSync(file, "utf8"))
@@ -89,6 +96,37 @@ describe("standalone MSP workspace dependency boundaries", () => {
     );
     expect(importSpecifiers(guard)).not.toContain("@freshair129/msp-core/vault-registry");
     expect(importSpecifiers(guard)).not.toContain("../../domain/vault-registry.mjs");
+  });
+
+  it("contracts thread-access guard remains decoupled from the thread registry implementation (API-011 C-2)", () => {
+    const guardPath = path.join(roots.contracts, "contracts", "thread-access.mjs");
+    const guard = readFileSync(guardPath, "utf8");
+    const code = stripComments(guard);
+    // No DB-backed lookup at all: no msp-core import, no `db` parameter, no
+    // inline SQL in actual code. This is the exact coupling the ORIGINAL
+    // (unmerged) version of this file had, moved into msp-core's
+    // ThreadRegistry, orchestrated by
+    // apps/msp-server/src/transport/handlers/thread-guard.mjs instead.
+    expect(importSpecifiers(guard)).not.toContain("@freshair129/msp-core/thread-memory");
+    expect(code).not.toMatch(/\bdb\s*[,)]/);
+    expect(code).not.toMatch(/\bdb\.prepare\b/);
+    expect(code).not.toMatch(/\bSELECT\b/i);
+  });
+
+  // RKOI review (post-implementation, item 13): scanning ONLY
+  // thread-access.mjs's imports let the ORIGINAL C-2 finding pass this
+  // suite, because that version's DB handle was INJECTED as a parameter
+  // rather than imported -- an import-only check has nothing to see. Every
+  // msp-contracts source file is now scanned for actual (non-comment)
+  // `.prepare(`, `.exec(` or `.pragma(` call syntax, which catches an
+  // injected-handle coupling too, not just an import-based one.
+  it("no msp-contracts source file calls .prepare(/.exec(/.pragma( directly, injected handle or not (API-011 C-2, RKOI item 13)", () => {
+    for (const file of collectFiles(roots.contracts)) {
+      const code = stripComments(readFileSync(file, "utf8"));
+      expect(code, `${file} must not call .prepare(`).not.toMatch(/\.prepare\s*\(/);
+      expect(code, `${file} must not call .exec(`).not.toMatch(/\.exec\s*\(/);
+      expect(code, `${file} must not call .pragma(`).not.toMatch(/\.pragma\s*\(/);
+    }
   });
 
   it("contains no relative-import cycles within core or contracts", () => {

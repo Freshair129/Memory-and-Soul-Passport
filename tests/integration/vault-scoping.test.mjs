@@ -33,18 +33,18 @@ function freshDb() {
 }
 
 describe("WP-14 AC-01: migration 0003_vault_scoping.sql", () => {
-  it("applies idempotently against a fresh database (seven migrations, no error, no duplicate application)", () => {
+  it("applies idempotently against a fresh database (eight migrations, no error, no duplicate application)", () => {
     const db = freshDb();
     const first = runMigrations(db, migrationsDir);
-    expect(first.appliedCount).toBe(7);
-    expect(first.currentVersion).toBe(7);
+    expect(first.appliedCount).toBe(8);
+    expect(first.currentVersion).toBe(8);
 
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(0);
-    expect(second.currentVersion).toBe(7);
+    expect(second.currentVersion).toBe(8);
 
     const rows = db.prepare("SELECT version, name FROM schema_migrations ORDER BY version").all();
-    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(rows[2].name).toBe("0003_vault_scoping.sql");
     expect(rows[3].name).toBe("0004_retrieval.sql");
     expect(rows[4].name).toBe("0005_decay_lifecycle.sql");
