@@ -137,15 +137,21 @@ function parseJson(value, fallback) {
 }
 
 // HMAC-SHA256, over the exact field order the contract documents (API-011
-// §"Identity hashing"): "tenant_id|channel_type|channel_account_id|
-// external_room_ref". Exported so apps/msp-server's thread-guard.mjs can
-// recompute the SAME hash a specific thread's own channel_type produces
-// (the guard/registry never has raw channelType from a grant claim, only
-// from the thread row it already looked up).
-export function hmacRoomRef(key, { tenantId, channelType, channelAccountId, externalRoomRef }) {
-  if (typeof key !== "string" || key.length < 16) throw new IdentityHmacUnconfiguredError();
+// §"Identity hashing", design §6.3): "tenant_id|channel_account_id|
+// external_room_ref". RKOI review (2nd round), CRITICAL 1: channel_type is
+// deliberately NOT part of this hash -- zuri-ai's msp_thread_delivery_record
+// grant never carries a channelType claim (verified against zuri-ai
+// origin/main's createMspThreadMemoryPort#recordDelivery), so requiring one
+// to compute this hash made every delivery receipt unreachable. Exported so
+// apps/msp-server's thread-guard.mjs can recompute a grant's own room hash
+// and compare it against a resolved thread's stored one (RKOI review,
+// WARNING 1) without needing any DB-only field.
+export function hmacRoomRef(key, { tenantId, channelAccountId, externalRoomRef }) {
+  // RKOI review, WARNING 8: the identity key needs the same >=32-character
+  // bar as MSP_THREAD_SERVICE_KEY.
+  if (typeof key !== "string" || key.length < 32) throw new IdentityHmacUnconfiguredError();
   return createHmac("sha256", key)
-    .update(`${tenantId}|${channelType}|${channelAccountId}|${externalRoomRef}`, "utf8")
+    .update(`${tenantId}|${channelAccountId}|${externalRoomRef}`, "utf8")
     .digest("hex");
 }
 
@@ -161,14 +167,24 @@ function translateTriggerError(error) {
   if (/record_subject_mismatch:/.test(error.message)) {
     throw new RecordSubjectMismatchError(error.message.replace(/^.*record_subject_mismatch:\s*/, ""));
   }
-  if (/tenant_id must match/.test(error.message)) {
+  if (/tenant_id must match|session_id must belong to|must be a CURRENT participant/.test(error.message)) {
     throw new ThreadMemoryValidationError(error.message.replace(/^.*?:\s*/, ""));
+  }
+  // RKOI review, 2nd round, WARNING 3 (W6 leftover): message_id, receipt_id
+  // and injection_id are caller-supplied, global primary keys. A collision
+  // is mapped to the SAME generic `conflict` regardless of which tenant
+  // already holds the colliding row -- the message never names the table,
+  // the column, or anything about the existing row, so it cannot be used to
+  // probe whether an id exists under another tenant.
+  if (/UNIQUE constraint failed/.test(error.message)) {
+    throw new ThreadMemoryConflictError("That identifier is already in use.");
   }
   throw error;
 }
 
 function hmacPrincipal(key, speakerId) {
-  if (typeof key !== "string" || key.length < 16) throw new IdentityHmacUnconfiguredError();
+  // RKOI review, WARNING 8: same >=32-character bar as hmacRoomRef.
+  if (typeof key !== "string" || key.length < 32) throw new IdentityHmacUnconfiguredError();
   return createHmac("sha256", key).update(String(speakerId), "utf8").digest("hex");
 }
 
@@ -184,6 +200,10 @@ function rowThread(row) {
     audienceKind: row.thread_kind,
     channelType: row.channel_type,
     channelAccountId: row.channel_account_id,
+    // Not raw identity -- already a one-way HMAC -- so it is safe to expose
+    // to apps/msp-server's thread-guard.mjs for the RKOI review's WARNING 1
+    // room check (a grant's OWN room hash must match this thread's).
+    externalRoomRefHmac: row.external_room_ref_hmac,
     tenantId: row.tenant_id,
     businessId: row.business_id,
     status: row.status,
@@ -412,7 +432,7 @@ export class ThreadMemoryStore {
     const timestamp = iso(now);
     // Fail closed BEFORE any lookup or write: no thread is ever created, and
     // no existing binding is ever compared, under a fabricated or absent key.
-    const roomHmac = this.#hmacRoomRef({ tenantId: tenant, channelType: channel, channelAccountId: account, externalRoomRef: room });
+    const roomHmac = this.#hmacRoomRef({ tenantId: tenant, channelAccountId: account, externalRoomRef: room });
 
     // RKOI review, item 3 (relink): the uniqueness constraint, and this
     // lookup, only ever consider the ACTIVE thread for this binding. A
@@ -819,44 +839,33 @@ export class ThreadMemoryStore {
     };
   }
 
-  // externalRoomRef, when given, is matched by re-deriving each candidate
-  // thread's OWN external_room_ref_hmac from ITS OWN channel_type (never
-  // assumed from the caller) and comparing -- there is no single hash the
-  // caller can supply up front, since a sweep may span threads whose
-  // channel_type differs even under the same channel_account_id.
+  // RKOI review, CRITICAL 1: the room hash no longer depends on
+  // channel_type (see hmacRoomRef's header comment), so it can be computed
+  // ONCE from the caller's own filter fields and bound directly into the
+  // SQL, rather than re-derived per candidate row.
   sweepIdleSessions({ now, limit = 100, tenantId, businessId, channelAccountId, externalRoomRef } = {}) {
     const timestamp = iso(now);
     const max = positiveInteger(limit, "limit");
+    const roomHmac = externalRoomRef ? this.#hmacRoomRef({ tenantId, channelAccountId, externalRoomRef }) : null;
     const due = this.#db.prepare(`SELECT s.* FROM chat_sessions s JOIN threads t ON s.thread_id=t.thread_id
       WHERE s.status='OPEN' AND s.idle_deadline<=? AND (? IS NULL OR t.tenant_id=?)
       AND (?=0 OR t.business_id IS ?) AND (? IS NULL OR t.channel_account_id=?)
+      AND (? IS NULL OR t.external_room_ref_hmac=?)
       ORDER BY s.idle_deadline ASC LIMIT ?`)
       .all(timestamp, tenantId ?? null, tenantId ?? null, businessId === undefined ? 0 : 1, businessId ?? null,
-        channelAccountId ?? null, channelAccountId ?? null, max * 4)
-      .filter((session) => {
-        if (!externalRoomRef) return true;
-        const thread = this.#db.prepare('SELECT channel_type, external_room_ref_hmac FROM threads WHERE thread_id=?').get(session.thread_id);
-        const candidateHmac = this.#hmacRoomRef({ tenantId, channelType: thread.channel_type, channelAccountId, externalRoomRef });
-        return thread.external_room_ref_hmac === candidateHmac;
-      })
-      .slice(0, max);
+        channelAccountId ?? null, channelAccountId ?? null, roomHmac, roomHmac, max);
     const jobs = this.#db.transaction(() => due.map((session) => this.#closeIdleSession(session, timestamp)).filter(Boolean))();
     for (const job of jobs) {
-      this.#journalAppend({ actor: "msp:session-router", toolName: "msp_session_sweep", ref: job.job_id, workspaceId: null, payload: { session_id: job.session_id, source_end_sequence: job.source_end_sequence }, policyDecision: "allow" });
+      this.#journalAppend({ actor: "msp:session-router", toolName: "msp_session_sweep", ref: job.job_id, workspaceId: job.tenant_id, payload: { session_id: job.session_id, source_end_sequence: job.source_end_sequence }, policyDecision: "allow" });
     }
     const ready = this.#db.prepare(`SELECT j.* FROM session_compaction_jobs j JOIN threads t ON j.thread_id=t.thread_id
       WHERE (j.status IN ('PENDING','RETRYABLE') OR (j.status='RUNNING' AND j.leased_until<=?))
       AND (? IS NULL OR t.tenant_id=?) AND (?=0 OR t.business_id IS ?)
       AND (? IS NULL OR t.channel_account_id=?)
+      AND (? IS NULL OR t.external_room_ref_hmac=?)
       ORDER BY j.created_at LIMIT ?`).all(timestamp, tenantId ?? null, tenantId ?? null,
-        businessId === undefined ? 0 : 1, businessId ?? null, channelAccountId ?? null, channelAccountId ?? null, max * 4)
-      .filter((job) => {
-        if (!externalRoomRef) return true;
-        const thread = this.#db.prepare('SELECT channel_type, external_room_ref_hmac FROM threads WHERE thread_id=?').get(job.thread_id);
-        const candidateHmac = this.#hmacRoomRef({ tenantId, channelType: thread.channel_type, channelAccountId, externalRoomRef });
-        return thread.external_room_ref_hmac === candidateHmac;
-      })
-      .slice(0, max);
+        businessId === undefined ? 0 : 1, businessId ?? null, channelAccountId ?? null, channelAccountId ?? null,
+        roomHmac, roomHmac, max);
     return { closed: jobs.length, jobs: ready.map((job) => this.#jobResult(job)) };
   }
 
@@ -953,7 +962,7 @@ export class ThreadMemoryStore {
       this.#db.prepare("UPDATE chat_sessions SET summary_watermark = MAX(summary_watermark, ?), version = version + 1 WHERE thread_id = ? AND status = 'OPEN'").run(end, session.thread_id);
       return { summaryId, summaryVersion: Number(versionRow.version) + 1 };
     })();
-    this.#journalAppend({ actor: "msp:compaction-worker", toolName: "msp_session_compaction_commit", ref: result.summaryId, workspaceId: null, payload: { session_id: sessionRef, job_id: job.job_id, through_sequence: end }, policyDecision: "allow" });
+    this.#journalAppend({ actor: "msp:compaction-worker", toolName: "msp_session_compaction_commit", ref: result.summaryId, workspaceId: thread.tenantId, payload: { session_id: sessionRef, job_id: job.job_id, through_sequence: end }, policyDecision: "allow" });
     return { summary: rowSummary(this.#db.prepare("SELECT * FROM session_summaries WHERE summary_id = ?").get(result.summaryId)), jobId: job.job_id };
   }
 
@@ -998,23 +1007,26 @@ export class ThreadMemoryStore {
     const body = boundedText(text, 'text');
     const inbound = this.#db.prepare("SELECT * FROM thread_messages WHERE message_id=? AND direction='INBOUND'").get(inboundId);
     if (!inbound) {
-      if (!scope?.tenantId || !scope.channelAccountId || !scope.externalRoomRef || !scope.channelType) throw new ThreadMemoryValidationError('Delivery scope is required.');
-      const roomHmac = this.#hmacRoomRef({ tenantId: scope.tenantId, channelType: scope.channelType, channelAccountId: scope.channelAccountId, externalRoomRef: scope.externalRoomRef });
+      if (!scope?.tenantId || !scope.channelAccountId || !scope.externalRoomRef) throw new ThreadMemoryValidationError('Delivery scope is required.');
+      const roomHmac = this.#hmacRoomRef({ tenantId: scope.tenantId, channelAccountId: scope.channelAccountId, externalRoomRef: scope.externalRoomRef });
       const old = this.#db.prepare('SELECT * FROM thread_pending_deliveries WHERE receipt_id=?').get(id);
       if (old && (old.inbound_message_id !== inboundId || old.tenant_id !== scope.tenantId || old.business_id !== (scope.businessId ?? null) ||
         old.channel_account_id !== scope.channelAccountId || old.external_room_ref_hmac !== roomHmac || old.text !== body || old.outcome !== state)) throw new ThreadMemoryConflictError('Pending receipt retry differs.');
-      this.#db.prepare('INSERT OR IGNORE INTO thread_pending_deliveries(receipt_id,inbound_message_id,source_event_id,tenant_id,business_id,channel_account_id,external_room_ref_hmac,outcome,text,provider_ref,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
+      // RKOI review (docs round 4), item 2: ON CONFLICT(receipt_id), not OR
+      // IGNORE, so this only ever suppresses the intended idempotent-retry
+      // collision on receipt_id -- never a NOT NULL violation on tenant_id.
+      this.#db.prepare('INSERT INTO thread_pending_deliveries(receipt_id,inbound_message_id,source_event_id,tenant_id,business_id,channel_account_id,external_room_ref_hmac,outcome,text,provider_ref,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(receipt_id) DO NOTHING')
         .run(id, inboundId, sourceEventId, scope.tenantId, scope.businessId ?? null, scope.channelAccountId, roomHmac, state, body, providerRef ?? null, iso(now));
       return { receiptId: id, status: 'PENDING_INBOUND' };
     }
     const thread = this.#requireThread(inbound.thread_id);
     if (scope) {
-      const roomHmac = scope.__precomputedHmac ?? this.#hmacRoomRef({ tenantId: scope.tenantId, channelType: thread.channelType, channelAccountId: scope.channelAccountId, externalRoomRef: scope.externalRoomRef });
-      const threadRow = this.#db.prepare('SELECT external_room_ref_hmac FROM threads WHERE thread_id=?').get(thread.threadId);
-      if (thread.tenantId !== scope.tenantId || thread.businessId !== (scope.businessId ?? null) || thread.channelAccountId !== scope.channelAccountId || threadRow.external_room_ref_hmac !== roomHmac) {
+      const roomHmac = scope.__precomputedHmac ?? this.#hmacRoomRef({ tenantId: scope.tenantId, channelAccountId: scope.channelAccountId, externalRoomRef: scope.externalRoomRef });
+      if (thread.tenantId !== scope.tenantId || thread.businessId !== (scope.businessId ?? null) || thread.channelAccountId !== scope.channelAccountId || thread.externalRoomRefHmac !== roomHmac) {
         throw new ThreadMemoryConflictError('Delivery scope differs.');
       }
     }
+    try {
     return this.#db.transaction(() => {
     let message = this.#db.prepare("SELECT * FROM thread_messages WHERE thread_id=? AND source_event_id=? AND direction='OUTBOUND'").get(thread.threadId, sourceEventId);
     if (!message) {
@@ -1041,6 +1053,9 @@ export class ThreadMemoryStore {
     this.#db.prepare("UPDATE thread_pending_deliveries SET reconcile_state='reconciled' WHERE receipt_id=? AND reconcile_state='pending'").run(id);
     return { receiptId: id, messageId: message.message_id, outcome: state, deduplicated: false };
     })();
+    } catch (error) {
+      translateTriggerError(error);
+    }
   }
 
   #drainDeliveries(inboundId) {
@@ -1050,14 +1065,24 @@ export class ThreadMemoryStore {
       AND p.channel_account_id=t.channel_account_id AND p.external_room_ref_hmac=t.external_room_ref_hmac`).all(inboundId)) {
       this.recordDelivery({ inboundMessageId: inboundId, sourceEventId: row.source_event_id, receiptId: row.receipt_id, outcome: row.outcome,
         text: row.text, providerRef: row.provider_ref, now: row.recorded_at,
-        scope: { tenantId: row.tenant_id, businessId: row.business_id, channelAccountId: row.channel_account_id, externalRoomRef: null, channelType: null, __precomputedHmac: row.external_room_ref_hmac } });
+        scope: { tenantId: row.tenant_id, businessId: row.business_id, channelAccountId: row.channel_account_id, externalRoomRef: null, __precomputedHmac: row.external_room_ref_hmac } });
     }
   }
 
   #refreshSummaryAfterDelivery(sessionId, timestamp) {
     const session = this.#getSession(sessionId);
     if (session.status === 'OPEN') return;
-    this.#db.prepare("INSERT OR IGNORE INTO thread_summary_invalidations(summary_id,reason,recorded_at) SELECT summary_id,'DELIVERY_RECONCILED',? FROM session_summaries WHERE session_id=?").run(timestamp, sessionId);
+    // RKOI review (docs round 4), item 2: `INSERT OR IGNORE` also swallows a
+    // NOT NULL violation, not just the intended PRIMARY KEY (summary_id)
+    // idempotent-retry collision (probe V1' showed a dropped row with
+    // changes=0 and no error). `ON CONFLICT(summary_id) DO NOTHING` keeps
+    // the retry idempotent while still raising on any other constraint
+    // failure.
+    this.#db
+      .prepare(
+        "INSERT INTO thread_summary_invalidations(summary_id,tenant_id,reason,recorded_at) SELECT summary_id,tenant_id,'DELIVERY_RECONCILED',? FROM session_summaries WHERE session_id=? ON CONFLICT(summary_id) DO NOTHING",
+      )
+      .run(timestamp, sessionId);
     const active = this.#db.prepare("SELECT * FROM session_compaction_jobs WHERE session_id=? AND status IN ('PENDING','RETRYABLE','RUNNING')").get(sessionId);
     if (active) {
       this.#db.prepare("UPDATE session_compaction_jobs SET status='RETRYABLE',lease_token=NULL,leased_until=NULL,source_end_sequence=?,updated_at=? WHERE job_id=?").run(session.latest_sequence, timestamp, active.job_id);
@@ -1070,13 +1095,14 @@ export class ThreadMemoryStore {
   }
 
   recordInjection({ threadId, exchangeId, injectionId, packetHash, policyRevision, modelRef, state, now } = {}) {
-    this.#requireThread(threadId);
+    const thread = this.#requireThread(threadId);
     const id = requiredString(injectionId, 'injection_id');
     const hash = requiredString(packetHash, 'packet_hash');
     if (!/^[a-f0-9]{64}$/.test(hash)) throw new ThreadMemoryValidationError('packet_hash must be SHA-256.');
     const status = enumValue(state, new Set(['RESOLVED', 'SUBMITTED', 'COMPLETED', 'FAILED', 'UNKNOWN']), 'state');
     const exchange = this.#db.prepare('SELECT 1 FROM thread_messages WHERE thread_id=? AND exchange_id=?').get(threadId, exchangeId);
     if (!exchange) throw new ThreadMemoryValidationError('Unknown exchange_id for thread.');
+    try {
     return this.#db.transaction(() => {
       const old = this.#db.prepare('SELECT * FROM thread_injection_receipts WHERE injection_id=?').get(id);
       if (!old && status === 'RESOLVED') {
@@ -1087,11 +1113,14 @@ export class ThreadMemoryStore {
       if (old?.state === status) return { injectionId: id, state: status, version: old.version };
       const allowed = { RESOLVED: ['SUBMITTED', 'FAILED'], SUBMITTED: ['COMPLETED', 'FAILED', 'UNKNOWN'] };
       if ((!old && status !== 'RESOLVED') || (old && !allowed[old.state]?.includes(status))) throw new ThreadMemoryConflictError('Invalid injection receipt transition.');
-      if (!old) this.#db.prepare('INSERT INTO thread_injection_receipts(injection_id,thread_id,exchange_id,packet_hash,policy_revision,model_ref,state,updated_at) VALUES(?,?,?,?,?,?,?,?)')
-        .run(id, threadId, exchangeId, hash, requiredString(policyRevision, 'policy_revision'), requiredString(modelRef, 'model_ref'), status, iso(now));
+      if (!old) this.#db.prepare('INSERT INTO thread_injection_receipts(injection_id,tenant_id,thread_id,exchange_id,packet_hash,policy_revision,model_ref,state,updated_at) VALUES(?,?,?,?,?,?,?,?,?)')
+        .run(id, thread.tenantId, threadId, exchangeId, hash, requiredString(policyRevision, 'policy_revision'), requiredString(modelRef, 'model_ref'), status, iso(now));
       else this.#db.prepare('UPDATE thread_injection_receipts SET state=?,updated_at=?,version=version+1 WHERE injection_id=?').run(status, iso(now), id);
       return { injectionId: id, state: status, version: (old?.version ?? 0) + 1 };
     })();
+    } catch (error) {
+      translateTriggerError(error);
+    }
   }
 
   retryCompaction({ jobId, error, leaseToken, now } = {}) {
@@ -1178,12 +1207,16 @@ export class ThreadMemoryStore {
     this.#db.prepare("UPDATE chat_sessions SET status = 'CLOSING', version = version + 1 WHERE session_id = ?").run(session.session_id);
     const jobId = ref("compaction-job");
     const key = `${session.session_id}:${start}:${end}`;
+    // RKOI review (docs round 4), item 2: ON CONFLICT(idempotency_key), not
+    // OR IGNORE, so this only ever suppresses the intended idempotent-retry
+    // collision -- never a NOT NULL violation on tenant_id.
     this.#db.prepare(`
-      INSERT OR IGNORE INTO session_compaction_jobs
+      INSERT INTO session_compaction_jobs
         (job_id, tenant_id, session_id, thread_id, status, source_start_sequence, source_end_sequence,
          idempotency_key, attempts, leased_until, summary_id, last_error, created_at, updated_at)
       VALUES (@job_id, @tenant_id, @session_id, @thread_id, 'PENDING', @source_start_sequence, @source_end_sequence,
          @idempotency_key, 0, NULL, NULL, NULL, @created_at, @updated_at)
+      ON CONFLICT(idempotency_key) DO NOTHING
     `).run({ job_id: jobId, tenant_id: session.tenant_id, session_id: session.session_id, thread_id: session.thread_id, source_start_sequence: start, source_end_sequence: end, idempotency_key: key, created_at: timestamp, updated_at: timestamp });
     return this.#db.prepare("SELECT * FROM session_compaction_jobs WHERE idempotency_key = ?").get(key);
   }

@@ -6,33 +6,44 @@
 -- migration is needed. Every statement below is a brand-new CREATE TABLE;
 -- nothing here rebuilds an existing table, so the foreign-keys-off directive
 -- documented in packages/msp-storage/src/db/migrate.mjs and docs/MIGRATION.md
--- does not apply to this file. This migration is checksum-locked once
--- merged (packages/msp-storage/src/db/migrate.mjs's drift guard) -- every
--- correction RKOI's review requested is folded in here rather than shipped
--- as a follow-up migration.
+-- does not apply to this file (that file's own header wording still needs
+-- to stop calling 0008 a `vaults` rebuild -- see docs/NOTES.md). This
+-- migration is checksum-locked once merged (packages/msp-storage/src/db/
+-- migrate.mjs's drift guard) -- every correction from BOTH rounds of
+-- RKOI's review is folded in here rather than shipped as a follow-up
+-- migration.
 --
 -- Zuri owns channel identity and authorization; MSP owns the durable thread
 -- lifecycle, speaker references, bounded recent exchanges and the
 -- provenance of compacted session memory. Raw channel identifiers are never
 -- stored: every external room reference is HMAC-SHA256'd under an injected
--- identity key before it reaches a column, and every journal actor is the
--- HMAC of the raw speaker id, never the id itself. A method that needs to
--- hash a value with no key configured throws IdentityHmacUnconfiguredError
--- and writes nothing.
+-- identity key (>= 32 characters, the same bar as MSP_THREAD_SERVICE_KEY)
+-- before it reaches a column, over "tenant_id|channel_account_id|
+-- external_room_ref" -- channel_type is deliberately NOT part of this hash
+-- (RKOI review, 2nd round, CRITICAL 1: zuri-ai's own delivery grant never
+-- carries a channelType claim). Every journal actor is the HMAC of the raw
+-- speaker id, never the id itself. A method that needs to hash a value with
+-- no key configured throws IdentityHmacUnconfiguredError and writes nothing.
 --
 -- Every uniqueness key that identifies a caller-owned resource is
 -- tenant-scoped, and every denormalized tenant_id column carried on a child
 -- row is pinned to its parent thread's own tenant_id by a BEFORE INSERT
 -- trigger -- a duplicate source_event_id, or a child row naming a foreign
 -- tenant, must never collide with, or leak the existence of, another
--- tenant's row.
+-- tenant's row. A row naming a session_id also has its OWN thread_id
+-- cross-checked against that session's thread_id, so a message, job or
+-- summary can never reference another thread's session even if it happens
+-- to share a tenant.
 --
 -- thread_messages, session_summaries, protected_memory_records,
 -- thread_delivery_receipts and thread_pending_deliveries are durable
 -- provenance/evidence: never deleted, and rewritten only through a one-way
 -- `redaction_state` ('none' -> 'tombstoned') transition that blanks their
--- content column and pins everything else. Erasure itself is a later,
--- separately reviewed packet -- this migration only makes room for it.
+-- content column and pins everything else -- enforced BOTH by an UPDATE
+-- trigger and by a same-row CHECK (`redaction_state = 'none' OR <content> =
+-- ''`) that also refuses an INSERT trying to arrive pre-tombstoned with its
+-- content still intact. Erasure itself is a later, separately reviewed
+-- packet -- this migration only makes room for it.
 
 CREATE TABLE threads (
   thread_id TEXT PRIMARY KEY,
@@ -56,17 +67,31 @@ CREATE UNIQUE INDEX idx_threads_active_binding ON threads (tenant_id, channel_ac
 CREATE INDEX idx_threads_tenant_business ON threads (tenant_id, business_id);
 CREATE INDEX idx_threads_status ON threads (status);
 
--- A thread's identity is immutable once minted: only `status`, `business_id`
--- and `updated_at` may ever change.
+-- A thread's identity is immutable once minted: only `status` and
+-- `updated_at` may ever change (RKOI review, 2nd round, WARNING 4: pin
+-- business_id too -- it was previously left out of this list).
 CREATE TRIGGER trg_threads_pin_identity
 BEFORE UPDATE ON threads
 BEGIN
   SELECT CASE WHEN NOT (
     NEW.thread_id IS OLD.thread_id AND NEW.thread_kind IS OLD.thread_kind AND NEW.channel_type IS OLD.channel_type
     AND NEW.tenant_id IS OLD.tenant_id AND NEW.channel_account_id IS OLD.channel_account_id
-    AND NEW.external_room_ref_hmac IS OLD.external_room_ref_hmac AND NEW.created_at IS OLD.created_at
-  ) THEN RAISE(ABORT, 'threads.thread_kind/channel_type/tenant_id/channel_account_id/external_room_ref_hmac/created_at are immutable')
+    AND NEW.external_room_ref_hmac IS OLD.external_room_ref_hmac AND NEW.business_id IS OLD.business_id
+    AND NEW.created_at IS OLD.created_at
+  ) THEN RAISE(ABORT, 'threads.thread_kind/channel_type/tenant_id/channel_account_id/external_room_ref_hmac/business_id/created_at are immutable')
   END;
+END;
+
+-- RKOI review, 2nd round, WARNING 4: status is a one-way close, never a
+-- resurrection. Nothing in stage 1 ever changes threads.status (the close/
+-- relink lifecycle tool is a later packet); this only makes the schema
+-- refuse a mistaken or malicious ACTIVE<-CLOSED/REVOKED bounce ahead of it.
+CREATE TRIGGER trg_threads_status_close_only
+BEFORE UPDATE OF status ON threads
+WHEN NEW.status IS NOT OLD.status
+BEGIN
+  SELECT RAISE(ABORT, 'threads.status may only transition ACTIVE -> CLOSED')
+  WHERE NOT (OLD.status = 'ACTIVE' AND NEW.status = 'CLOSED');
 END;
 
 -- Append-only membership rows. A row's identity, thread, speaker and join
@@ -90,6 +115,15 @@ CREATE TABLE thread_participants (
 CREATE UNIQUE INDEX idx_thread_participants_open ON thread_participants (thread_id, speaker_id) WHERE left_at IS NULL;
 CREATE INDEX idx_thread_participants_person ON thread_participants (tenant_id, person_id);
 CREATE INDEX idx_thread_participants_thread ON thread_participants (thread_id, speaker_kind);
+
+-- RKOI review, 2nd round, WARNING 4: a tenant-consistency trigger for
+-- thread_participants was missing entirely.
+CREATE TRIGGER trg_thread_participants_tenant_consistency
+BEFORE INSERT ON thread_participants
+BEGIN
+  SELECT RAISE(ABORT, 'thread_participants.tenant_id must match its thread''s tenant_id')
+  WHERE NEW.tenant_id IS NOT (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+END;
 
 CREATE TRIGGER trg_thread_participants_append_only
 BEFORE UPDATE ON thread_participants
@@ -152,11 +186,39 @@ CREATE TABLE chat_sessions (
 CREATE INDEX idx_chat_sessions_thread_status ON chat_sessions (thread_id, status);
 CREATE INDEX idx_chat_sessions_idle ON chat_sessions (status, idle_deadline);
 
+-- RKOI review, 2nd round, WARNING 4, tightened in docs round 4: at most one
+-- OPEN session per thread -- proven to hold across every flow (rotation,
+-- idle sweep, delivery-after-close reconciliation): a new OPEN session is
+-- never created without first moving any existing OPEN session to CLOSING
+-- (see ThreadMemoryStore#appendMessage / #closeIdleSession).
+--
+-- Deliberately NOT "at most one CLOSING": late-delivery reconciliation
+-- (ThreadMemoryStore#refreshSummaryAfterDelivery) moves an ALREADY-CLOSED
+-- session back to CLOSING to be recompacted with corrected evidence, with
+-- no regard for whether a NEWER session on the same thread has independently
+-- idled into CLOSING in the meantime (probe S2) -- two CLOSING rows for one
+-- thread is a real, legitimate state this schema must allow. A "one
+-- CLOSING" index was tried and DROPPED for exactly this reason; see
+-- tests/integration/thread-summary-worker.test.mjs and
+-- tests/integration/thread-memory-schema-invariants.test.mjs for the
+-- flows that would break it. This invariant is therefore application-
+-- enforced (msp-core), not schema-enforced, for CLOSING specifically.
+CREATE UNIQUE INDEX idx_chat_sessions_one_open ON chat_sessions (thread_id) WHERE status = 'OPEN';
+
 CREATE TRIGGER trg_chat_sessions_tenant_consistency
 BEFORE INSERT ON chat_sessions
 BEGIN
   SELECT RAISE(ABORT, 'chat_sessions.tenant_id must match its thread''s tenant_id')
-  WHERE NEW.tenant_id <> (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+  WHERE NEW.tenant_id IS NOT (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+END;
+
+-- RKOI review, 2nd round, WARNING 4: refuse a rebind of an existing
+-- session's tenant or thread.
+CREATE TRIGGER trg_chat_sessions_pin_identity
+BEFORE UPDATE OF tenant_id, thread_id ON chat_sessions
+WHEN NEW.tenant_id IS NOT OLD.tenant_id OR NEW.thread_id IS NOT OLD.thread_id
+BEGIN
+  SELECT RAISE(ABORT, 'chat_sessions.tenant_id/thread_id are immutable');
 END;
 
 CREATE TABLE thread_messages (
@@ -178,6 +240,9 @@ CREATE TABLE thread_messages (
   reply_to_message_id TEXT,
   delivery_state TEXT NOT NULL DEFAULT 'RECEIVED' CHECK (delivery_state IN ('RECEIVED', 'QUEUED', 'ACCEPTED', 'DELIVERED', 'FAILED', 'UNKNOWN')),
   redaction_state TEXT NOT NULL DEFAULT 'none' CHECK (redaction_state IN ('none', 'tombstoned')),
+  -- RKOI review, 2nd round, WARNING 4: refuse an INSERT that arrives
+  -- already tombstoned with its text intact.
+  CHECK (redaction_state = 'none' OR text = ''),
   UNIQUE (thread_id, sequence),
   UNIQUE (thread_id, source_event_id)
 );
@@ -189,7 +254,22 @@ CREATE TRIGGER trg_thread_messages_tenant_consistency
 BEFORE INSERT ON thread_messages
 BEGIN
   SELECT RAISE(ABORT, 'thread_messages.tenant_id must match its thread''s tenant_id')
-  WHERE NEW.tenant_id <> (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+  WHERE NEW.tenant_id IS NOT (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+
+  -- RKOI review, 2nd round, WARNING 4: a message cannot reference another
+  -- thread's session, even within the same tenant.
+  SELECT RAISE(ABORT, 'thread_messages.session_id must belong to thread_id')
+  WHERE NOT EXISTS (SELECT 1 FROM chat_sessions s WHERE s.session_id = NEW.session_id AND s.thread_id = NEW.thread_id);
+
+  -- RKOI review (3rd round probes M3/M4): an exchange_id is scoped to the
+  -- thread that first used it, and reply_to_message_id must name a message
+  -- of that SAME thread.
+  SELECT RAISE(ABORT, 'thread_messages.exchange_id was previously used on a different thread')
+  WHERE EXISTS (SELECT 1 FROM thread_messages m WHERE m.exchange_id = NEW.exchange_id AND m.thread_id <> NEW.thread_id);
+
+  SELECT RAISE(ABORT, 'thread_messages.reply_to_message_id must name a message of the same thread')
+  WHERE NEW.reply_to_message_id IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM thread_messages m WHERE m.message_id = NEW.reply_to_message_id AND m.thread_id = NEW.thread_id);
 END;
 
 CREATE TRIGGER trg_thread_messages_tombstone_only
@@ -230,7 +310,8 @@ CREATE TABLE protected_memory_records (
   redaction_state TEXT NOT NULL DEFAULT 'none' CHECK (redaction_state IN ('none', 'tombstoned')),
   version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  CHECK (redaction_state = 'none' OR body_json = '{}')
 );
 
 CREATE INDEX idx_protected_memory_thread_status ON protected_memory_records (thread_id, status, kind);
@@ -240,7 +321,11 @@ CREATE TRIGGER trg_protected_memory_records_tenant_consistency
 BEFORE INSERT ON protected_memory_records
 BEGIN
   SELECT RAISE(ABORT, 'protected_memory_records.tenant_id must match its thread''s tenant_id')
-  WHERE NEW.tenant_id <> (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+  WHERE NEW.tenant_id IS NOT (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+
+  SELECT RAISE(ABORT, 'protected_memory_records.session_id must belong to thread_id')
+  WHERE NEW.session_id IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM chat_sessions s WHERE s.session_id = NEW.session_id AND s.thread_id = NEW.thread_id);
 END;
 
 -- SQLite forbids a subquery inside a CHECK constraint, so every one of
@@ -253,8 +338,10 @@ END;
 --     system-generated observation) and remain visible only to their own
 --     asserter at read time (msp-core's ThreadMemoryStore#context), never
 --     to "every participant".
---   - asserted_by_speaker_id must actually be a participant of thread_id,
---     in the same tenant.
+--   - asserted_by_speaker_id must actually be a CURRENT (left_at IS NULL)
+--     participant of thread_id, in the same tenant (RKOI review, 2nd
+--     round, WARNING 4: a former participant's membership no longer
+--     qualifies).
 CREATE TRIGGER trg_protected_memory_records_subject_rules
 BEFORE INSERT ON protected_memory_records
 BEGIN
@@ -263,12 +350,12 @@ BEGIN
 
   SELECT RAISE(ABORT, 'record_subject_mismatch: a HUMAN-asserted record requires subject_person_id equal to asserted_by_speaker_id')
   WHERE NEW.subject_person_id IS NULL AND EXISTS (
-    SELECT 1 FROM thread_participants p WHERE p.thread_id = NEW.thread_id AND p.speaker_id = NEW.asserted_by_speaker_id AND p.speaker_kind = 'HUMAN'
+    SELECT 1 FROM thread_participants p WHERE p.thread_id = NEW.thread_id AND p.speaker_id = NEW.asserted_by_speaker_id AND p.speaker_kind = 'HUMAN' AND p.left_at IS NULL
   );
 
-  SELECT RAISE(ABORT, 'protected_memory_records: asserted_by_speaker_id must be a participant of thread_id in the same tenant')
+  SELECT RAISE(ABORT, 'protected_memory_records: asserted_by_speaker_id must be a CURRENT participant of thread_id in the same tenant')
   WHERE NOT EXISTS (
-    SELECT 1 FROM thread_participants p WHERE p.thread_id = NEW.thread_id AND p.speaker_id = NEW.asserted_by_speaker_id AND p.tenant_id = NEW.tenant_id
+    SELECT 1 FROM thread_participants p WHERE p.thread_id = NEW.thread_id AND p.speaker_id = NEW.asserted_by_speaker_id AND p.tenant_id = NEW.tenant_id AND p.left_at IS NULL
   );
 END;
 
@@ -336,7 +423,19 @@ CREATE TRIGGER trg_session_compaction_jobs_tenant_consistency
 BEFORE INSERT ON session_compaction_jobs
 BEGIN
   SELECT RAISE(ABORT, 'session_compaction_jobs.tenant_id must match its thread''s tenant_id')
-  WHERE NEW.tenant_id <> (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+  WHERE NEW.tenant_id IS NOT (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+
+  SELECT RAISE(ABORT, 'session_compaction_jobs.session_id must belong to thread_id')
+  WHERE NOT EXISTS (SELECT 1 FROM chat_sessions s WHERE s.session_id = NEW.session_id AND s.thread_id = NEW.thread_id);
+END;
+
+-- RKOI review, 2nd round, WARNING 4 / 3rd round item 3 (J3): refuse a
+-- rebind of an existing job's tenant, thread OR session.
+CREATE TRIGGER trg_session_compaction_jobs_pin_identity
+BEFORE UPDATE OF tenant_id, thread_id, session_id ON session_compaction_jobs
+WHEN NEW.tenant_id IS NOT OLD.tenant_id OR NEW.thread_id IS NOT OLD.thread_id OR NEW.session_id IS NOT OLD.session_id
+BEGIN
+  SELECT RAISE(ABORT, 'session_compaction_jobs.tenant_id/thread_id/session_id are immutable');
 END;
 
 CREATE TABLE session_summaries (
@@ -355,6 +454,7 @@ CREATE TABLE session_summaries (
   summarizer_version TEXT NOT NULL,
   redaction_state TEXT NOT NULL DEFAULT 'none' CHECK (redaction_state IN ('none', 'tombstoned')),
   created_at TEXT NOT NULL,
+  CHECK (redaction_state = 'none' OR summary_json = '{}'),
   UNIQUE (session_id, summary_version)
 );
 
@@ -364,7 +464,10 @@ CREATE TRIGGER trg_session_summaries_tenant_consistency
 BEFORE INSERT ON session_summaries
 BEGIN
   SELECT RAISE(ABORT, 'session_summaries.tenant_id must match its thread''s tenant_id')
-  WHERE NEW.tenant_id <> (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+  WHERE NEW.tenant_id IS NOT (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+
+  SELECT RAISE(ABORT, 'session_summaries.session_id must belong to thread_id')
+  WHERE NOT EXISTS (SELECT 1 FROM chat_sessions s WHERE s.session_id = NEW.session_id AND s.thread_id = NEW.thread_id);
 END;
 
 CREATE TRIGGER trg_session_summaries_tombstone_only
@@ -397,6 +500,7 @@ CREATE TABLE thread_delivery_receipts (
   provider_ref TEXT,
   redaction_state TEXT NOT NULL DEFAULT 'none' CHECK (redaction_state IN ('none', 'tombstoned')),
   recorded_at TEXT NOT NULL,
+  CHECK (redaction_state = 'none' OR text = ''),
   UNIQUE (message_id, receipt_id)
 );
 
@@ -406,7 +510,7 @@ CREATE TRIGGER trg_thread_delivery_receipts_tenant_consistency
 BEFORE INSERT ON thread_delivery_receipts
 BEGIN
   SELECT RAISE(ABORT, 'thread_delivery_receipts.tenant_id must match its message''s thread tenant_id')
-  WHERE NEW.tenant_id <> (SELECT t.tenant_id FROM thread_messages m JOIN threads t ON t.thread_id = m.thread_id WHERE m.message_id = NEW.message_id);
+  WHERE NEW.tenant_id IS NOT (SELECT t.tenant_id FROM thread_messages m JOIN threads t ON t.thread_id = m.thread_id WHERE m.message_id = NEW.message_id);
 END;
 
 CREATE TRIGGER trg_thread_delivery_receipts_tombstone_only
@@ -428,10 +532,14 @@ END;
 
 -- Model-invocation receipts. No user-facing text is stored here (packet_hash
 -- is an opaque digest, model_ref is a provider/model identifier), so no
--- redaction/tombstone trigger applies; the existing state-machine UPDATE
--- (RESOLVED -> SUBMITTED -> COMPLETED/FAILED/UNKNOWN) is unrestricted.
+-- redaction/tombstone trigger applies. RKOI review, 2nd round, WARNING 4:
+-- add tenant_id plus a consistency trigger, and enforce the domain's own
+-- state machine (RESOLVED -> SUBMITTED -> COMPLETED/FAILED/UNKNOWN,
+-- RESOLVED -> FAILED, forward-only, RESOLVED-first) at the schema layer
+-- too, pinning every non-state column; no DELETE.
 CREATE TABLE thread_injection_receipts (
   injection_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
   thread_id TEXT NOT NULL REFERENCES threads (thread_id),
   exchange_id TEXT NOT NULL,
   packet_hash TEXT NOT NULL,
@@ -441,6 +549,38 @@ CREATE TABLE thread_injection_receipts (
   version INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL
 );
+
+CREATE TRIGGER trg_thread_injection_receipts_tenant_consistency
+BEFORE INSERT ON thread_injection_receipts
+BEGIN
+  SELECT RAISE(ABORT, 'thread_injection_receipts.tenant_id must match its thread''s tenant_id')
+  WHERE NEW.tenant_id IS NOT (SELECT tenant_id FROM threads WHERE thread_id = NEW.thread_id);
+
+  SELECT RAISE(ABORT, 'thread_injection_receipts must be first inserted as RESOLVED')
+  WHERE NEW.state <> 'RESOLVED';
+END;
+
+CREATE TRIGGER trg_thread_injection_receipts_update_guard
+BEFORE UPDATE ON thread_injection_receipts
+BEGIN
+  SELECT CASE WHEN NOT (
+    NEW.injection_id IS OLD.injection_id AND NEW.tenant_id IS OLD.tenant_id AND NEW.thread_id IS OLD.thread_id
+    AND NEW.exchange_id IS OLD.exchange_id AND NEW.packet_hash IS OLD.packet_hash
+    AND NEW.policy_revision IS OLD.policy_revision AND NEW.model_ref IS OLD.model_ref
+    AND NEW.version = OLD.version + 1
+    AND (
+      (OLD.state = 'RESOLVED' AND NEW.state IN ('SUBMITTED', 'FAILED'))
+      OR (OLD.state = 'SUBMITTED' AND NEW.state IN ('COMPLETED', 'FAILED', 'UNKNOWN'))
+    )
+  ) THEN RAISE(ABORT, 'thread_injection_receipts state transition is invalid, out of order, or changed a pinned column')
+  END;
+END;
+
+CREATE TRIGGER trg_thread_injection_receipts_no_delete
+BEFORE DELETE ON thread_injection_receipts
+BEGIN
+  SELECT RAISE(ABORT, 'thread_injection_receipts rows may never be deleted');
+END;
 
 -- A delivery receipt that names an inbound message/thread MSP has not seen
 -- yet (delivery can race the inbound webhook). Deliberately NOT a foreign
@@ -459,12 +599,14 @@ CREATE TABLE thread_pending_deliveries (
   business_id TEXT,
   channel_account_id TEXT NOT NULL,
   external_room_ref_hmac TEXT NOT NULL,
-  outcome TEXT NOT NULL,
+  -- RKOI review, 2nd round, WARNING 4: this had no CHECK at all before.
+  outcome TEXT NOT NULL CHECK (outcome IN ('ACCEPTED', 'DELIVERED', 'FAILED', 'UNKNOWN')),
   text TEXT NOT NULL,
   provider_ref TEXT,
   reconcile_state TEXT NOT NULL DEFAULT 'pending' CHECK (reconcile_state IN ('pending', 'reconciled')),
   redaction_state TEXT NOT NULL DEFAULT 'none' CHECK (redaction_state IN ('none', 'tombstoned')),
-  recorded_at TEXT NOT NULL
+  recorded_at TEXT NOT NULL,
+  CHECK (redaction_state = 'none' OR text = '')
 );
 
 CREATE TRIGGER trg_thread_pending_deliveries_no_delete
@@ -500,6 +642,31 @@ END;
 
 CREATE TABLE thread_summary_invalidations (
   summary_id TEXT PRIMARY KEY REFERENCES session_summaries (summary_id),
+  tenant_id TEXT NOT NULL,
   reason TEXT NOT NULL,
   recorded_at TEXT NOT NULL
 );
+
+CREATE TRIGGER trg_thread_summary_invalidations_tenant_consistency
+BEFORE INSERT ON thread_summary_invalidations
+BEGIN
+  SELECT RAISE(ABORT, 'thread_summary_invalidations.tenant_id must match its summary''s tenant_id')
+  WHERE NEW.tenant_id IS NOT (SELECT tenant_id FROM session_summaries WHERE summary_id = NEW.summary_id);
+END;
+
+-- RKOI review (3rd round / docs probes), item 1 (V3): pin tenant_id (and
+-- summary_id, its PRIMARY KEY) on UPDATE. Nothing in this module ever
+-- UPDATEs this table today (only INSERT OR IGNORE and reads), so this is
+-- pure defense in depth.
+CREATE TRIGGER trg_thread_summary_invalidations_pin_identity
+BEFORE UPDATE ON thread_summary_invalidations
+WHEN NEW.tenant_id IS NOT OLD.tenant_id OR NEW.summary_id IS NOT OLD.summary_id
+BEGIN
+  SELECT RAISE(ABORT, 'thread_summary_invalidations.summary_id/tenant_id are immutable');
+END;
+
+CREATE TRIGGER trg_thread_summary_invalidations_no_delete
+BEFORE DELETE ON thread_summary_invalidations
+BEGIN
+  SELECT RAISE(ABORT, 'thread_summary_invalidations rows may never be deleted');
+END;
