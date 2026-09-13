@@ -104,8 +104,7 @@
           "task_ids": [
             "BL-MEMOS-012"
           ],
-          "label": "TASK-MEMOS-001 docs closure check (36b6211)",
-          "status": "open"
+          "label": "TASK-MEMOS-001 docs closure check (7/9 closed; line edits applied by coordinator in 445bd90)"
         }
       }
     },
@@ -239,10 +238,13 @@
         },
         "2": {
           "task_ids": [
-            "BL-MEMOS-033"
+            "BL-MEMOS-033",
+            "BL-MEMOS-102",
+            "BL-MEMOS-108",
+            "BL-MEMOS-109",
+            "BL-MEMOS-111"
           ],
-          "label": "Stage 1 revision: delivery/HMAC, VERIFIED upgrade, room check, schema integrity",
-          "status": "open"
+          "label": "Stage 1 revision: delivery/HMAC, DEC-MEMOS-15, room check, per-tool audience, schema integrity (0508b8b..95629e2)"
         }
       }
     },
@@ -260,6 +262,13 @@
             "BL-MEMOS-033"
           ],
           "label": "Docs-review cross-check points for stage-1 code"
+        },
+        "3": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1 code re-review, round 2 (95629e2)",
+          "status": "open"
         }
       }
     }
@@ -426,7 +435,7 @@
         "BL-MEMOS-033",
         "BL-MEMOS-012"
       ],
-      "label": "Triage stage-1 code review and docs round 3; dispatch KIN revision and ATHER round 4",
+      "label": "Triage reviews; dispatch KIN/ATHER; commit docs rounds 4-5 and closure edits; dispatch code re-review",
       "status": "open"
     }
   }
