@@ -714,7 +714,7 @@ describe("db/migrate structural foreign-key check on the plain path (RKOI follow
     expect(rows).toEqual([{ version: 1 }, { version: 2 }]);
   });
 
-  it("refuses a plain migration adding a foreign key to a column that is not a key on the target table (no PK, no UNIQUE index)", () => {
+  it("refuses a plain migration adding a foreign key to a column that is not a key on the target table (no PK, no UNIQUE index) -- via SQLite's own parent-side resolution, not a raw SqliteError", () => {
     const migrationsDir = setupMigrationsDir({ "0001_parent.sql": "CREATE TABLE parent (code TEXT NOT NULL);" });
     const db = freshDb();
     runMigrations(db, migrationsDir);
@@ -729,8 +729,11 @@ describe("db/migrate structural foreign-key check on the plain path (RKOI follow
     );
 
     expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    // The parent-side probe (`findParentSideForeignKeyProbeFailure`) names
+    // the PARENT table it prepared the DELETE against, not the child, and
+    // quotes SQLite's own "foreign key mismatch" message verbatim.
     expect(() => runMigrations(db, migrationsDir)).toThrow(
-      /^migration_foreign_key_check_failed:.*"child".*"parent" columns \(code\)/s,
+      /^migration_foreign_key_check_failed:.*"parent".*foreign key mismatch.*"child".*"parent"/s,
     );
 
     const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
@@ -928,6 +931,164 @@ describe("db/migrate structural foreign-key check on the plain path (RKOI follow
   );
 });
 
+// RKOI review (same critical, second revision): the FIRST fix for the
+// collation-parser critical replaced it with a per-constraint, CHILD-side
+// `UPDATE ... WHERE 0` probe guarded by a JS pre-filter (table/column
+// existence, "is this a key" by column-NAME matching) that ran BEFORE
+// SQLite was ever consulted -- and that pre-filter itself disagreed with
+// SQLite on five more real, valid shapes, all case- or generated-column
+// related. The fix: JS keeps exactly one check (missing target table,
+// case-insensitive), and the probe moves to the PARENT side
+// (`DELETE FROM "<target>" WHERE 0`), which names no column at all and so
+// cannot mismatch on casing or a generated column. These tests use their
+// own temporary migration directories; the root migrations/ files are
+// never touched.
+describe("db/migrate case-insensitive resolution and generated columns are not false rejections (RKOI critical, second revision)", () => {
+  // Every shape below is a real, valid parent key or FK that SQLite itself
+  // accepts, and every one is a shape the retired child-side-probe-plus-JS-
+  // prefilter revision used to falsely REJECT.
+  const CASE_AND_GENERATED_SHAPES_SQLITE_ACCEPTS = [
+    [
+      "a case-different target column (REFERENCES parent(ID), actual column id)",
+      "CREATE TABLE parent (id TEXT PRIMARY KEY);",
+      "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(ID));",
+    ],
+    [
+      "a case-different target table (REFERENCES Parent(id), actual table parent)",
+      "CREATE TABLE parent (id TEXT PRIMARY KEY);",
+      "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES Parent(id));",
+    ],
+    [
+      "a case-different UNIQUE index column (index on Code, FK names code)",
+      "CREATE TABLE parent (Code TEXT);\nCREATE UNIQUE INDEX parent_code_idx ON parent(Code);",
+      "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_code TEXT NOT NULL REFERENCES parent(code));",
+    ],
+    [
+      "a GENERATED ... UNIQUE parent key column",
+      "CREATE TABLE parent (raw TEXT, code TEXT GENERATED ALWAYS AS (raw) STORED UNIQUE);",
+      "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_code TEXT NOT NULL REFERENCES parent(code));",
+    ],
+    [
+      "a GENERATED child FK column",
+      "CREATE TABLE parent (id TEXT PRIMARY KEY);",
+      "CREATE TABLE child (id INTEGER PRIMARY KEY, raw TEXT, parent_id TEXT GENERATED ALWAYS AS (raw) STORED REFERENCES parent(id));",
+    ],
+  ];
+
+  it.each(CASE_AND_GENERATED_SHAPES_SQLITE_ACCEPTS)(
+    "accepts %s on the plain path",
+    (_description, parentSql, childSql) => {
+      const migrationsDir = setupMigrationsDir({ "0001_parent.sql": parentSql });
+      const db = freshDb();
+      runMigrations(db, migrationsDir);
+
+      writeFileSync(path.join(migrationsDir, "0002_child.sql"), childSql, "utf8");
+
+      const result = runMigrations(db, migrationsDir);
+      expect(result.appliedCount).toBe(1);
+      const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+      expect(rows).toEqual([{ version: 1 }, { version: 2 }]);
+    },
+  );
+
+  it.each(CASE_AND_GENERATED_SHAPES_SQLITE_ACCEPTS)(
+    "accepts %s on the directive path",
+    (_description, parentSql, childSql) => {
+      const migrationsDir = setupMigrationsDir({ "0001_parent.sql": parentSql });
+      const db = freshDb();
+      runMigrations(db, migrationsDir);
+
+      writeFileSync(path.join(migrationsDir, "0002_child.sql"), withDirective(childSql), "utf8");
+
+      const result = runMigrations(db, migrationsDir);
+      expect(result.appliedCount).toBe(1);
+      const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+      expect(rows).toEqual([{ version: 1 }, { version: 2 }]);
+    },
+  );
+
+  // A dangling reference is still refused when the dropped table's name
+  // differs only in case from what the child's REFERENCES clause ends up
+  // pointing at -- `findMissingForeignKeyTargetTable`'s case-insensitive
+  // comparison must not accidentally treat a genuinely-missing table as
+  // present just because SOME differently-cased name would have matched.
+  function renameAwayCaseVariantRebuildBody() {
+    return [
+      'ALTER TABLE parent RENAME TO "PARENT_OLD";',
+      "CREATE TABLE parent (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('a', 'b')));",
+      'INSERT INTO parent (id, kind) SELECT id, kind FROM "PARENT_OLD";',
+      'DROP TABLE "PARENT_OLD";',
+    ].join("\n");
+  }
+
+  it("refuses a case-variant dangling reference (REFERENCES \"PARENT_OLD\") on the plain path, with an empty child", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    runMigrations(db, migrationsDir);
+    db.prepare("INSERT INTO parent (id, kind) VALUES ('p1', 'a')").run();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM child").get().count).toBe(0);
+
+    addMigration0002(migrationsDir, renameAwayCaseVariantRebuildBody());
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_foreign_key_check_failed:.*"child".*PARENT_OLD/is,
+    );
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+  });
+
+  it("refuses the same case-variant dangling reference on the directive path too, with an empty child", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    runMigrations(db, migrationsDir);
+    db.prepare("INSERT INTO parent (id, kind) VALUES ('p1', 'a')").run();
+
+    addMigration0002(migrationsDir, withDirective(renameAwayCaseVariantRebuildBody()));
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_foreign_key_check_failed:.*"child".*PARENT_OLD/is,
+    );
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+  });
+
+  it("wraps a raw SqliteError from the parent-side probe in the prefixed SchemaVersionError -- a parent-table DELETE trigger referencing a table dropped by this same migration", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent.sql": [
+        "CREATE TABLE parent (id TEXT PRIMARY KEY);",
+        "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));",
+        "CREATE TABLE audit_log (msg TEXT);",
+        "CREATE TRIGGER parent_audit AFTER DELETE ON parent BEGIN INSERT INTO audit_log(msg) VALUES ('deleted'); END;",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    // This migration's own SQL breaks the trigger: it drops the table the
+    // trigger body references, without touching the trigger itself.
+    writeFileSync(path.join(migrationsDir, "0002_drop_audit.sql"), "DROP TABLE audit_log;", "utf8");
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    // Never a raw SqliteError -- always the prefixed error, naming the
+    // parent table and quoting SQLite's own message.
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_foreign_key_check_failed:.*"parent".*no such table.*audit_log/is,
+    );
+
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    // The DROP itself rolled back too -- the whole transaction, not just
+    // the parts that failed.
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'audit_log'").all()).toHaveLength(1);
+  });
+});
+
 // RKOI review (same follow-up round, warning 1): a structural defect that
 // predates a given migration -- introduced out-of-band, or by an earlier
 // migration -- must not be blamed on an unrelated pending migration that
@@ -1003,6 +1164,82 @@ describe("db/migrate pre-existing structural foreign-key violation is not blamed
     expect(rows).toEqual([{ version: 1 }]);
     // The directive path's own foreign_keys restoration is unaffected --
     // this guard runs before it ever toggles the pragma off.
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  // Corrupts the schema out-of-band into a table-level PK collation
+  // mismatch (see the module header comment: this is the exact false
+  // ACCEPTANCE the retired parser used to let through) rather than a
+  // missing table, so this specifically proves the pre-existing check's
+  // PARENT-SIDE PROBE half -- not just its missing-table half -- also runs
+  // before an unrelated migration and is not blamed on it.
+  function corruptParentIntoPkCollateMismatch(db) {
+    // The SAFE rebuild order (see docs/MIGRATION.md): only `parent_new` is
+    // ever renamed, so child's `REFERENCES parent(id)` clause is never
+    // rewritten and still names "parent" throughout -- unlike renaming
+    // `parent` itself away, which would leave child pointing at a missing
+    // table instead of at the real, mismatched one this test needs.
+    db.pragma("foreign_keys = OFF");
+    db.exec("CREATE TABLE parent_new (id TEXT, PRIMARY KEY (id COLLATE NOCASE));");
+    db.exec("INSERT INTO parent_new (id) SELECT id FROM parent;");
+    db.exec("DROP TABLE parent;");
+    db.exec("ALTER TABLE parent_new RENAME TO parent;");
+    db.pragma("foreign_keys = ON");
+  }
+
+  it("reports a pre-existing table-level PRIMARY KEY (id COLLATE NOCASE) mismatch distinctly on the plain path, and never runs the unrelated migration's SQL", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent_child.sql": [
+        "CREATE TABLE parent (id TEXT PRIMARY KEY);",
+        "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    corruptParentIntoPkCollateMismatch(db);
+
+    writeFileSync(path.join(migrationsDir, "0002_unrelated.sql"), "CREATE TABLE unrelated (id INTEGER PRIMARY KEY);", "utf8");
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_preexisting_structural_violation:.*"parent".*foreign key mismatch/is,
+    );
+    expect(() => runMigrations(db, migrationsDir)).not.toThrow(/^migration_foreign_key_check_failed:/);
+
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'unrelated'").all()).toEqual([]);
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+  });
+
+  it("reports the same pre-existing PRIMARY KEY (id COLLATE NOCASE) mismatch on the directive path too, before the directive migration's SQL ever runs", () => {
+    const migrationsDir = setupMigrationsDir({
+      "0001_parent_child.sql": [
+        "CREATE TABLE parent (id TEXT PRIMARY KEY);",
+        "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id TEXT NOT NULL REFERENCES parent(id));",
+      ].join("\n"),
+    });
+    const db = freshDb();
+    runMigrations(db, migrationsDir);
+
+    corruptParentIntoPkCollateMismatch(db);
+
+    writeFileSync(
+      path.join(migrationsDir, "0002_unrelated.sql"),
+      withDirective("CREATE TABLE unrelated (id INTEGER PRIMARY KEY);"),
+      "utf8",
+    );
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    expect(() => runMigrations(db, migrationsDir)).toThrow(
+      /^migration_preexisting_structural_violation:.*"parent".*foreign key mismatch/is,
+    );
+
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'unrelated'").all()).toEqual([]);
+    const rows = db.prepare("SELECT version FROM schema_migrations ORDER BY version").all();
+    expect(rows).toEqual([{ version: 1 }]);
+    // This guard ran before the directive path ever toggled foreign_keys
+    // off, so it is unaffected and restored to ON.
     expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
   });
 });
