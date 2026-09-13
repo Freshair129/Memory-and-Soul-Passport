@@ -1,7 +1,7 @@
 ---
-version: "0.2.2b"
+version: "0.2.3b"
 created_at: "2026-09-13T21:00:00+07:00,Claude Fable 5.1,working-tree"
-last_update: "2026-09-14T02:30:00+07:00,Claude Fable 5.1"
+last_update: "2026-09-14T04:00:00+07:00,Claude Opus 5"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -832,27 +832,53 @@ So the runner gains one explicit mode, the standard SQLite procedure, and
   on. The message is prefixed `migration_foreign_key_check_failed:` and
   names the migration and the first violating table; no new error code is
   introduced.
-- With foreign keys off, `ALTER TABLE vaults_new RENAME TO vaults` does
-  **not** rewrite the child tables' `REFERENCES` clauses (SQLite rewrites
-  them only while foreign keys are enabled), so `entities`, `promotions`,
-  `links` and `vault_mounts` keep pointing at the name `vaults` and
-  re-attach to the rebuilt table; `foreign_key_check` then confirms every
-  child row resolves before anything is committed.
+- **Rebuild order is part of the rule (erratum, 0.2.3b).** 0.2.2b said
+  SQLite rewrites child `REFERENCES` clauses on rename "only while foreign
+  keys are enabled". That is false on the bundled SQLite 3.53.x with
+  `legacy_alter_table = 0`: `ALTER TABLE X RENAME TO X_old` rewrites every
+  child `REFERENCES X` to `REFERENCES "X_old"` whether `foreign_keys` is
+  ON or OFF (RKOI's WP-E0 review, probe P3). The only safe order is the one
+  §12.1 already uses — create `vaults_new`, copy, `DROP TABLE vaults`,
+  `ALTER TABLE vaults_new RENAME TO vaults` — which never renames the
+  referenced table, so `entities`, `promotions`, `links` and `vault_mounts`
+  keep pointing at the name `vaults` and re-attach to the rebuilt table
+  (probe P4). The "rename-away" order is forbidden, and the runner enforces
+  that rather than trusting authors (next bullet).
+- **The runner checks schema as well as rows.** `PRAGMA foreign_key_check`
+  only inspects rows, so a rename-away rebuild whose child table is empty —
+  every fresh database, every test run — would pass it, commit, boot, and
+  fail on the first child insert with `no such table`. Before commit the
+  runner therefore also verifies, for every table, that each
+  `PRAGMA foreign_key_list` target exists and that the referenced columns
+  are the target's primary key or covered by a unique index; any failure
+  throws the same prefixed `SchemaVersionError` and rolls the migration
+  back. It also refuses to start a directive migration inside an open
+  transaction, reads `foreign_keys` back and requires `0` before applying,
+  runs `foreign_key_check` once *before* the SQL so a pre-existing orphan is
+  reported as pre-existing rather than blamed on the migration, and treats
+  a misplaced directive (not exactly line 1, leading BOM or whitespace,
+  different casing) as a loud startup error rather than a silent fall-back
+  to the plain path.
 - The directive is part of the file, so it is covered by the checksum-drift
   guard; the runner never decides on its own to relax foreign keys.
-- `tests/integration/migrate.test.mjs` gains a **populated-database** case:
-  apply 0001–0007, insert vault / entity / history / link / promotion /
-  mount / journal rows, apply 0008, and assert every row survives, every FK
-  still resolves, and `PRAGMA foreign_keys` is back to `1`. When 0011 lands
-  the same case grows to insert `episode_consolidations` and
-  `entity_provenance` rows (both carry `vault_id` foreign keys) before a
-  re-run of the rebuild sequence. A second case asserts a rebuild that would
-  orphan a row is rolled back and reported. A third case inserts a `vaults`
-  row with an unexpected `status` (say `'suspended'`) before 0008 and
-  asserts the migration fails loudly on the new `status` CHECK and rolls
-  back — 0008 narrows an existing column, and the narrowing must be proven
-  to refuse rather than assumed safe (today the only writer is
-  `vault-registry.mjs`, which hardcodes `'active'`).
+- **WP-E0 proves the runner; WP-E1 proves 0008 on the real graph.** WP-E0's
+  tests use synthetic parent/child migrations in a temporary directory,
+  because 0008 does not exist yet and a stand-in 0008 would test SQL that
+  never ships. The real-graph cases therefore belong to WP-E1, which ships
+  0008, and are listed in its proof column (§18): apply 0001–0007 to both a
+  **fresh** and a **populated** database (vault / entity / history / link /
+  promotion / mount / journal rows), apply 0008, and assert every row
+  survives, `foreign_key_check` is empty, every child table's `REFERENCES`
+  still names `vaults`, and `PRAGMA foreign_keys` is back to `1` — the
+  fresh case matters most, because it is the one a row-only check would
+  wave through. A second WP-E1 case inserts a `vaults` row with an
+  unexpected `status` (say `'suspended'`) before 0008 and asserts the
+  migration fails loudly on the new `status` CHECK and rolls back — 0008
+  narrows an existing column, and the narrowing must be proven to refuse
+  rather than assumed safe (today the only writer is `vault-registry.mjs`,
+  which hardcodes `'active'`). When 0011 lands the populated case grows to
+  insert `episode_consolidations` and `entity_provenance` rows (both carry
+  `vault_id` foreign keys).
 
 ### 12.1 `0008_principal_vaults.sql` (WP-E1)
 
@@ -1555,7 +1581,7 @@ references. Each packet that adds or changes a tool updates
 | WP | Owner | Scope | Proof required before merge |
 |---|---|---|---|
 | WP-E0 | JANUS | Migration-runner `foreign-keys=off` mode (§12.0) | populated-database and orphan-rollback cases in `tests/integration/migrate.test.mjs`; `docs/MIGRATION.md` and `docs/NOTES.md` rows |
-| WP-E1 | KIN | Migration 0008; `VaultRegistry` principal branches, signature, mount refusal; `msp_vault_resolve`; `decay_policy` in `runDecayTick`; **API-009 0.2.0 amendment** (optional `access_context`, `pinned`); API-011 document and `packages/msp-contracts/schemas/API-011.tools.json` created; §13.1 recorded in `docs/ARCHITECTURE.md` | `principal-vault-scoping`, `provenance-ids-are-not-owners`, decay pinned case, `shared-scope-fail-closed` extension; API-009 conformance cases for absent/present `access_context` |
+| WP-E1 | KIN | Migration 0008; `VaultRegistry` principal branches, signature, mount refusal; `msp_vault_resolve`; `decay_policy` in `runDecayTick`; **API-009 0.2.0 amendment** (optional `access_context`, `pinned`); API-011 document and `packages/msp-contracts/schemas/API-011.tools.json` created; §13.1 recorded in `docs/ARCHITECTURE.md` | `principal-vault-scoping`, `provenance-ids-are-not-owners`, decay pinned case, `shared-scope-fail-closed` extension; API-009 conformance cases for absent/present `access_context`; **0008 on the real migration graph** in `migrate.test.mjs` against a fresh and a populated 0001–0007 database (rows survive, `foreign_key_check` empty, child `REFERENCES` still name `vaults`, `foreign_keys` restored) and the unexpected-`status` `vaults` row refused (§12.0) |
 | WP-E2 | KIN | Migration 0009; threads, bindings, participants, instances, attachments, sessions, events; sweep; `principal_hmac` journaling; env allowlist + test | tenant isolation, participant scoping (incl. agent leg) and mutation, ordering, instance/operator, binding privacy suites; fake-clock integration tests |
 | WP-E3a | KIN | Migration 0010; context-tool ownership for scoped `contexts` rows (§10) | `context-tools-ownership`; API-006 contract update; `docs/NOTES.md` gap row updated |
 | WP-E3 | KIN | Migration 0011; episodes, consolidations, provenance, `redaction_state` on entities/history, `msp_episode_commit` / `msp_episode_consolidate` / `msp_episode_list` / `msp_turn_context`, extractive fallback | group-thread private context, cross-thread digest, consolidation scoping, session-close fencing; replay/diff/audit parity on scoped `contexts` rows; populated-database migration case extended for 0011 children |
@@ -1635,6 +1661,7 @@ before merge; GHOST owns the suites in §15.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.3b | 2026-09-14 | proposed | Erratum from RKOI's WP-E0 implementation review: §12.0's claim that SQLite rewrites child `REFERENCES` on rename only while foreign keys are enabled is false on the bundled SQLite 3.53.x — renaming a referenced table away rewrites children regardless — so the rebuild order (create new → copy → drop old → rename new) is now stated as part of the rule, and the runner is specified to check schema (every FK target exists and is a key) as well as rows, to refuse inside an open transaction, to verify the pragma took effect, to pre-check for existing orphans, and to reject a misplaced directive. The real-migration-graph populated/fresh and unexpected-`status` cases move from WP-E0 to WP-E1's proof column, since 0008 ships in WP-E1. | feat/wp-e0-migration-runner-fk-off | Claude Opus 5 |
 | 0.2.2b | 2026-09-14 | proposed | Folds RKOI's eight round-three warnings (v0.2.1b was APPROVED, 0 critical; see §0.1): `instance_thread_attachments` gets a surrogate key, a partial unique on open rows per (instance, thread, opening membership), an UPDATE trigger permitting only detachment and no DELETE, so re-attach is an insert and the agent leg survives while any opener's row is open; `redaction_marked_at` pinned to the `redacted_pending` transition with a CHECK; an already-`archived` episode erases straight to `archived_redacted`; vault erasure is one `UPDATE` statement; populated-database migration test gains an unexpected-`status` row; identity-key presence recorded as §19 decision 8 with a recommended default (`MSP_REQUIRE_IDENTITY_KEY` opt-in) and a rotation procedure (`MSP_IDENTITY_HMAC_KEY_PREVIOUS` dual-read window, journal pseudonyms never rewritten) in §6.2; `entities_fts` listed as its own erasure row; `summary_text` non-empty CHECK. Env allowlist grows to seven names. | working-tree | Claude Fable 5.1 |
 | 0.2.1b | 2026-09-14 | proposed | Answers RKOI review round two (2 critical, 12 warning; see §0.1): the agent's thread access is a recorded relation through a live attached instance created only by a participant's `msp_session_open` (no tenant-wide implicit participation; `agent` is not a membership role); erasure enumerates every table and its disposition (§11.1) with content tombstones on `entities`/`entity_history`/`episode_consolidations`/`episodes`, `embeddings` deletion, vault rows erased and cleared, and a direct-table assertion in the erasure suite; `vault_resolutions` withdrawn; mount refusal covers UPDATE; `isVaultAccessibleTo` signature stated; `contexts` scope columns moved to their own migration 0010 (episodes now 0011); runner mode sets `user_version` and reuses `SchemaVersionError`; journal carries `principal_hmac` where a principal must stay auditable; explicit trust-boundary paragraph (§13.1); export includes the passport as an access right; instance re-open bound; extractive episodes store no salient; one id/ref rule; `thread_participants.tenant_id`; §15 rows for provenance/consolidation rows; populated-database test extended to 0011 children. | working-tree | Claude Fable 5.1 |
 | 0.2.0b | 2026-09-13 | proposed | Answers RKOI review round one (13 critical, 11 warning; see §0.2): migration-runner `foreign-keys=off` mode and WP-E0 for the `vaults` rebuild; schema CHECKs making principal owner columns NOT NULL; principal vault types never mountable with owner branches ahead of the mount short-circuit; `requires_access_context` dropped — access context mandatory for principal vaults on every path including all nine `msp_memory_*` tools, shipped inside WP-E1 as API-009 0.2.0; explicit participation trust rule; event authorship checked against membership; consolidation only under the owning principal's own context with `msp_episode_consolidate` per participant; cross-thread digest limited to direct threads; principal-addressed tools bound to the caller or `data_subject_admin`; reference-only `contexts` receipts and WP-E3a; session scratchpad KV withdrawn; redaction trigger pins every column; stub-entity provenance replaced by `entity_provenance`; thread-scope guard takes a boolean; retrieval injected into `msp-episodic`; journal actor/workspace rules; ref convention; `pinned` as an API-009 amendment; `allow_passport` flag; extractive `salient` empty; `archived_redacted` terminal state; operator and instance binding; Gate A row → packet table; env allowlist. | working-tree | Claude Fable 5.1 |
