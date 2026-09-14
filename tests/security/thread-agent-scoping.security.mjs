@@ -914,3 +914,101 @@ test("CRITICAL 2: superseding an unknown id, another agent's AGENT-visibility re
     cleanup();
   }
 });
+
+// BL-MEMOS-048 (Sec.6.1.1): nonce presence (grant_nonce_required) and
+// anti-replay (grant_replayed), on every nonce-required tool except
+// msp_thread_message_append (source_event_id already covers replay) and
+// msp_thread_context (read-only).
+
+test("grant_nonce_required: a nonce-required tool called with no nonce claim at all is refused", async () => {
+  const { dbPath, cleanup } = tempDbPath("noncerequired");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = resolveClaims({ externalRoomRef: "dm-noncerequired", nonce: undefined });
+    await assert.rejects(
+      call("msp_thread_resolve", signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-noncerequired" }, claims)),
+      /grant_nonce_required/,
+      "FAIL-CLOSED VIOLATION: a resolve with no nonce claim at all was accepted",
+    );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("msp_thread_message_append and msp_thread_context succeed with no nonce claim at all -- they are exempt", async () => {
+  const { dbPath, cleanup } = tempDbPath("noncenotrequired");
+  const call = spawnRuntime(dbPath);
+  try {
+    const resolveClaimsWithNonce = resolveClaims({ externalRoomRef: "dm-noncenotrequired", readPrivate: true });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-noncenotrequired" }, resolveClaimsWithNonce),
+    );
+    const appendClaimsNoNonce = { ...resolveClaimsWithNonce, nonce: undefined };
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi" },
+        appendClaimsNoNonce,
+      ),
+    );
+    await call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, appendClaimsNoNonce));
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("grant_replayed: reusing the same nonce across two different nonce-required calls for the same tenant is refused, and the second call's mutation never happens", async () => {
+  const { dbPath, cleanup } = tempDbPath("noncereplay");
+  const call = spawnRuntime(dbPath);
+  try {
+    const FIXED_NONCE = "fixed-nonce-for-replay-test-0123456789";
+    const firstClaims = resolveClaims({ externalRoomRef: "dm-noncereplay", nonce: FIXED_NONCE, writePrivate: true });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-noncereplay" }, firstClaims),
+    );
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi" },
+        { ...firstClaims, nonce: undefined },
+      ),
+    );
+
+    // A SECOND, otherwise entirely valid, nonce-required call reusing the
+    // EXACT SAME nonce for the SAME tenant -- refused, and the record it
+    // would have created must never exist.
+    const replayClaims = { ...firstClaims, nonce: FIXED_NONCE };
+    await assert.rejects(
+      call(
+        "msp_thread_memory_record",
+        signed(
+          "msp_thread_memory_record",
+          { thread_id: thread.threadId, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", body: { should: "never be stored" }, source_message_refs: [inbound.message.messageId] },
+          replayClaims,
+        ),
+      ),
+      /grant_replayed/,
+      "FAIL-CLOSED VIOLATION: a replayed nonce was accepted on a second, different nonce-required call",
+    );
+
+    await call.close();
+    const { open } = await import("@freshair129/msp-storage/connection");
+    const db = open(dbPath);
+    try {
+      const rows = db.prepare("SELECT * FROM protected_memory_records WHERE thread_id = ?").all(thread.threadId);
+      assert.equal(rows.length, 0, "FAIL-CLOSED VIOLATION: a replayed-nonce call's mutation was stored anyway");
+      const nonceRows = db.prepare("SELECT nonce FROM grant_nonces WHERE nonce = ?").all(FIXED_NONCE);
+      assert.equal(nonceRows.length, 1, "the nonce must be recorded exactly once (from the FIRST, successful call), not zero or twice");
+    } finally {
+      db.close();
+    }
+  } finally {
+    cleanup();
+  }
+});

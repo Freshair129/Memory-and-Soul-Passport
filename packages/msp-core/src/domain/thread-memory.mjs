@@ -471,6 +471,36 @@ export class ThreadMemoryStore {
     return hmacPrincipal(this.#identityHmacKey, speakerId);
   }
 
+  // PH-MEMOS-3 stage 2 (BL-MEMOS-048, DEC-MEMOS-20, Sec.6.1.1): consumes a
+  // grant's nonce for anti-replay -- called from INSIDE each nonce-required
+  // store method's own synchronous db.transaction() body, immediately
+  // alongside its own write, so a replayed nonce rolls back the whole
+  // mutation with it (never a partial apply). A PRIMARY KEY conflict on
+  // (tenant_id, nonce) means this exact grant was already consumed for
+  // this tenant -- re-thrown as GrantReplayedError. Pruning is bounded (at
+  // most 200 rows), opportunistic (runs immediately before every insert,
+  // never a separate scheduled job), and compares against the REAL server
+  // wall clock ONLY -- never the synthetic MSP_TEST_CLOCK `now` a caller
+  // might supply elsewhere, so a test can never manipulate its own nonces
+  // out of existence early.
+  #consumeNonce(tenantId, nonce, timestamp) {
+    const nonceValue = requiredString(nonce, "nonce");
+    this.#db.prepare("DELETE FROM grant_nonces WHERE rowid IN (SELECT rowid FROM grant_nonces WHERE expires_at < ? LIMIT 200)").run(new Date().toISOString());
+    // A nonce's own expiry mirrors the grant's own maximum lifetime
+    // (verifyThreadGrant's 65-second expiresAt window, thread-access.mjs)
+    // -- once a grant this old could never verify again anyway, its nonce
+    // is safe to prune; this is a garbage-collection bound, not a security
+    // boundary (replay is already prevented by the PRIMARY KEY itself for
+    // as long as the row exists).
+    const expiresAt = new Date(Date.parse(timestamp) + 65_000).toISOString();
+    try {
+      this.#db.prepare("INSERT INTO grant_nonces (tenant_id, nonce, expires_at) VALUES (?, ?, ?)").run(tenantId, nonceValue, expiresAt);
+    } catch (error) {
+      if (!String(error?.message).includes("UNIQUE")) throw error;
+      throw new GrantReplayedError();
+    }
+  }
+
   #journalAppend(entry) {
     // W5: never journal a raw speaker/person id. `actor` is always the HMAC
     // of the raw speaker id (or a fixed, non-identity system label for
@@ -491,6 +521,7 @@ export class ThreadMemoryStore {
     workspaceId,
     assertAgents = false,
     mayMint = true,
+    nonce,
     now,
   } = {}) {
     const kind = enumValue(threadKind, THREAD_KINDS, "thread_kind");
@@ -546,8 +577,10 @@ export class ThreadMemoryStore {
       const thread = rowThread({ ...existing, updated_at: timestamp });
       // §8.1: this call did not just mint the thread, so it goes through
       // the ordinary current-or-assertAgents gate, exactly like a mint-race
-      // loser below.
-      const agentAttached = this.#resolveAgentCurrency(thread.threadId, tenant, agent, workspace, assertAgents, timestamp);
+      // loser below. BL-MEMOS-048: the nonce is consumed in the SAME
+      // transaction as any attach, on every outcome (no-op, self-assert
+      // attach) -- a replay rolls back the attach with it.
+      const agentAttached = this.#resolveAgentCurrencyAndNonce(thread.threadId, tenant, agent, workspace, assertAgents, nonce, timestamp);
       return { thread, created: false, agentAttached };
     }
 
@@ -594,6 +627,10 @@ export class ThreadMemoryStore {
             VALUES (?, ?, ?, ?, ?, ?)
           `)
           .run(ref("agent-attachment"), tenant, threadId, agent, workspace, timestamp);
+        // BL-MEMOS-048: consumed in the SAME transaction as the mint --
+        // a replayed nonce rolls back the whole mint, not merely the
+        // attach.
+        this.#consumeNonce(tenant, nonce, timestamp);
       })();
     } catch (error) {
       if (!String(error?.message).includes("UNIQUE")) throw error;
@@ -612,7 +649,7 @@ export class ThreadMemoryStore {
       // lookup ran before the winner's INSERT committed. It goes through
       // the ordinary existing-thread gate like any other caller resolving
       // a thread it did not create.
-      const agentAttached = this.#resolveAgentCurrency(thread.threadId, tenant, agent, workspace, assertAgents, timestamp);
+      const agentAttached = this.#resolveAgentCurrencyAndNonce(thread.threadId, tenant, agent, workspace, assertAgents, nonce, timestamp);
       return { thread, created: false, agentAttached };
     }
 
@@ -635,32 +672,40 @@ export class ThreadMemoryStore {
   // current agent is a no-op (agentAttached: false); a non-current agent
   // needs assertAgents to attach (agentAttached: true) and is otherwise
   // refused agent_not_current. Returns whether THIS call caused a new
-  // attachment.
-  #resolveAgentCurrency(threadId, tenantId, agentId, workspaceId, assertAgents, timestamp) {
-    const current = this.#db
-      .prepare("SELECT 1 FROM thread_agents WHERE thread_id = ? AND agent_id = ? AND workspace_id = ? AND left_at IS NULL")
-      .get(threadId, agentId, workspaceId);
-    if (current) return false;
-    if (!assertAgents) {
-      throw new AgentNotCurrentError();
-    }
-    try {
-      this.#db
-        .prepare(`
-          INSERT INTO thread_agents (agent_attachment_id, tenant_id, thread_id, agent_id, workspace_id, joined_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `)
-        .run(ref("agent-attachment"), tenantId, threadId, agentId, workspaceId, timestamp);
-    } catch (error) {
-      // A concurrent self-assert race for the identical (thread_id,
-      // agent_id, workspace_id) triple: the partial UNIQUE index
-      // (left_at IS NULL) allows only one open row, so the loser here is
-      // already current the instant the winner's INSERT commits -- this is
-      // success, not a failure.
-      if (!String(error?.message).includes("UNIQUE")) throw error;
-      return false;
-    }
-    return true;
+  // attachment. BL-MEMOS-048: the nonce is consumed in the SAME
+  // transaction, on every outcome (no-op or attach) -- a replay rolls
+  // back the whole call, never merely because the outcome happened to be
+  // a no-op.
+  #resolveAgentCurrencyAndNonce(threadId, tenantId, agentId, workspaceId, assertAgents, nonce, timestamp) {
+    return this.#db.transaction(() => {
+      const current = this.#db
+        .prepare("SELECT 1 FROM thread_agents WHERE thread_id = ? AND agent_id = ? AND workspace_id = ? AND left_at IS NULL")
+        .get(threadId, agentId, workspaceId);
+      let attached = false;
+      if (!current) {
+        if (!assertAgents) {
+          throw new AgentNotCurrentError();
+        }
+        try {
+          this.#db
+            .prepare(`
+              INSERT INTO thread_agents (agent_attachment_id, tenant_id, thread_id, agent_id, workspace_id, joined_at)
+              VALUES (?, ?, ?, ?, ?, ?)
+            `)
+            .run(ref("agent-attachment"), tenantId, threadId, agentId, workspaceId, timestamp);
+          attached = true;
+        } catch (error) {
+          // A concurrent self-assert race for the identical (thread_id,
+          // agent_id, workspace_id) triple: the partial UNIQUE index
+          // (left_at IS NULL) allows only one open row, so the loser here
+          // is already current the instant the winner's INSERT commits --
+          // this is success, not a failure.
+          if (!String(error?.message).includes("UNIQUE")) throw error;
+        }
+      }
+      this.#consumeNonce(tenantId, nonce, timestamp);
+      return attached;
+    })();
   }
 
   appendMessage({
@@ -884,6 +929,7 @@ export class ThreadMemoryStore {
     verificationState = "CANDIDATE",
     agentId = null,
     visibility = "THREAD",
+    nonce,
     now,
   } = {}) {
     const thread = this.#requireThread(threadId);
@@ -949,7 +995,13 @@ export class ThreadMemoryStore {
     // existing record_id and hand B back A's AGENT-visibility row.
     const recordId = `memory-record_${sha256(JSON.stringify([thread.threadId, sessionId, memoryKind, speaker, person, scopeValue, payload, [...sourceRefs].sort(), supersedesRecordId, verification, memoryStatus, recordAgentId, recordVisibility]))}`;
     const existingRecord = this.#db.prepare('SELECT * FROM protected_memory_records WHERE record_id=?').get(recordId);
-    if (existingRecord) return rowProtected(existingRecord);
+    if (existingRecord) {
+      // BL-MEMOS-048: the dedup short-circuit is not itself a write, but
+      // this is still a nonce-required tool -- a replayed grant is refused
+      // even when the call would otherwise have been a no-op.
+      this.#consumeNonce(thread.tenantId, nonce, timestamp);
+      return rowProtected(existingRecord);
+    }
     // PH-MEMOS-3 stage 2 (BL-MEMOS-043, RKOI stage-2 review round 2,
     // owner-direction ruling): one identical validation_failed answer,
     // same fixed message, for an unknown id, another agent's
@@ -970,6 +1022,10 @@ export class ThreadMemoryStore {
     }
     try {
       this.#db.transaction(() => {
+      // BL-MEMOS-048: consumed first, inside the same transaction as the
+      // INSERT (and any supersession UPDATE) below -- a replay rolls back
+      // the whole write.
+      this.#consumeNonce(thread.tenantId, nonce, timestamp);
       this.#db
         .prepare(`
           INSERT INTO protected_memory_records
@@ -1102,8 +1158,14 @@ export class ThreadMemoryStore {
   // channel_type (see hmacRoomRef's header comment), so it can be computed
   // ONCE from the caller's own filter fields and bound directly into the
   // SQL, rather than re-derived per candidate row.
-  sweepIdleSessions({ now, limit = 100, tenantId, businessId, channelAccountId, externalRoomRef } = {}) {
+  sweepIdleSessions({ now, limit = 100, tenantId, businessId, channelAccountId, externalRoomRef, nonce } = {}) {
     const timestamp = iso(now);
+    // BL-MEMOS-048: consumed once per sweep call, regardless of whether
+    // any session actually turned out to be due -- sweep is nonce-required
+    // even though it may be a structural no-op. Its own tiny transaction
+    // (a separate one from the due-session-closing transaction below,
+    // which may legitimately touch zero rows).
+    this.#db.transaction(() => this.#consumeNonce(requiredString(tenantId, "tenant_id"), nonce, timestamp))();
     const max = positiveInteger(limit, "limit");
     const roomHmac = externalRoomRef ? this.#hmacRoomRef({ tenantId, channelAccountId, externalRoomRef }) : null;
     const due = this.#db.prepare(`SELECT s.* FROM chat_sessions s JOIN threads t ON s.thread_id=t.thread_id
@@ -1147,6 +1209,7 @@ export class ThreadMemoryStore {
     invocationState,
     leaseToken,
     agentId = null,
+    nonce,
     now,
   } = {}) {
     const sessionRef = requiredString(sessionId, "session_id");
@@ -1172,6 +1235,9 @@ export class ThreadMemoryStore {
         if (stored.sourceDigest !== sourceDigest || stored.coveredFromSequence !== start || stored.coveredThroughSequence !== end ||
             stored.policyRevision !== policy || stored.summarizerVersion !== summarizer ||
             JSON.stringify(stored.summary) !== JSON.stringify(this.#validateSummary(summary, sources))) throw new ThreadMemoryConflictError('Committed job retry differs.');
+        // BL-MEMOS-048: the already-committed retry short-circuit is not
+        // itself a write, but commit is still nonce-required.
+        this.#db.transaction(() => this.#consumeNonce(thread.tenantId, nonce, timestamp))();
         return { summary: stored, jobId: done.job_id };
       }
     }
@@ -1190,6 +1256,9 @@ export class ThreadMemoryStore {
     const summaryPayload = this.#validateSummary(summary, sourceRows);
 
     const result = this.#db.transaction(() => {
+      // BL-MEMOS-048: consumed first, inside the same transaction as the
+      // summary INSERT and job/session UPDATEs below.
+      this.#consumeNonce(thread.tenantId, nonce, timestamp);
       const current = this.#db.prepare('SELECT * FROM session_compaction_jobs WHERE job_id=?').get(job.job_id);
       if (current.status !== 'RUNNING' || current.lease_token !== leaseToken || Date.parse(current.leased_until) <= Date.parse(timestamp) ||
           current.source_start_sequence !== start || current.source_end_sequence !== end) throw new CompactionLeaseConflictError('Compaction lease changed.');
@@ -1238,7 +1307,7 @@ export class ThreadMemoryStore {
     return { summary: rowSummary(this.#db.prepare("SELECT * FROM session_summaries WHERE summary_id = ?").get(result.summaryId)), jobId: job.job_id };
   }
 
-  claimCompaction({ jobId, workerId, leaseSeconds = 120, now } = {}) {
+  claimCompaction({ jobId, workerId, leaseSeconds = 120, nonce, now } = {}) {
     const timestamp = iso(now);
     const worker = requiredString(workerId, 'worker_id');
     const seconds = positiveInteger(leaseSeconds, 'lease_seconds');
@@ -1246,6 +1315,10 @@ export class ThreadMemoryStore {
     return this.#db.transaction(() => {
       const job = this.#db.prepare('SELECT * FROM session_compaction_jobs WHERE job_id=?').get(requiredString(jobId, 'job_id'));
       if (!job || ['COMMITTED', 'FAILED'].includes(job.status)) throw new CompactionLeaseConflictError('Job is missing or terminal.');
+      // BL-MEMOS-048: consumed inside the same transaction as the lease
+      // UPDATE below, once the job is known to exist -- an unknown job_id
+      // is refused before ever touching a real tenant's nonce ledger.
+      this.#consumeNonce(job.tenant_id, nonce, timestamp);
       if (job.status === 'RUNNING' && Date.parse(job.leased_until) > Date.parse(timestamp)) throw new CompactionLeaseConflictError('Job already leased.');
       // Model requests expire explicitly after two minutes; a live request must
       // finish before the summarizer can acquire the transcript.
@@ -1271,12 +1344,13 @@ export class ThreadMemoryStore {
     })();
   }
 
-  recordDelivery({ inboundMessageId, sourceEventId, receiptId, outcome, text, providerRef, scope, now } = {}) {
+  recordDelivery({ inboundMessageId, sourceEventId, receiptId, outcome, text, providerRef, scope, nonce, now } = {}) {
     const inboundId = requiredString(inboundMessageId, 'inbound_message_id');
     if (sourceEventId !== `${inboundId}:assistant`) throw new ThreadMemoryValidationError('Delivery source must name its inbound message.');
     const state = enumValue(outcome, new Set(['ACCEPTED', 'DELIVERED', 'FAILED', 'UNKNOWN']), 'outcome');
     const id = requiredString(receiptId, 'receipt_id');
     const body = boundedText(text, 'text');
+    const timestamp = iso(now);
     const inbound = this.#db.prepare("SELECT * FROM thread_messages WHERE message_id=? AND direction='INBOUND'").get(inboundId);
     if (!inbound) {
       if (!scope?.tenantId || !scope.channelAccountId || !scope.externalRoomRef) throw new ThreadMemoryValidationError('Delivery scope is required.');
@@ -1316,9 +1390,17 @@ export class ThreadMemoryStore {
       // stamped onto the pending row here -- nullable at the schema level
       // (a pre-stage-2 legacy row has neither), but the guard's own
       // currency check (thread-guard.mjs) already guarantees a real
-      // caller reaching this line always has both.
-      this.#db.prepare('INSERT INTO thread_pending_deliveries(receipt_id,inbound_message_id,source_event_id,tenant_id,business_id,channel_account_id,external_room_ref_hmac,outcome,text,provider_ref,recorded_at,agent_id,workspace_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(receipt_id) DO NOTHING')
-        .run(id, inboundId, sourceEventId, scope.tenantId, scope.businessId ?? null, scope.channelAccountId, roomHmac, state, body, providerRef ?? null, iso(now), scope.agentId ?? null, scope.workspaceId ?? null);
+      // caller reaching this line always has both. BL-MEMOS-048: the
+      // pending insert is now wrapped in its own transaction so it commits
+      // or rolls back together with its nonce consumption -- nonce is
+      // only ever consumed for a LIVE (guarded) call; there is no grant,
+      // and nothing to replay-check, for #drainDeliveries' own internal
+      // call (which never sets one).
+      this.#db.transaction(() => {
+        if (nonce) this.#consumeNonce(scope.tenantId, nonce, timestamp);
+        this.#db.prepare('INSERT INTO thread_pending_deliveries(receipt_id,inbound_message_id,source_event_id,tenant_id,business_id,channel_account_id,external_room_ref_hmac,outcome,text,provider_ref,recorded_at,agent_id,workspace_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(receipt_id) DO NOTHING')
+          .run(id, inboundId, sourceEventId, scope.tenantId, scope.businessId ?? null, scope.channelAccountId, roomHmac, state, body, providerRef ?? null, timestamp, scope.agentId ?? null, scope.workspaceId ?? null);
+      })();
       return { receiptId: id, status: 'PENDING_INBOUND' };
     }
     const thread = this.#requireThread(inbound.thread_id);
@@ -1347,6 +1429,10 @@ export class ThreadMemoryStore {
     }
     try {
     return this.#db.transaction(() => {
+    // BL-MEMOS-048: consumed first, inside the transaction -- only for a
+    // LIVE (guarded) call; #drainDeliveries' internal call has no grant
+    // and never sets one.
+    if (nonce) this.#consumeNonce(thread.tenantId, nonce, timestamp);
     let message = this.#db.prepare("SELECT * FROM thread_messages WHERE thread_id=? AND source_event_id=? AND direction='OUTBOUND'").get(thread.threadId, sourceEventId);
     if (!message) {
       // PH-MEMOS-3 stage 2 (§8.2, finding 3): never a fixed label -- the
@@ -1469,7 +1555,7 @@ export class ThreadMemoryStore {
     this.#db.prepare("UPDATE chat_sessions SET status='CLOSING',closed_at=NULL,summary_watermark=0,version=version+1 WHERE session_id=?").run(sessionId);
   }
 
-  recordInjection({ threadId, exchangeId, injectionId, packetHash, policyRevision, modelRef, state, now } = {}) {
+  recordInjection({ threadId, exchangeId, injectionId, packetHash, policyRevision, modelRef, state, nonce, now } = {}) {
     const thread = this.#requireThread(threadId);
     const id = requiredString(injectionId, 'injection_id');
     const hash = requiredString(packetHash, 'packet_hash');
@@ -1477,8 +1563,13 @@ export class ThreadMemoryStore {
     const status = enumValue(state, new Set(['RESOLVED', 'SUBMITTED', 'COMPLETED', 'FAILED', 'UNKNOWN']), 'state');
     const exchange = this.#db.prepare('SELECT 1 FROM thread_messages WHERE thread_id=? AND exchange_id=?').get(threadId, exchangeId);
     if (!exchange) throw new ThreadMemoryValidationError('Unknown exchange_id for thread.');
+    const timestamp = iso(now);
     try {
     return this.#db.transaction(() => {
+      // BL-MEMOS-048: consumed first, inside the transaction, on every
+      // outcome including the same-state no-op just below -- a replay is
+      // refused even when the call would otherwise be idempotent.
+      this.#consumeNonce(thread.tenantId, nonce, timestamp);
       const old = this.#db.prepare('SELECT * FROM thread_injection_receipts WHERE injection_id=?').get(id);
       if (!old && status === 'RESOLVED') {
         const session = this.#db.prepare('SELECT s.* FROM chat_sessions s JOIN thread_messages m ON m.session_id=s.session_id WHERE m.thread_id=? AND m.exchange_id=? LIMIT 1').get(threadId, exchangeId);
@@ -1498,7 +1589,7 @@ export class ThreadMemoryStore {
     }
   }
 
-  retryCompaction({ jobId, error, leaseToken, now } = {}) {
+  retryCompaction({ jobId, error, leaseToken, nonce, now } = {}) {
     const id = requiredString(jobId, "job_id");
     const message = requiredString(error, "error").slice(0, 1000);
     const timestamp = iso(now);
@@ -1508,9 +1599,15 @@ export class ThreadMemoryStore {
     // against the server's own clock (`timestamp`, W1-gated).
     if (!leaseToken) throw new ThreadMemoryValidationError('lease_token is required to retry a compaction job.');
     if (!job || job.status !== 'RUNNING' || job.lease_token !== leaseToken || Date.parse(job.leased_until) <= Date.parse(timestamp)) throw new CompactionLeaseConflictError('Compaction lease is stale.');
-    const result = this.#db.prepare("UPDATE session_compaction_jobs SET status = 'RETRYABLE', invocation_state='FAILED', last_error = ?, updated_at = ? WHERE job_id = ? AND status='RUNNING' AND lease_token=? AND leased_until>?").run(message, timestamp, id, leaseToken, timestamp);
-    if (!result.changes) throw new CompactionLeaseConflictError("Compaction job is missing or already terminal.");
-    return this.#jobResult(this.#db.prepare("SELECT * FROM session_compaction_jobs WHERE job_id = ?").get(id));
+    // BL-MEMOS-048: retryCompaction gained its own transaction here so the
+    // lease UPDATE and its nonce consumption commit or roll back together
+    // -- previously two bare, unwrapped statements.
+    return this.#db.transaction(() => {
+      this.#consumeNonce(job.tenant_id, nonce, timestamp);
+      const result = this.#db.prepare("UPDATE session_compaction_jobs SET status = 'RETRYABLE', invocation_state='FAILED', last_error = ?, updated_at = ? WHERE job_id = ? AND status='RUNNING' AND lease_token=? AND leased_until>?").run(message, timestamp, id, leaseToken, timestamp);
+      if (!result.changes) throw new CompactionLeaseConflictError("Compaction job is missing or already terminal.");
+      return this.#jobResult(this.#db.prepare("SELECT * FROM session_compaction_jobs WHERE job_id = ?").get(id));
+    })();
   }
 
   #sourceRows(sessionId, start, end) {

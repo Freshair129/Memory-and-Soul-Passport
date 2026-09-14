@@ -12,11 +12,26 @@
 // how contracts/vault-scope-guard.mjs's assertVaultScope is orchestrated by
 // a transport/handlers/*.mjs module for the vault surface.
 import { hmacRoomRef, ThreadRegistry } from "@freshair129/msp-core/thread-memory";
-import { AgentNotCurrentError, ThreadAudienceMismatchError, ThreadNotFoundError } from "@freshair129/msp-core/errors";
+import { AgentNotCurrentError, GrantNonceRequiredError, ThreadAudienceMismatchError, ThreadNotFoundError } from "@freshair129/msp-core/errors";
 import { assertThreadScope, verifyThreadGrant } from "@freshair129/msp-contracts/thread-access";
 import { validateThreadContract } from "@freshair129/msp-contracts/thread-schema";
 
 const ASSURANCE_RANK = { UNRESOLVED: 0, PENDING: 1, VERIFIED: 2 };
+
+// PH-MEMOS-3 stage 2 (BL-MEMOS-048, Sec.6.1.1): every mutating tool except
+// msp_thread_message_append (source_event_id already gives it replay
+// protection -- a second layer would be redundant) and msp_thread_context
+// (read-only, nothing to replay).
+const NONCE_REQUIRED_TOOLS = new Set([
+  "msp_thread_resolve",
+  "msp_thread_memory_record",
+  "msp_thread_injection_record",
+  "msp_thread_delivery_record",
+  "msp_session_sweep",
+  "msp_session_compaction_claim",
+  "msp_session_compaction_commit",
+  "msp_session_compaction_retry",
+]);
 
 // RKOI review (2nd round), WARNING 3: the SAME message for "no thread
 // resolves at all" and "a thread resolves, but not to this grant's scope" --
@@ -68,6 +83,16 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
       // duplicated per tool.
       input.grant_agent_id = grant.agentId;
       input.grant_workspace_id = grant.workspaceId;
+
+      // PH-MEMOS-3 stage 2 (BL-MEMOS-048, Sec.6.1.1): a nonce-required
+      // tool called with no nonce claim at all is refused before anything
+      // else -- a guard-level PRESENCE check, distinct from the
+      // domain-level replay-CONSUMPTION logic (GrantReplayedError) each
+      // relevant store method performs inside its own transaction.
+      if (NONCE_REQUIRED_TOOLS.has(name)) {
+        if (!grant.nonce) throw new GrantNonceRequiredError();
+        input.grant_nonce = grant.nonce;
+      }
 
       // RKOI review, item 11: these presence checks run BEFORE the thread
       // lookup below, so a request missing its lease entirely is refused

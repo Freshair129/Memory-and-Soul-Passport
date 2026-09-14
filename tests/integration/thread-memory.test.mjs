@@ -5,6 +5,7 @@
 // grants, C-1/C-2 and the RKOI-review items) is covered separately by
 // tests/security/thread-memory-scoping.security.mjs against the REAL
 // guarded stdio process.
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -34,27 +35,40 @@ function summary() {
   };
 }
 
-// PH-MEMOS-3 stage 2 (BL-MEMOS-041): agentId/workspaceId are now required,
-// domain-layer fields on msp_thread_resolve (§6.1.1), not merely a
-// guard/auth concern -- this file exercises ThreadMemoryStore business
-// logic through the UNGUARDED handler map, which reads them off
-// grant_agent_id/grant_workspace_id (the exact keys thread-guard.mjs
-// injects from a verified grant). Every test below gets a stable, shared
-// agent/workspace pair by default via this one wrapper, exactly as it
-// already hand-supplies delivery_scope for the delivery tool -- no
-// individual call site needs to change.
+// PH-MEMOS-3 stage 2 (BL-MEMOS-041/048): agentId/workspaceId/nonce are now
+// required, domain-layer fields on most of the ten tools (§6.1.1), not
+// merely a guard/auth concern -- this file exercises ThreadMemoryStore
+// business logic through the UNGUARDED handler map, which reads them off
+// grant_agent_id/grant_workspace_id/grant_nonce (the exact keys
+// thread-guard.mjs injects from a verified grant). Every test below gets a
+// stable, shared agent/workspace pair, and a FRESH random nonce per call
+// (a static one would self-replay the moment any test issues a second
+// nonce-required call), by default via this one wrapper -- no individual
+// call site needs to change.
 function withDefaultGrantFields(server) {
-  const original = server.threadHandlers.msp_thread_resolve;
-  server.threadHandlers.msp_thread_resolve = (args = {}) =>
-    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, ...args });
+  const freshNonce = () => randomBytes(16).toString("hex");
+  const handlers = server.threadHandlers;
+  const withNonce = (name) => {
+    const original = handlers[name];
+    handlers[name] = (args = {}) => original({ grant_nonce: freshNonce(), ...args });
+  };
+  const original = handlers.msp_thread_resolve;
+  handlers.msp_thread_resolve = (args = {}) =>
+    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, grant_nonce: freshNonce(), ...args });
   // BL-MEMOS-112: recordDelivery's RESOLVED path re-verifies agent
   // currency using scope.agentId/workspaceId (thread-guard.mjs normally
   // supplies these from the verified grant) -- default them onto
   // delivery_scope here too, the same "no individual call site needs to
   // change" treatment resolve already gets above.
-  const originalDelivery = server.threadHandlers.msp_thread_delivery_record;
-  server.threadHandlers.msp_thread_delivery_record = (args = {}) =>
-    originalDelivery({ ...args, delivery_scope: { agentId: "agent-test", workspaceId: "workspace-test", ...args.delivery_scope } });
+  const originalDelivery = handlers.msp_thread_delivery_record;
+  handlers.msp_thread_delivery_record = (args = {}) =>
+    originalDelivery({ grant_nonce: freshNonce(), ...args, delivery_scope: { agentId: "agent-test", workspaceId: "workspace-test", ...args.delivery_scope } });
+  withNonce("msp_thread_memory_record");
+  withNonce("msp_thread_injection_record");
+  withNonce("msp_session_sweep");
+  withNonce("msp_session_compaction_claim");
+  withNonce("msp_session_compaction_commit");
+  withNonce("msp_session_compaction_retry");
   return server;
 }
 
@@ -170,7 +184,10 @@ describe("unified thread, speaker and session memory", () => {
     expect(beforeClose.participants.map((entry) => entry.speakerId).sort()).toEqual(["line-speaker-alice", "line-speaker-bob"].sort());
     expect(beforeClose.recentExchanges[0].messages[0].speakerId).toBe("line-speaker-bob");
 
-    const sweep = await tools.msp_session_sweep({ now: timestamp(40) });
+    // BL-MEMOS-048: sweepIdleSessions now requires tenant_id itself (to key
+    // its own nonce consumption) even in this filter-less "sweep
+    // everything" business-logic scenario.
+    const sweep = await tools.msp_session_sweep({ now: timestamp(40), tenant_id: "tenant-01" });
     expect(sweep.closed).toBe(1);
     expect(sweep.jobs[0].sourceStartSequence).toBe(1);
     expect(sweep.jobs[0].sourceEndSequence).toBe(14);

@@ -5,6 +5,7 @@
 // beside tests/integration/migrate.test.mjs's real-graph coverage rather
 // than tests/security/thread-memory-scoping.security.mjs's real-process
 // attack reproductions.
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,17 +17,30 @@ import { createServer } from "../../apps/msp-server/src/server.mjs";
 const roots = [];
 const servers = [];
 
-// PH-MEMOS-3 stage 2 (BL-MEMOS-041): agentId/workspaceId are now required,
-// domain-layer fields on msp_thread_resolve (§6.1.1) -- this file exercises
-// schema/journal invariants through the UNGUARDED handler map, which reads
-// them off grant_agent_id/grant_workspace_id (the exact keys
-// thread-guard.mjs injects from a verified grant). A stable, shared
-// agent/workspace pair is supplied by default so no individual call site
-// below needs to change.
+// PH-MEMOS-3 stage 2 (BL-MEMOS-041/048): agentId/workspaceId/nonce are now
+// required, domain-layer fields on most of the ten tools (§6.1.1) -- this
+// file exercises schema/journal invariants through the UNGUARDED handler
+// map, which reads them off grant_agent_id/grant_workspace_id/grant_nonce
+// (the exact keys thread-guard.mjs injects from a verified grant). A
+// stable, shared agent/workspace pair, and a FRESH random nonce per call,
+// are supplied by default so no individual call site below needs to
+// change.
 function withDefaultGrantFields(server) {
-  const original = server.threadHandlers.msp_thread_resolve;
-  server.threadHandlers.msp_thread_resolve = (args = {}) =>
-    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, ...args });
+  const freshNonce = () => randomBytes(16).toString("hex");
+  const handlers = server.threadHandlers;
+  const withNonce = (name) => {
+    const original = handlers[name];
+    handlers[name] = (args = {}) => original({ grant_nonce: freshNonce(), ...args });
+  };
+  const original = handlers.msp_thread_resolve;
+  handlers.msp_thread_resolve = (args = {}) =>
+    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, grant_nonce: freshNonce(), ...args });
+  withNonce("msp_thread_memory_record");
+  withNonce("msp_thread_injection_record");
+  withNonce("msp_session_sweep");
+  withNonce("msp_session_compaction_claim");
+  withNonce("msp_session_compaction_commit");
+  withNonce("msp_session_compaction_retry");
   return server;
 }
 

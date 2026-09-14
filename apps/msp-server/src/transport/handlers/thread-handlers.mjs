@@ -47,6 +47,9 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         workspaceId: args.grant_workspace_id,
         assertAgents: args.grant_assert_agents,
         mayMint: args.grant_may_mint,
+        // PH-MEMOS-3 stage 2 (BL-MEMOS-048): guard-verified nonce claim,
+        // consumed inside resolveThread's own transaction on every outcome.
+        nonce: args.grant_nonce,
         now: now(args),
       });
     },
@@ -95,6 +98,7 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         // new, optional, additive request field (default THREAD).
         agentId: args.grant_agent_id,
         visibility: args.visibility,
+        nonce: args.grant_nonce,
         now: now(args),
       });
     },
@@ -120,6 +124,7 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         businessId: args.business_id,
         channelAccountId: args.channel_account_id,
         externalRoomRef: args.external_room_ref,
+        nonce: args.grant_nonce,
       });
     },
 
@@ -139,15 +144,16 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         // the journal actor, replacing the fixed "msp:compaction-worker"
         // label -- it is now a real, current, attributable agent.
         agentId: args.grant_agent_id,
+        nonce: args.grant_nonce,
         now: now(args),
       });
     },
 
     async msp_session_compaction_retry(args = {}) {
-      return store.retryCompaction({ jobId: args.job_id, error: args.error, leaseToken: args.lease_token, now: now(args) });
+      return store.retryCompaction({ jobId: args.job_id, error: args.error, leaseToken: args.lease_token, nonce: args.grant_nonce, now: now(args) });
     },
     async msp_session_compaction_claim(args = {}) {
-      return store.claimCompaction({ jobId: args.job_id, workerId: args.worker_id, leaseSeconds: args.lease_seconds, now: now(args) });
+      return store.claimCompaction({ jobId: args.job_id, workerId: args.worker_id, leaseSeconds: args.lease_seconds, nonce: args.grant_nonce, now: now(args) });
     },
     async msp_thread_delivery_record(args = {}) {
       return store.recordDelivery({
@@ -158,6 +164,7 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         text: args.text,
         providerRef: args.provider_ref,
         scope: args.delivery_scope,
+        nonce: args.grant_nonce,
         now: now(args),
       });
     },
@@ -170,6 +177,7 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         policyRevision: args.policy_revision,
         modelRef: args.model_ref,
         state: args.state,
+        nonce: args.grant_nonce,
         now: now(args),
       });
     },
