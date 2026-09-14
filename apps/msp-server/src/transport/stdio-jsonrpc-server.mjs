@@ -15,6 +15,8 @@
 // The two transports share no framing code path.
 import readline from "node:readline";
 
+import { containsEscapedObjectKey } from "./escaped-object-key-scan.mjs";
+
 function encodeLine(payload) {
   return `${JSON.stringify(payload)}\n`;
 }
@@ -39,7 +41,24 @@ export function createStdioJsonRpcServer({
   }
 
   function write(payload) {
-    output.write(encodeLine(payload));
+    const line = encodeLine(payload);
+    // RKOI review (stage-2 revision, WARNING 4): a row stored BEFORE the
+    // inbound pre-scan existed (entity-store.mjs, journal.mjs,
+    // thread-memory.mjs) can still carry a key that needed an escape
+    // sequence -- reading it back and echoing it in a response would hand
+    // a client the exact line shape this whole defense exists to refuse.
+    // Refused here, server-side, before the line is ever written: the
+    // server already knows this response's own `id` (no untrusted-text
+    // extraction needed, unlike a client-side fix, which would have to
+    // pull an id out of the very raw text it cannot yet safely parse --
+    // the simpler option, and the one actually implemented). The
+    // fallback error never echoes the stored value or its key.
+    if (containsEscapedObjectKey(line)) {
+      const id = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload.id ?? null) : null;
+      output.write(encodeLine({ jsonrpc: "2.0", id, error: { code: -32000, message: "invalid_response: a stored value could not be safely serialized." } }));
+      return;
+    }
+    output.write(line);
   }
 
   function success(id, result) {
@@ -104,6 +123,17 @@ export function createStdioJsonRpcServer({
   rl.on("line", (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
+
+    // RKOI ruling (merge-blocking): refuse, before the real JSON.parse ever
+    // runs, any line whose object keys (at any nesting depth) contain a
+    // backslash escape sequence -- see escaped-object-key-scan.mjs's header
+    // comment for the V8 JSON.parse engine bug this defends against. There
+    // is no id to correlate a response to yet (mirrors the malformed-JSON
+    // case just below), and the message never echoes any key content.
+    if (containsEscapedObjectKey(trimmed)) {
+      failure(null, "invalid_request: object keys must not contain escape sequences.", -32600);
+      return;
+    }
 
     let message;
     try {

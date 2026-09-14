@@ -1,9 +1,9 @@
 ---
 doc_id: "API-011-THREAD-MEMORY-CONTRACT"
-version: "0.3.1b"
+version: "0.4.0b"
 status: "beta"
 created_at: "2026-09-08T00:25:00+07:00,RWANG"
-last_update: "2026-09-14T00:00:00+07:00,KIN"
+last_update: "2026-09-15T00:00:00+07:00,KIN"
 ---
 
 # API-011 Thread, Speaker, Session and Compaction Contract
@@ -246,6 +246,95 @@ hashing" above) — zuri-ai's real delivery grant never sent one, so requiring
 it made every delivery receipt unreachable (RKOI review, 2nd round,
 CRITICAL 1).
 
+### Multi-agent (stage 2, BL-MEMOS-040..048/112, DEC-MEMOS-17..21)
+
+**A hard cutover, no compatibility mode (DEC-MEMOS-17).** Every one of the
+ten tools above now requires two more grant claims: `agentId` and
+`workspaceId` (non-empty strings, ≤128 characters, unconstrained charset —
+opaque Tier-1-owned identifiers, exactly like `principalId`). Their
+absence is `grant_signature_invalid`, the same "missing required claim"
+bucket `tenantId`/`principalId`/`policyRevision` already occupy — not a
+new code. A caller still signing zuri-ai's pre-stage-2 grant shape is
+refused outright; there is no fallback and no feature flag.
+
+**`nonce`** (a caller-generated random string, ≥128 bits, ≤128 characters
+— `signThreadRequest` auto-generates a compliant one unless the caller
+supplies its own) is required on every mutating tool **except**
+`msp_thread_message_append` (its own `source_event_id` already gives it
+replay protection) and `msp_thread_context` (read-only). A tool in that
+set called with no `nonce` claim at all is `grant_nonce_required`; reusing
+a `(tenantId, nonce)` pair already recorded for that tenant is
+`grant_replayed`. Nonces are consumed inside the store method's own
+transaction, alongside its write, so a replay rolls back the whole
+mutation, never a partial apply.
+
+**Agent attachment (`thread_agents`, structurally identical to
+`thread_participants`'s `left_at IS NULL` shape).** An agent is "current"
+on a thread exactly when an open `thread_agents` row exists for
+`(thread_id, agentId, workspaceId)`. `msp_thread_resolve` decides
+attachment: minting a brand-new thread auto-attaches the minting agent
+unconditionally (no claim needed, mirroring the first-HUMAN-membership
+rule); resolving an existing thread requires the calling agent already be
+current, or the grant to carry `assertAgents: true` (self-assert attach);
+neither applies, the call is `agent_not_current`. A worker-only grant
+(`operator`, with none of `readPrivate`/`writePrivate`/`confirmMemory`/
+`deliveryWriter`) can never mint a room's first thread — such a resolve
+against a room with no `ACTIVE` thread is refused `not_found`, never
+`created: true`. `msp_thread_resolve`'s response gains
+`agentAttached: boolean` — true exactly when this call caused a new
+`thread_agents` row.
+
+**The agent gate.** Every other thread-bound tool
+(`msp_thread_message_append`, `msp_thread_context`,
+`msp_thread_memory_record`, `msp_thread_injection_record`,
+`msp_thread_delivery_record`'s resolved path, and
+`msp_session_compaction_claim`/`_commit`/`_retry` via their job's own
+thread) requires the calling agent be current on that thread, refused
+`agent_not_current` otherwise — independent of, and in addition to, every
+existing HUMAN-participant/capability check. An `AGENT`-kind
+`msp_thread_message_append` requires `speaker_id === grant.agentId`.
+`msp_session_sweep` is exempt from the currency check (it precedes any
+single thread's resolution) but still requires `agentId`/`workspaceId`
+present, and its per-job metadata gains `thread_kind`/`channel_type` so a
+worker can construct its own subsequent resolve for that job's room.
+
+**Delivery (`msp_thread_delivery_record`, CRITICAL 1).** Both its paths
+are agent-gated. The resolved path (an inbound message already exists)
+uses the same agent gate as every other thread-bound tool, through that
+message's own thread. The pending path (no thread to check yet) resolves
+the room's own `ACTIVE` thread directly and requires the calling agent be
+current on it — `not_found` if the room has no `ACTIVE` thread at all.
+`thread_pending_deliveries` now stores `agent_id`/`workspace_id`. At drain
+time, the **stored** pair is re-checked for currency on the **inbound
+message's own thread** (never a freshly re-derived room `ACTIVE` thread);
+a departed or legacy `NULL` stored agent leaves the row unreconciled
+(`reconcile_state` stays `pending`), recorded through the already-shipped
+`msp_thread_message_append.reconcile_skipped` journal entry with
+`error_code: 'agent_not_current'`. The resolved path's internal reply
+speaks as `grant.agentId`; a drained reply speaks as the row's own stored
+`agent_id` — neither path ever writes a fixed label.
+
+**Protected records (`msp_thread_memory_record`, DEC-MEMOS-19).** A new
+optional request field, `visibility` (`AGENT`|`THREAD`, default
+`THREAD`), and two new response fields, `agentId` and `visibility`.
+`THREAD` (the default) is shared among the thread's current agents,
+matching stage-1 behaviour for the common single-agent case; `AGENT`
+restricts a record to the agent that recorded it, filtered into
+`msp_thread_context`'s `protectedRecords` on top of the existing
+HUMAN-private-read filter, never in place of it. An absent
+`requesterAgentId` sees `THREAD` records only. `agentId`/`visibility` join
+`record_id`'s content hash, so two different agents asserting identical
+content get two distinct records, never one shared row. Superseding an
+unknown id, another agent's `AGENT`-visibility record, or a record failing
+the pre-existing stage-1 ownership/status check are now the **one
+identical** `validation_failed` answer ("supersedes_record_id does not
+name a record this caller can supersede") — not three distinguishable
+codes. `THREAD`-visibility and legacy (`agent_id IS NULL`) records stay
+supersedable by any agent under the stage-1 rules alone. Summaries need no
+equivalent filter: an agent that is current sees every summary the thread
+has, and a departed agent's very next `msp_thread_context` call is already
+refused `agent_not_current` before any summary is ever read.
+
 ### Errors
 
 Every thread tool answers one of a fixed, typed vocabulary, matching the
@@ -259,13 +348,40 @@ evaluated: `grant_unconfigured` (no key resolves for the grant's tenant),
 `grant_signature_invalid`, `grant_expired`, `grant_payload_mismatch`. No
 error message embeds a raw `external_room_ref` or person id.
 
+Stage 2 adds three more codes (see "Multi-agent" above):
+`agent_not_current` (the grant's `agentId` is not current on the resolved
+thread, or `assertAgents` was needed and absent), `grant_nonce_required`
+(a nonce-required tool's grant carries no `nonce` claim at all), and
+`grant_replayed` (that `(tenantId, nonce)` pair was already consumed).
+`thread_keyring_config_invalid` (BL-MEMOS-049, above) is a startup-time
+failure, never returned from a tool call.
+
+Beneath all of the above, every thread tool -- like every other tool in
+this runtime -- is also subject to the transport-level escaped-object-key
+refusal (RKOI ruling, merge-blocking): `apps/msp-server/src/transport/
+stdio-jsonrpc-server.mjs` refuses, before the real `JSON.parse` ever runs,
+any inbound line whose object keys (at any nesting depth) contain a
+backslash escape sequence, defending against a real V8 `JSON.parse` engine
+bug (see `docs/API-009-Persistent-Memory-Contract.md` §6 and
+`docs/NOTES.md` for the full finding). This is a transport-boundary check,
+not a thread-scope decision, and answers a JSON-RPC `invalid_request`
+error with `id: null`, never the `grant_*`/`thread_*` vocabulary above.
+
 ### Journaling (W5)
 
-Every journal entry's `actor` field is the HMAC of the raw speaker id under
-`MSP_IDENTITY_HMAC_KEY` — never the raw id itself — until stage 2 introduces
-a first-class `agentId`/per-agent actor model. Worker-driven entries (sweep,
-compaction commit) use a fixed, non-identity system label
-(`msp:session-router`, `msp:compaction-worker`) instead.
+A HUMAN-attributable journal entry's `actor` field is the HMAC of the raw
+speaker id under `MSP_IDENTITY_HMAC_KEY` — never the raw id itself. Stage 2
+changes this for AGENT-attributable entries only (`msp_thread_message_append`
+when the message's own `speaker_kind` is `AGENT`, and
+`msp_session_compaction_commit`): `actor` becomes `grant.agentId` (for
+commit, the claiming/committing worker's own agent id) directly, in plain
+text — not a W5 regression, since `agentId`/`workspaceId` are Tier-1-owned
+workspace/process identifiers, not personal data, the same category of
+decision as already logging `toolName`/`ref`/`policyDecision` in plain
+text. `msp_session_sweep` and delivery-drain keep their fixed,
+non-identity system labels (`msp:session-router`, `msp:delivery-drain`) —
+sweep spans many threads/agents at once, and drain has no live caller at
+all.
 
 ### Test clock (W1)
 
@@ -282,7 +398,92 @@ the identity-hashing key described above. Both are in
 so a client-spawned MSP child receives them; missing keys fail closed and
 neither key is ever journaled or echoed back to a caller.
 `MSP_THREAD_IDLE_TIMEOUT_MINUTES` and `MSP_THREAD_RECENT_EXCHANGES` are
-ceilings. A host invokes the exported worker functions
+ceilings.
+
+### Per-tenant service key keyring (BL-MEMOS-049, stage 2)
+
+`MSP_THREAD_SERVICE_KEYRING` is an **optional** replacement for the single
+`MSP_THREAD_SERVICE_KEY`, resolved and validated once, synchronously, at
+server start (`apps/msp-server/src/config/thread-service-keyring.mjs`,
+wired in `apps/msp-server/src/server.mjs` — before `open(dbPath)` /
+`runMigrations`, so a malformed keyring never creates or migrates a
+database file, and never leaves an in-process caller holding an open,
+uncloseable DB handle).
+
+**Opt-in, no fallback.** Unset (or an empty string), `keyFor(tenantId)`
+resolves every tenant to `MSP_THREAD_SERVICE_KEY`, byte-for-byte the
+stage-1 behavior. Once `MSP_THREAD_SERVICE_KEYRING` is set to anything
+else, `MSP_THREAD_SERVICE_KEY` is never consulted again, for **any**
+tenant — including one present in the environment but absent from the
+keyring, and including a grant signed with the old single key.
+
+**Format.** A JSON object, `{"<tenantId>": "<key>"}`. `verifyThreadGrant`
+(`packages/msp-contracts/src/contracts/thread-access.mjs`) already resolves
+its HMAC key through an injected `keyFor(claimedTenantId)` function — the
+keyring only supplies a smarter one; no change to grant verification, the
+signature check, or `thread-guard.mjs` was needed. Selection uses the
+grant's own **unverified** `tenantId` claim to pick a candidate key, and
+that same key must then make the HMAC signature verify — a grant claiming
+tenant B is only ever checked against tenant B's key, so a grant signed
+under tenant A's key but claiming tenant B fails signature verification
+(`grant_signature_invalid`), never reaching a per-tool authorization
+decision. A tenant absent from a configured keyring resolves to no key at
+all, which raises the **existing** `grant_unconfigured` — the same code a
+caller already gets today when `MSP_THREAD_SERVICE_KEY` itself is
+unresolvable. No new error code exists for "tenant not in the keyring".
+
+**Refused outright, fail-closed at server start**, with the typed
+`thread_keyring_config_invalid` configuration error (a class distinct from
+the per-request grant vocabulary above — a deployment defect, not a
+decision about any one caller's grant):
+- invalid JSON;
+- a non-object (JSON array, string, number, or `null`);
+- an **empty** object (`{}`) — a keyring, once configured, must name at
+  least one tenant, since naming none makes every grant unconditionally
+  refused;
+- a **duplicate** tenant id among the raw JSON's own top-level keys,
+  including one that only differs from another by JSON escaping (e.g. a
+  literal `-` versus its `\u002d` escape) — detected by scanning the raw
+  source's own key tokens, since JSON.parse (and any reviver run over its
+  result) silently keeps only the *last* occurrence of a repeated key
+  before either ever sees the object;
+- a tenant id that is empty, or that differs from its own trimmed form
+  (leading/trailing whitespace never silently trimmed, never treated as a
+  distinct tenant from its trimmed spelling);
+- a key that is not a string, is under 32 characters (the same floor as
+  `MSP_THREAD_SERVICE_KEY`/`MSP_IDENTITY_HMAC_KEY`), is blank, or has
+  leading/trailing whitespace.
+
+**Secrecy.** No error raised while parsing or validating the keyring ever
+includes any text read out of the keyring itself — a caller-authored map of
+`{tenantId: key}` can be written reversed (`{key: tenantId}`), at which
+point there is no way, from inside the parser, to tell "this is a tenant
+id" from "this is a secret key" by position alone. Every rejection instead
+names the offending entry only by its 1-based position among the keyring's
+top-level entries (e.g. "entry 2"), never by quoting anything drawn from
+the map, in the message, a `cause`, or anywhere else the error object
+exposes text. This matters beyond an operator's own log:
+`apps/msp-server/bin/msp-server.mjs` lets a malformed-keyring exception
+reach the process's default uncaught-exception handler (stderr), and
+`packages/msp-client-js/src/msp-stdio-transport.mjs` folds a crashed
+child's stderr tail into the error it raises to the **calling
+application** — so a leak here would have reached the very caller the
+keyring's tenant boundary exists to protect. The parsed keyring is also
+built with `Object.create(null)` and looked up with `Object.hasOwn`, so an
+entry literally named `__proto__` (a genuine, JSON.parse-produced own
+property, not a prototype override) is stored and resolved as an ordinary
+tenant, while `keyFor("constructor")`, `keyFor("toString")` and similar
+`Object.prototype` member names resolve to `undefined` outright when not
+actually configured — never by incidentally falling through to
+`verifyThreadGrant`'s own `typeof key !== "string"` check.
+
+**Secrecy (env forwarding).** `MSP_THREAD_SERVICE_KEYRING` is in
+`MSP_RUNTIME_ENV_NAMES` alongside `MSP_THREAD_SERVICE_KEY` and
+`MSP_IDENTITY_HMAC_KEY`; it is never journaled or echoed back to a caller.
+
+**Rotation** (more than one live key per tenant) is explicitly deferred —
+the flat `{tenantId: key}` format has no room for it, and none is designed
+here. A host invokes the exported worker functions
 (`apps/msp-server/src/thread-summary-worker.mjs`) with a scoped, pre-signed
 authorized `call`, `workerId`, policy/summarizer versions and injected
 `summarize({sources, protectedRecords, signal, instructions})`. It must
@@ -321,6 +522,33 @@ memory.
 
 ## Version history
 
+### TASK-MEMOS-002 stage 2, BL-MEMOS-040..048/112, 2026-09-15
+
+Multi-agent, per docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md v0.4.3b
+(RKOI-approved spec) and DEC-MEMOS-17..21: `agentId`/`workspaceId`/`nonce`
+required grant claims, `thread_agents` attachment and the agent gate,
+delivery's own agent scoping (CRITICAL 1), per-agent protected-record
+visibility (CRITICAL 2), and replay-nonce bookkeeping. See "Multi-agent
+(stage 2)" above for the full shape. `tests/cross/zuri-thread-contract.test.mjs`
+now asserts zuri-ai's own unmodified grant is refused
+`grant_signature_invalid` (DEC-MEMOS-17's hard cutover), alongside a
+second, shape-only case wrapping zuri's port with the new stage-2 fields
+added.
+
+### TASK-MEMOS-002 stage 2, BL-MEMOS-049, 2026-09-15
+
+Added the optional per-tenant `MSP_THREAD_SERVICE_KEYRING` described in
+"Per-tenant service key keyring" above -- the one stage-2 item the ADR
+specified fully ahead of the rest of stage 2 (multi-agent: `thread_agents`,
+the agent gate, `agentId`/`nonce`/`assertAgents`, record visibility, worker
+identity), which waits on its own spec review. RKOI's code review round 1
+found and closed a CRITICAL (an inverted `{key: tenantId}` map could echo
+the key itself through the startup error, reaching both the server's
+stderr and, via `msp-stdio-transport.mjs`'s crashed-child-stderr-in-error
+behavior, the calling application) before this landed -- every rejection
+now names an offending entry by position only, never by quoting anything
+read out of the keyring.
+
 ### TASK-MEMOS-002 stage 1, 2026-09-13
 
 Folded the unmerged `origin/codex/msp-thread-memory` design (branch commits
@@ -353,6 +581,8 @@ GKS-as-DNA meaning is not imported into Zuri's GKS knowledge authority.
 
 | Version | Date | Status | Summary | Agent |
 |---|---|---|---|---|
+| 0.3.3b | 2026-09-15 | beta | RKOI ruling (merge-blocking, TASK-MEMOS-002 stage 2): documented the transport-level escaped-object-key refusal that now applies to every thread tool (a real V8 `JSON.parse` engine bug -- see `docs/API-009-Persistent-Memory-Contract.md` §6 and `docs/NOTES.md`); this is a transport-boundary `invalid_request` refusal, distinct from the `grant_*`/`thread_*` error vocabulary above. | KIN |
+| 0.3.2b | 2026-09-15 | beta | TASK-MEMOS-002 stage 2, BL-MEMOS-049: optional per-tenant `MSP_THREAD_SERVICE_KEYRING` (opt-in, no fallback once configured, parsed/validated once at server start before the database is even opened); RKOI code review round 1 CRITICAL closed -- no rejection ever quotes anything read out of the keyring, only an entry's 1-based position, closing a path where an inverted `{key: tenantId}` map could echo the key through the startup crash into both the server's stderr and the calling application's own error | KIN |
 | 0.3.1b | 2026-09-14 | beta | RKOI review revision (2 CRITICALs, multiple WARNINGs, 4 rounds against zuri-ai `origin/main`): dropped `channel_type` from the room hash and removed `channelType` from the delivery grant (CRITICAL 1, zuri-ai's real delivery grant never sent one); added DEC-MEMOS-15's self-upgrade exception plus its stored-`person_id` tightening (CRITICAL 2); added the per-tool audience requirement (required on every tool except delivery) and the room-hash cross-check on every thread-bound tool including compaction claim/commit/retry; `person_id` constrained to `{null, principalId}` unconditionally; tenant-scoped uniqueness extended to `thread_injection_receipts`/`thread_summary_invalidations`/cross-references between messages, jobs, summaries and their sessions; `chat_sessions` uniqueness narrowed to "at most one OPEN" only (a schema-level "one CLOSING" constraint was tried and dropped -- late-delivery reconciliation legitimately produces two); tombstone-then-INSERT and `IS NOT`-safe tenant triggers; `ON CONFLICT DO NOTHING` replacing `INSERT OR IGNORE` where it could swallow a NOT NULL violation; output-contract validation removed (ran only after commit); typed grant-verification errors (`grant_unconfigured`/`grant_signature_invalid`/`grant_expired`/`grant_payload_mismatch`) | KIN |
 | 0.3.0b | 2026-09-13 | beta | TASK-MEMOS-002 stage 1: renamed API-010 -> API-011, tenant-scoped uniqueness, HMAC room refs, append-only participants with the one-human-per-DIRECT-thread invariant, `msp-contracts` decoupled from storage, required `source_event_id`, typed errors, test-only clock | KIN |
 | 0.2.0b | 2026-09-08 | beta | Approved cross-repository contract, scope, exchange, coverage and summary refinement; verify implementation per acceptance matrix | RWANG |

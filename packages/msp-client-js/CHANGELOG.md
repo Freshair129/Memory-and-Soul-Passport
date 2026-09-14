@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.2.5
+
+RKOI stage-2 revision (NEEDS REVISION, 1 critical) of the 0.2.4 defense:
+
+- **CRITICAL fix:** the escaped-object-key scanner (`src/escaped-object-key-scan.mjs`)
+  was recursive (one JS function call per nesting level). A sufficiently
+  deep response line (RKOI's probe used 100,000 levels of nesting) could
+  overflow the call stack inside this client's own stdout listener,
+  crashing the CALLING application, not just this client's child process.
+  The scanner is now iterative (an explicit stack, not the JS call
+  stack) and its own body is wrapped so it can only ever return a
+  boolean -- never throw -- regardless of what it encounters.
+- **New:** `request()` now also scans its own OUTGOING request before
+  writing it to the child's stdin, throwing a typed error immediately.
+  Previously an escaped-key request built by this client's own caller
+  would sit pending until the full `timeoutMs` elapsed, since the
+  server's `id: null` refusal of such a line can never be correlated
+  back to a specific pending request.
+- Key/value classification is unchanged (RKOI's own 20,000-case fuzz: 0
+  wrong classifications, before and after).
+
+## 0.2.4
+
+- Refuses, before parsing, any inbound MSP response whose object keys (at
+  any nesting depth) contain a backslash escape sequence -- both the raw
+  response line and the `content[].text` JSON.parse fallback used when
+  `structuredContent` is absent. RKOI ruling (merge-blocking): V8's own
+  `JSON.parse` has a real engine bug (Node 23 through at least 26.8,
+  including this workspace's 24.19) that can hand a caller a corrupted
+  non-first object key after an earlier parse in the same long-lived
+  process shared the same leading key(s). Escapes inside VALUES, and a
+  literal (unescaped) non-ASCII character in a key, are unaffected and
+  remain accepted. See `docs/NOTES.md` for the finding and
+  `apps/msp-server/src/transport/escaped-object-key-scan.mjs`'s header
+  comment (this package carries a deliberate, byte-for-byte duplicate --
+  see `src/escaped-object-key-scan.mjs` -- to stay dependency-free).
+
+## 0.2.3
+
+- `MSP_THREAD_SERVICE_KEYRING` is forwarded to the MSP child (added to
+  `MSP_RUNTIME_ENV_NAMES`; BL-MEMOS-049, stage 2). It is optional and
+  opt-in: unset, thread-tool grants keep verifying against the single
+  `MSP_THREAD_SERVICE_KEY` exactly as before. Once set (a JSON object of
+  `{"<tenantId>": "<key>"}`, every key >= 32 characters), the single key is
+  disabled for every tenant with no fallback -- a grant for a tenant
+  missing from the keyring fails closed with `grant_unconfigured`, the same
+  as an unresolvable single key. Never journaled or echoed back to a
+  caller, same as the other two thread-memory secrets.
+
 ## 0.2.2
 
 - `MSP_THREAD_SERVICE_KEY` and `MSP_IDENTITY_HMAC_KEY` are forwarded to the

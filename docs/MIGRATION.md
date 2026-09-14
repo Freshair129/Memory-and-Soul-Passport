@@ -1,5 +1,5 @@
 ---
-version: "0.1.12b"
+version: "0.1.13b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
 last_update: "2026-09-14T05:00:00+07:00,JANUS"
 status: "beta"
@@ -187,6 +187,31 @@ The fix puts the guarantee on the plain path itself: `runMigrations` now calls t
 
 **Warning 3 (included): a foreign key to one of SQLite's own internal `sqlite_*` catalog tables (e.g. `sqlite_sequence`) is correctly refused, but is now attributed accurately.** `mainSchemaEntries` deliberately excludes `sqlite_*` names from its lookups -- they are never legitimate migration targets -- so such a target used to fall through to the "missing" case and claim the table does not exist, when it is very much present (SQLite refuses to resolve a key against it with `foreign key mismatch`, confirmed against real SQLite, because it has no usable key for a foreign key to target). `findForeignKeyTargetTypeIssue` now checks an *unfiltered* `PRAGMA table_list` reading before concluding "missing", and reports a distinct kind, worded "which is an internal SQLite table, not a valid foreign-key target" rather than claiming it does not exist. The refusal itself, and its prefix, are unchanged on both paths and pre-existing -- only the reason given is now accurate.
 
+## Legacy stored data and the escaped-object-key transport scan
+
+TASK-MEMOS-002 stage 2 added an engine-independent scanner
+(`escaped-object-key-scan.mjs`) at every transport boundary, refusing an
+inbound or outbound line whose object keys contain an escape sequence
+(see `docs/NOTES.md`'s "V8 `JSON.parse` non-first-key corruption" section
+for the full finding). That scan only ever protects requests and
+responses going forward -- it cannot rewrite a row already written to
+`entities`/`entity_history`/`journal`/`protected_memory_records`/`state`
+(or any other JSON-bearing column) **before** this fix existed. A
+deployment migrating from a pre-fix version should run the audit query in
+`docs/NOTES.md`'s "Legacy stored data may already contain an escaped key"
+section to check whether any already-stored JSON might be affected; no
+migration step here rewrites such data automatically.
+
+**This is not a complete guarantee.** The server's own `write()` refusal
+only catches a response whose stored text STILL needs an escape to
+round-trip through `JSON.parse` today. A legacy key already corrupted by
+this same engine bug at write time into a key that happens to need NO
+escaping (e.g. a two-letter key like `aA`) would round-trip cleanly and
+be emitted as normal -- silently wrong, and undetectable by the scan.
+Running the audit query and manually inspecting (and, where necessary,
+repairing) any flagged row is the real remedy for data written before
+this fix shipped; see `docs/NOTES.md` for the full explanation.
+
 ## Rollback
 
 Revert the single dependency/re-export change and reinstall GoVibe dependencies. The original `packages/govibe-core/src/msp-client.mjs` and `msp-stdio-transport.mjs` remain available until the consumer cutover is independently accepted.
@@ -195,6 +220,7 @@ Revert the single dependency/re-export change and reinstall GoVibe dependencies.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.13b | 2026-09-15 | beta | RKOI stage-2 revision, non-blocking: added `entity_history.body_json` (PK `history_id`, returned by `msp_memory_history`) and `state.value_json` (PK `state_key`) to the "Legacy stored data and the escaped-object-key transport scan" audit query, and stated plainly that the server's `write()` refusal is not a complete guarantee -- a legacy key already corrupted into one that needs no escaping would round-trip cleanly and be emitted as normal. See `docs/NOTES.md` for the full query and explanation. | working-tree | KIN |
 | 0.1.12b | 2026-09-14 | beta | RKOI pre-merge fixup of 0.1.11b, all confirmed against real SQLite: (1, required) a foreign key to a `shadow` target's own NON-key column (or a nonexistent column, or an rtree shadow table's non-key column) was wrongly ACCEPTED on the plain path -- skipping the DELETE probe for `shadow` targets (0.1.11b) meant nothing else asked SQLite to resolve one; fixed with `findShadowTargetForeignKeyMismatch`, a table-scoped `PRAGMA main.foreign_key_check("<child>")` that never touches the shadow table itself, ignoring returned rows (row-level enforcement is already per-statement on the plain path) and rethrowing only a `foreign key mismatch` exception, run post-exec (plain) and pre-exec (both paths); the directive path needed no change (its whole-database `PRAGMA foreign_key_check` already caught every shape). (2) every `PRAGMA foreign_key_list(...)` call and the parent-side probe's `DELETE` are now schema-qualified (`PRAGMA main.foreign_key_list(...)`, `DELETE FROM main."<target>" WHERE 0`) -- unqualified, they resolved against a same-named `temp` object in preference to the real `main` table when the connection held one, confirmed against real SQLite (a `TEMP VIEW` shadowing a `main` parent table produced a false "cannot modify ... because it is a view" refusal of a valid migration). (3) a foreign key to an internal `sqlite_*` catalog table (e.g. `sqlite_sequence`) was misreported as "missing"; `findForeignKeyTargetTypeIssue` now checks an unfiltered `PRAGMA table_list` reading and reports a distinct "internal SQLite table" reason, same refusal and prefix. (4, doc-only) corrected "FTS5 puts its shadow tables into defensive mode" to describe defensive mode as a connection flag better-sqlite3 enables, not something FTS5 sets, and corrected the "shadow targets are accepted outright" and "resolves at write time" claims to describe the new `foreign_key_check`-based shadow handling. | working-tree | JANUS |
 | 0.1.11b | 2026-09-14 | beta | RKOI final review of 0.1.10b (4 warnings), all confirmed against real SQLite 3.53.4: (1) a VIEW foreign-key target was refused but misreported as "does not exist"; (2) an FTS5 VIRTUAL TABLE target was WRONGLY ACCEPTED on the plain path (a DELETE prepare against a virtual table compiles no FK code, so it commits, and only the first real write throws `foreign key mismatch`); (3) an FTS5 shadow table target (e.g. `<fts>_data`) was WRONGLY REFUSED (defensive-mode `DELETE` fails to prepare, even though SQLite genuinely resolves the FK at write time), which also poisoned the pre-existing check for later migrations once introduced; (4) the directive path's post-exec checks never ran the parent-side probe, so a directive migration dropping a table a parent's DELETE trigger references committed, poisoning the next migration. Fixed by resolving every FK target through `PRAGMA table_list` (`findForeignKeyTargetTypeIssue`, replacing `findMissingForeignKeyTargetTable`) instead of bare existence: `view`/`virtual` targets refuse naming the type on both paths, `shadow` targets are accepted and skip the parent-side probe entirely, `table` targets are unchanged. The directive path's `db.transaction(...)` now also runs `findParentSideForeignKeyProbeFailure` post-exec, after the existing `runForeignKeyCheck`. Reworded probe-failure messages: "cannot be deleted from" for a non-mismatch `SqliteError` (the trigger case), reserving "a foreign key SQLite itself refuses to resolve" for an actual `foreign key mismatch`. No `CREATE TABLE` text parsing or column-/key-matching logic reintroduced. | working-tree | JANUS |
 | 0.1.10b | 2026-09-14 | beta | RKOI review of 0.1.9b (1 critical): the child-side `UPDATE ... WHERE 0` probe's own JS pre-filter (table/column existence, "is this a key" by column-NAME matching, run BEFORE consulting SQLite) disagreed with SQLite on 5 real, valid shapes -- a case-different target column or table, a case-different UNIQUE index column, a `GENERATED` parent key column (`table_info` omits generated columns), and a `GENERATED` child FK column (SQLite refuses to `UPDATE` one at all). JS now decides exactly one thing -- target table existence, case-insensitive (`findMissingForeignKeyTargetTable`) -- and everything else is delegated to a PARENT-side probe (`findParentSideForeignKeyProbeFailure`: prepares `DELETE FROM "<target>" WHERE 0`, which names no column and so cannot mismatch on casing or generated columns) on the plain path; the directive path is unchanged (`runForeignKeyCheck` already covers it). The pre-existing check (warning 1) now also runs the parent-side probe, not just the missing-table check, so a pre-existing table-level `PRIMARY KEY (... COLLATE ...)` mismatch is no longer blamed on an unrelated pending migration either. `isKeyColumnSet`, `primaryKeyColumns` and `sameColumnSet` removed as unused. | working-tree | JANUS |

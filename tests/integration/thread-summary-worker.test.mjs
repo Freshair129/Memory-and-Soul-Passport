@@ -23,9 +23,13 @@ async function fixture(run) {
     env: { MSP_THREAD_SERVICE_KEY: key, MSP_TEST_CLOCK: '1', MSP_IDENTITY_HMAC_KEY: 'b'.repeat(40) },
   });
   let time = '2026-09-08T00:00:00.000Z';
+  // PH-MEMOS-3 stage 2: agentId/workspaceId are now required on every one
+  // of the ten API-011 tools; this fixture's worker and its serving agent
+  // are the same identity throughout, matching how a single always-current
+  // agent would actually call MSP end to end.
   const claims = { tenantId: 'tenant', businessId: 'business', channelAccountId: 'oa', externalRoomRef: 'dm',
     principalId: 'alice', policyRevision: 'v1', audienceKind: 'DIRECT', operator: true,
-    readPrivate: true, deliveryWriter: true };
+    readPrivate: true, deliveryWriter: true, agentId: 'agent-worker', workspaceId: 'workspace-worker' };
   const call = async (name, input = {}, scope = claims) => (await server.toolRegistry.dispatch(name,
     signThreadRequest(name, { ...input, now: time }, scope, key))).structuredContent;
   try {
@@ -33,9 +37,13 @@ async function fixture(run) {
       channel_account_id: 'oa', external_room_ref: 'dm', thread_kind: 'DIRECT', audience_kind: 'DIRECT', channel_type: 'LINE' });
     const inbound = await call('msp_thread_message_append', { thread_id: thread.threadId, speaker_id: 'alice', speaker_kind: 'HUMAN',
       person_id: 'alice', identity_assurance: 'VERIFIED', direction: 'INBOUND', text: 'Do not share my costs', source_event_id: 'in' });
+    // PH-MEMOS-3 stage 2 (BL-MEMOS-042, Sec.8.2): an AGENT-kind message's
+    // speaker_id must equal the grant's agentId -- this fixture's serving
+    // agent is claims.agentId ('agent-worker'), so its own outbound replies
+    // are authored under that same id, never an arbitrary 'agent' string.
     const out = () => call('msp_thread_message_append', { thread_id: thread.threadId, session_id: inbound.session.sessionId,
       exchange_id: inbound.message.exchangeId, reply_to_message_id: inbound.message.messageId, source_event_id: `${inbound.message.messageId}:assistant`,
-      speaker_id: 'agent', speaker_kind: 'AGENT', identity_assurance: 'VERIFIED', direction: 'OUTBOUND', text: 'generated only', delivery_state: 'QUEUED' });
+      speaker_id: claims.agentId, speaker_kind: 'AGENT', identity_assurance: 'VERIFIED', direction: 'OUTBOUND', text: 'generated only', delivery_state: 'QUEUED' });
     const summary = () => ({ topics: [{ text: 'User requests privacy', speakerId: 'alice', sourceMessageRefs: [inbound.message.messageId] }],
       decisions: [], openQuestions: [], pendingActions: [], corrections: [], outcomes: [], participants: [] });
     await run({ server, call, claims, thread, inbound, out, summary, setTime: (value) => { time = value; } });

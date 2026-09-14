@@ -23,7 +23,7 @@
 //     (code `thread_scope_denied`), mirroring
 //     contracts/vault-scope-guard.mjs's assertVaultScope(isAccessible,
 //     message) exactly.
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import {
   GrantExpiredError,
@@ -39,11 +39,25 @@ import {
  * msp_session_compaction_commit) and by any adapter that mints its own
  * grants for a caller it has already authorized. Never used by
  * msp-server itself to authorize an inbound request -- only to construct
- * one going out.
+ * one going out. zuri-ai's own real signer does not call this function at
+ * all (it signs its own grants independently, per §6.1's trust-boundary
+ * paragraph) -- this is exclusively MSP's own test suite and MSP's own
+ * worker (thread-summary-worker.mjs).
+ *
+ * PH-MEMOS-3 stage 2 (DEC-MEMOS-20): `nonce` is auto-generated here, the
+ * same way `expiresAt`/`payloadHash` already are, unless `claims` supplies
+ * its own (including an explicit `undefined`, to test the nonce-required
+ * refusal, or a fixed repeated value, to test replay) -- `nonce` MUST be
+ * unique per signed request to avoid a spurious `grant_replayed` merely
+ * from reusing one test's claims object across several calls, and callers
+ * should not have to hand-generate a compliant one (>= 128 random bits,
+ * <= 128 characters) themselves. 16 random bytes, hex-encoded, is exactly
+ * 128 bits in 32 characters -- well under the ceiling.
  */
 export function signThreadRequest(name, input, claims, key, now = Date.now()) {
   if (typeof key !== "string" || key.length < 32) throw new Error("MSP_THREAD_SERVICE_KEY_REQUIRED");
   const grant = {
+    nonce: randomBytes(16).toString("hex"),
     ...claims,
     operation: name,
     expiresAt: now + 60_000,
@@ -88,7 +102,7 @@ export function verifyThreadGrant(name, input, access, keyFor, now = Date.now())
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
     throw new GrantSignatureInvalidError("The grant signature does not match.");
   }
-  if (!Number.isFinite(grant.expiresAt) || grant.expiresAt <= now || grant.expiresAt > now + 65_000) {
+  if (!Number.isInteger(grant.expiresAt) || grant.expiresAt <= now || grant.expiresAt > now + 65_000) {
     throw new GrantExpiredError();
   }
   if (grant.payloadHash !== createHash("sha256").update(JSON.stringify(input)).digest("hex")) {
@@ -96,6 +110,21 @@ export function verifyThreadGrant(name, input, access, keyFor, now = Date.now())
   }
   if (!grant.tenantId || !grant.principalId || !grant.policyRevision) {
     throw new GrantSignatureInvalidError("The grant is missing a required claim (tenantId, principalId or policyRevision).");
+  }
+  // PH-MEMOS-3 stage 2 (design doc Sec.6.1.1, DEC-MEMOS-21): agentId/
+  // workspaceId join the same "missing required claim" bucket -- the
+  // shipped check already treats "signature is fine but a required claim
+  // is absent" as grant_signature_invalid, not a scope question, since the
+  // grant itself is malformed before scope is even evaluated. Required on
+  // every one of the ten API-011 tools, with no charset constraint beyond
+  // non-emptiness and the 128-character bound (MSP has no agent/workspace
+  // identity registry of its own, mirroring principalId's own treatment as
+  // an opaque Tier-1-owned string).
+  if (!grant.agentId || !grant.workspaceId) {
+    throw new GrantSignatureInvalidError("The grant is missing a required claim (agentId or workspaceId).");
+  }
+  if (typeof grant.agentId !== "string" || grant.agentId.length > 128 || typeof grant.workspaceId !== "string" || grant.workspaceId.length > 128) {
+    throw new GrantSignatureInvalidError("agentId and workspaceId must be strings of at most 128 characters.");
   }
   return grant;
 }

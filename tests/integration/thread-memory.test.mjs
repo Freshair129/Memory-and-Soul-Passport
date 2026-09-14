@@ -5,6 +5,7 @@
 // grants, C-1/C-2 and the RKOI-review items) is covered separately by
 // tests/security/thread-memory-scoping.security.mjs against the REAL
 // guarded stdio process.
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -34,16 +35,55 @@ function summary() {
   };
 }
 
+// PH-MEMOS-3 stage 2 (BL-MEMOS-041/048): agentId/workspaceId/nonce are now
+// required, domain-layer fields on most of the ten tools (§6.1.1), not
+// merely a guard/auth concern -- this file exercises ThreadMemoryStore
+// business logic through the UNGUARDED handler map, which reads them off
+// grant_agent_id/grant_workspace_id/grant_nonce (the exact keys
+// thread-guard.mjs injects from a verified grant). Every test below gets a
+// stable, shared agent/workspace pair, and a FRESH random nonce per call
+// (a static one would self-replay the moment any test issues a second
+// nonce-required call), by default via this one wrapper -- no individual
+// call site needs to change.
+function withDefaultGrantFields(server) {
+  const freshNonce = () => randomBytes(16).toString("hex");
+  const handlers = server.threadHandlers;
+  const withNonce = (name) => {
+    const original = handlers[name];
+    handlers[name] = (args = {}) => original({ grant_nonce: freshNonce(), grant_expires_at: Date.now() + 60_000, ...args });
+  };
+  const original = handlers.msp_thread_resolve;
+  handlers.msp_thread_resolve = (args = {}) =>
+    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, grant_nonce: freshNonce(), grant_expires_at: Date.now() + 60_000, ...args });
+  // BL-MEMOS-112: recordDelivery's RESOLVED path re-verifies agent
+  // currency using scope.agentId/workspaceId (thread-guard.mjs normally
+  // supplies these from the verified grant) -- default them onto
+  // delivery_scope here too, the same "no individual call site needs to
+  // change" treatment resolve already gets above.
+  const originalDelivery = handlers.msp_thread_delivery_record;
+  handlers.msp_thread_delivery_record = (args = {}) =>
+    originalDelivery({ grant_nonce: freshNonce(), grant_expires_at: Date.now() + 60_000, ...args, delivery_scope: { agentId: "agent-test", workspaceId: "workspace-test", ...args.delivery_scope } });
+  withNonce("msp_thread_memory_record");
+  withNonce("msp_thread_injection_record");
+  withNonce("msp_session_sweep");
+  withNonce("msp_session_compaction_claim");
+  withNonce("msp_session_compaction_commit");
+  withNonce("msp_session_compaction_retry");
+  return server;
+}
+
 function makeServer() {
   const root = mkdtempSync(path.join(tmpdir(), "msp-thread-memory-test-"));
   roots.push(root);
   // W1: server.threadHandlers still routes through createThreadHandlers'
   // `now(args)` gate -- MSP_TEST_CLOCK=1 is required for the synthetic
   // `now:` values below to reach the domain layer at all.
-  const server = createServer({
-    dbPath: path.join(root, "msp.sqlite3"),
-    env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: "a".repeat(40) },
-  });
+  const server = withDefaultGrantFields(
+    createServer({
+      dbPath: path.join(root, "msp.sqlite3"),
+      env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: "a".repeat(40) },
+    }),
+  );
   servers.push(server);
   return server;
 }
@@ -144,7 +184,10 @@ describe("unified thread, speaker and session memory", () => {
     expect(beforeClose.participants.map((entry) => entry.speakerId).sort()).toEqual(["line-speaker-alice", "line-speaker-bob"].sort());
     expect(beforeClose.recentExchanges[0].messages[0].speakerId).toBe("line-speaker-bob");
 
-    const sweep = await tools.msp_session_sweep({ now: timestamp(40) });
+    // BL-MEMOS-048: sweepIdleSessions now requires tenant_id itself (to key
+    // its own nonce consumption) even in this filter-less "sweep
+    // everything" business-logic scenario.
+    const sweep = await tools.msp_session_sweep({ now: timestamp(40), tenant_id: "tenant-01" });
     expect(sweep.closed).toBe(1);
     expect(sweep.jobs[0].sourceStartSequence).toBe(1);
     expect(sweep.jobs[0].sourceEndSequence).toBe(14);
@@ -353,7 +396,9 @@ describe("unified thread, speaker and session memory", () => {
   it("resolves to the current thread when the caller has no identity key configured -- fails closed with identity_hmac_unconfigured", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "msp-thread-memory-no-key-test-"));
     roots.push(root);
-    const server = createServer({ dbPath: path.join(root, "msp.sqlite3"), env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: undefined } });
+    const server = withDefaultGrantFields(
+      createServer({ dbPath: path.join(root, "msp.sqlite3"), env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: undefined } }),
+    );
     servers.push(server);
     await expect(
       server.threadHandlers.msp_thread_resolve({
@@ -392,6 +437,40 @@ describe("unified thread, speaker and session memory", () => {
     const relookup = await tools.msp_thread_resolve({ ...base, channel_type: "LINE" });
     expect(relookup.thread.threadId).toBe(line.thread.threadId);
     expect(relookup.created).toBe(false);
+  });
+
+  // RKOI stage-2 revision round 2, defense in depth: `grant_expires_at`
+  // reaches ThreadMemoryStore#consumeNonce and used to be checked with a
+  // bare Number.isFinite -- any finite number was accepted, including
+  // something like 1e20, which is OUTSIDE the native Date object's own
+  // representable range and made `new Date(x).toISOString()` throw a raw,
+  // untyped RangeError instead of this module's own typed vocabulary. It
+  // must now be refused as a typed validation_failed, never a RangeError,
+  // whether negative, astronomically large, or merely outside a sane
+  // +/-10-year window around the real server clock.
+  it("refuses a grant_expires_at outside a sane +/-10-year window with a typed validation_failed, never a raw RangeError", async () => {
+    const server = makeServer();
+    const tools = server.threadHandlers;
+    const base = {
+      thread_kind: "DIRECT",
+      audience_kind: "DIRECT",
+      channel_type: "LINE_DM",
+      channel_account_id: "oa-grant-expires-bounds",
+      tenant_id: "tenant-01",
+    };
+    const cases = [
+      ["a negative epoch millisecond value", -1],
+      ["a value far outside Date's own representable range (1e20)", 1e20],
+      ["a value more than 10 years in the future", Date.now() + 11 * 365 * 24 * 60 * 60 * 1000],
+      ["a value more than 10 years in the past", Date.now() - 11 * 365 * 24 * 60 * 60 * 1000],
+      ["a non-integer", Date.now() + 0.5],
+    ];
+    for (const [label, badExpiresAt] of cases) {
+      await expect(
+        tools.msp_thread_resolve({ ...base, external_room_ref: `room-${label}`, grant_expires_at: badExpiresAt }),
+        label,
+      ).rejects.toThrow(/validation_failed.*grantExpiresAt/i);
+    }
   });
 
   // RKOI code review round 2, WARNING 5: an inbound append naming an
@@ -534,19 +613,66 @@ describe("unified thread, speaker and session memory", () => {
     const deliveredRow = server.db.prepare("SELECT tenant_id, message_id FROM thread_delivery_receipts WHERE receipt_id=?").get("crm-delivered-alice");
     expect(deliveredRow.tenant_id).toBe("tenant-drain-1");
 
-    // The skipped reconcile is journaled, scoped to tenant 2, with no raw
-    // ids beyond the usual application refs -- once for the original
-    // append and once more for the replay, since each independently
-    // retries (and again fails) the same reconcile. RKOI's confirmation
-    // pass: the payload also carries a STABLE error_code (never the
-    // free-text message), so an operator can tell a receipt_id collision
-    // (ThreadConflictError's own "conflict" code) apart from a real
-    // storage fault.
+    // The skipped reconcile is journaled, with no raw ids beyond the usual
+    // application refs -- once for the original append and once more for
+    // the replay, since each independently retries (and again fails) the
+    // same reconcile. RKOI's confirmation pass: the payload also carries a
+    // STABLE error_code (never the free-text message), so an operator can
+    // tell a receipt_id collision (ThreadConflictError's own "conflict"
+    // code) apart from a real storage fault. RKOI stage-2 revision round
+    // 2 (W6 leftover): `workspace_id` is the STORED pending row's own
+    // `workspace_id` ("workspace-test", the default `withDefaultGrantFields`
+    // gives `msp_thread_delivery_record`'s `delivery_scope`), never the
+    // `tenant_id` placeholder ("tenant-drain-2") this used to fall back to.
     const skipped = server.db.prepare("SELECT ref, workspace_id, payload_json FROM journal WHERE tool_name = 'msp_thread_message_append.reconcile_skipped'").all();
     expect(skipped).toHaveLength(2);
     for (const entry of skipped) {
-      expect(entry).toMatchObject({ ref: "zed-future", workspace_id: "tenant-drain-2" });
+      expect(entry).toMatchObject({ ref: "zed-future", workspace_id: "workspace-test" });
       expect(JSON.parse(entry.payload_json)).toMatchObject({ receipt_id: "crm-delivered-alice", reconciled: false, error_code: "conflict" });
     }
+  });
+
+  // PH-MEMOS-3 stage 2 (BL-MEMOS-043, Sec.9.4, RKOI stage-2 review round 1,
+  // warning 5): a stage-2 msp_thread_context call with NO requesterAgentId
+  // at all must see THREAD-visibility records only, never fall through to
+  // showing every AGENT-visibility record -- the earlier draft's vacuous
+  // `OR (no requesterAgentId)` bug. Exercised at this layer (the unguarded
+  // handler map) because thread-guard.mjs's real grant always supplies
+  // requesterAgentId once agentId is a required claim -- there is no way
+  // to reach this condition through the guarded surface at all, which is
+  // itself part of what makes this the correct, restrictive default.
+  it("a msp_thread_context call with no requesterAgentId at all sees THREAD-visibility protected records only, never an AGENT-visibility one", async () => {
+    const server = makeServer();
+    const tools = server.threadHandlers;
+    const { thread } = await tools.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa-no-requester-agent", external_room_ref: "dm-no-requester-agent", tenant_id: "tenant-01",
+    });
+    const inbound = await tools.msp_thread_message_append({
+      thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi",
+    });
+    const threadRecord = await tools.msp_thread_memory_record({
+      thread_id: thread.threadId, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", body: { shared: true }, source_message_refs: [inbound.message.messageId],
+    });
+    // The AGENT-visibility record's own agent_id must have attached to
+    // this thread at some point (trg_protected_memory_records_agent_rules,
+    // migration 0009) -- a second resolve, self-asserting, attaches it.
+    await tools.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa-no-requester-agent", external_room_ref: "dm-no-requester-agent", tenant_id: "tenant-01",
+      grant_agent_id: "agent-no-requester", grant_workspace_id: "workspace-no-requester", grant_assert_agents: true,
+    });
+    const agentRecord = await tools.msp_thread_memory_record({
+      thread_id: thread.threadId, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", body: { agentOnly: true }, source_message_refs: [inbound.message.messageId],
+      visibility: "AGENT", grant_agent_id: "agent-no-requester",
+    });
+    expect(threadRecord.visibility).toBe("THREAD");
+    expect(agentRecord.visibility).toBe("AGENT");
+
+    // Called with no requester_agent_id at all (the unguarded handler map
+    // never sets one unless a test explicitly passes it, unlike
+    // grant_agent_id above, which the shared wrapper always defaults).
+    const context = await tools.msp_thread_context({ thread_id: thread.threadId });
+    const ids = context.protectedRecords.map((record) => record.recordId);
+    expect(ids).toContain(threadRecord.recordId);
+    expect(ids).not.toContain(agentRecord.recordId);
   });
 });

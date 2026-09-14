@@ -354,6 +354,12 @@
               "CONTESTED"
             ]
           },
+          "visibility": {
+            "enum": [
+              "AGENT",
+              "THREAD"
+            ]
+          },
           "now": {
             "$ref": "#/$defs/timestamp"
           },
@@ -369,7 +375,9 @@
           "threadId",
           "assertedBySpeakerId",
           "sourceMessageRefs",
-          "verificationState"
+          "verificationState",
+          "agentId",
+          "visibility"
         ]
       }
     },

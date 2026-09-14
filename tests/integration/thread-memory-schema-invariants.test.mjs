@@ -5,6 +5,7 @@
 // beside tests/integration/migrate.test.mjs's real-graph coverage rather
 // than tests/security/thread-memory-scoping.security.mjs's real-process
 // attack reproductions.
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,13 +17,42 @@ import { createServer } from "../../apps/msp-server/src/server.mjs";
 const roots = [];
 const servers = [];
 
+// PH-MEMOS-3 stage 2 (BL-MEMOS-041/048): agentId/workspaceId/nonce are now
+// required, domain-layer fields on most of the ten tools (§6.1.1) -- this
+// file exercises schema/journal invariants through the UNGUARDED handler
+// map, which reads them off grant_agent_id/grant_workspace_id/grant_nonce
+// (the exact keys thread-guard.mjs injects from a verified grant). A
+// stable, shared agent/workspace pair, and a FRESH random nonce per call,
+// are supplied by default so no individual call site below needs to
+// change.
+function withDefaultGrantFields(server) {
+  const freshNonce = () => randomBytes(16).toString("hex");
+  const handlers = server.threadHandlers;
+  const withNonce = (name) => {
+    const original = handlers[name];
+    handlers[name] = (args = {}) => original({ grant_nonce: freshNonce(), grant_expires_at: Date.now() + 60_000, ...args });
+  };
+  const original = handlers.msp_thread_resolve;
+  handlers.msp_thread_resolve = (args = {}) =>
+    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, grant_nonce: freshNonce(), grant_expires_at: Date.now() + 60_000, ...args });
+  withNonce("msp_thread_memory_record");
+  withNonce("msp_thread_injection_record");
+  withNonce("msp_session_sweep");
+  withNonce("msp_session_compaction_claim");
+  withNonce("msp_session_compaction_commit");
+  withNonce("msp_session_compaction_retry");
+  return server;
+}
+
 function makeServer() {
   const root = mkdtempSync(path.join(tmpdir(), "msp-thread-schema-invariants-"));
   roots.push(root);
-  const server = createServer({
-    dbPath: path.join(root, "msp.sqlite3"),
-    env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: "c".repeat(40) },
-  });
+  const server = withDefaultGrantFields(
+    createServer({
+      dbPath: path.join(root, "msp.sqlite3"),
+      env: { ...process.env, MSP_TEST_CLOCK: "1", MSP_IDENTITY_HMAC_KEY: "c".repeat(40) },
+    }),
+  );
   servers.push(server);
   return server;
 }
@@ -429,6 +459,83 @@ describe("migrations/0008_thread_memory.sql trigger invariants", () => {
       .join(" | ");
     expect(plan).toMatch(/USING (COVERING )?INDEX idx_thread_messages_exchange_lookup/);
     expect(plan).not.toMatch(/SCAN thread_messages/);
+  });
+
+  // PH-MEMOS-3 stage 2 (migration 0009, BL-MEMOS-041): thread_agents is the
+  // structural analogue of thread_participants -- same append-only,
+  // no-DELETE, tenant-consistency shape, proven the same way.
+  it("thread_agents rows are append-only: no DELETE, and UPDATE permits only left_at NULL -> NOT NULL", async () => {
+    const server = makeServer();
+    const { thread } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-agents-append-only", tenant_id: "tenant-a",
+      grant_agent_id: "agent-invariant", grant_workspace_id: "workspace-invariant",
+    });
+    expect(() => server.db.prepare("DELETE FROM thread_agents WHERE thread_id=?").run(thread.threadId)).toThrow(/never be deleted/);
+    expect(() => server.db.prepare("UPDATE thread_agents SET agent_id='someone-else' WHERE thread_id=?").run(thread.threadId)).toThrow(/append-only/);
+    // The one permitted transition still updates cleanly.
+    expect(() => server.db.prepare("UPDATE thread_agents SET left_at=? WHERE thread_id=?").run(new Date().toISOString(), thread.threadId)).not.toThrow();
+  });
+
+  it("thread_agents refuses a row naming a foreign tenant (tenant-consistency trigger)", async () => {
+    const server = makeServer();
+    const { thread } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-agents-tenant", tenant_id: "tenant-a",
+      grant_agent_id: "agent-invariant", grant_workspace_id: "workspace-invariant",
+    });
+    expect(() =>
+      server.db
+        .prepare("INSERT INTO thread_agents (agent_attachment_id, tenant_id, thread_id, agent_id, workspace_id, joined_at) VALUES ('att-x','tenant-b',?,'agent-foreign','workspace-foreign',?)")
+        .run(thread.threadId, new Date().toISOString()),
+    ).toThrow(/tenant_id must match/);
+  });
+
+  // PH-MEMOS-3 stage 2 (migration 0009, BL-MEMOS-043): a record with
+  // visibility=AGENT requires a non-null agent_id, and any agent_id must
+  // have attached to the record's own thread_id at some point -- both
+  // enforced unconditionally by trg_protected_memory_records_agent_rules,
+  // independent of whatever the handler already checked.
+  it("protected_memory_records refuses visibility=AGENT with a null agent_id, and any agent_id that never attached to thread_id", async () => {
+    const server = makeServer();
+    const { thread } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-record-agent-rules", tenant_id: "tenant-a",
+      grant_agent_id: "agent-attached", grant_workspace_id: "workspace-attached",
+    });
+    await server.threadHandlers.msp_thread_message_append({
+      thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi",
+    });
+    const insertRecord = (recordId, agentId, visibility) =>
+      server.db
+        .prepare(
+          `INSERT INTO protected_memory_records
+             (record_id, tenant_id, thread_id, session_id, kind, status, asserted_by_speaker_id, subject_person_id,
+              scope_json, body_json, source_message_refs_json, supersedes_record_id, verification_state, version,
+              created_at, updated_at, agent_id, visibility)
+           VALUES (?, ?, ?, NULL, 'PREFERENCE', 'ACTIVE', 'alice', 'alice', '{}', '{}', '[]', NULL, 'CANDIDATE', 1, ?, ?, ?, ?)`,
+        )
+        .run(recordId, thread.tenantId, thread.threadId, new Date().toISOString(), new Date().toISOString(), agentId, visibility);
+    expect(() => insertRecord("memory-record_null-agent-visible", null, "AGENT")).toThrow(/requires a non-NULL agent_id/);
+    expect(() => insertRecord("memory-record_never-attached", "agent-stranger", "THREAD")).toThrow(/must have attached to thread_id/);
+    expect(() => insertRecord("memory-record_ok", "agent-attached", "AGENT")).not.toThrow();
+  });
+
+  // PH-MEMOS-3 stage 2 (migration 0009, BL-MEMOS-112): the recreated
+  // trg_thread_pending_deliveries_update_guard now also pins agent_id/
+  // workspace_id on both permitted transitions -- without this, a
+  // reconcile UPDATE could rewrite the very agent id the drain-time
+  // currency re-check depends on.
+  it("thread_pending_deliveries' reconcile UPDATE cannot rewrite agent_id/workspace_id", async () => {
+    const server = makeServer();
+    const { thread } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-pending-agent-pin", tenant_id: "tenant-a",
+      grant_agent_id: "agent-pending", grant_workspace_id: "workspace-pending",
+    });
+    await server.threadHandlers.msp_thread_delivery_record({
+      inbound_message_id: "not-arrived", source_event_id: "not-arrived:assistant", receipt_id: "receipt-pending-agent-pin", outcome: "ACCEPTED", text: "t",
+      delivery_scope: { tenantId: thread.tenantId, businessId: null, channelAccountId: "oa", externalRoomRef: "room-pending-agent-pin", agentId: "agent-pending", workspaceId: "workspace-pending" },
+    });
+    expect(() =>
+      server.db.prepare("UPDATE thread_pending_deliveries SET agent_id='agent-rewritten' WHERE receipt_id=?").run("receipt-pending-agent-pin"),
+    ).toThrow(/permit only a pending/i);
   });
 });
 

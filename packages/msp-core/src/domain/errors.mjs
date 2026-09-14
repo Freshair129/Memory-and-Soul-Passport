@@ -122,3 +122,39 @@ export class PrincipalErasedError extends MspRuntimeError {
     super(`principal_erased: ${message}`, "principal_erased");
   }
 }
+
+// PH-MEMOS-3 stage 2 (design doc Sec.14): a thread-bound call's
+// `grant.agentId` is not a current (`left_at IS NULL`) row in
+// `thread_agents` for the resolved thread, and (on `msp_thread_resolve`
+// against an existing thread specifically) `assertAgents` was not `true`
+// either. Distinct from `thread_scope_denied` for the same reason
+// `thread_audience_mismatch`/`record_subject_mismatch` are: a caller needs
+// to tell "you're not authorized for this thread at all" apart from
+// "you're not this thread's *current agent*," since the fix differs
+// (attach via `assertAgents`, vs. a scope problem entirely).
+export class AgentNotCurrentError extends MspRuntimeError {
+  constructor(message = "The grant's agentId is not a current agent of this thread.") {
+    super(`agent_not_current: ${message}`, "agent_not_current");
+  }
+}
+
+// PH-MEMOS-3 stage 2 (design doc Sec.6.1.1, Sec.14): a tool in the
+// nonce-required set (every mutating tool except `msp_thread_message_append`)
+// was called with no `nonce` claim on the grant at all.
+export class GrantNonceRequiredError extends MspRuntimeError {
+  constructor(message = "This tool requires a nonce claim on the grant.") {
+    super(`grant_nonce_required: ${message}`, "grant_nonce_required");
+  }
+}
+
+// PH-MEMOS-3 stage 2 (design doc Sec.6.1.1, Sec.12.2, Sec.14): the grant's
+// (tenantId, nonce) pair already exists in `grant_nonces` and has not yet
+// expired -- the INSERT that would record this call's own nonce hit a
+// PRIMARY KEY conflict. Raised from inside the same synchronous
+// transaction that attempted the nonce insert, after that transaction has
+// rolled back, so a replayed call never partially applies its mutation.
+export class GrantReplayedError extends MspRuntimeError {
+  constructor(message = "This grant's nonce has already been used for this tenant.") {
+    super(`grant_replayed: ${message}`, "grant_replayed");
+  }
+}
