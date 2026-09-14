@@ -460,6 +460,83 @@ describe("migrations/0008_thread_memory.sql trigger invariants", () => {
     expect(plan).toMatch(/USING (COVERING )?INDEX idx_thread_messages_exchange_lookup/);
     expect(plan).not.toMatch(/SCAN thread_messages/);
   });
+
+  // PH-MEMOS-3 stage 2 (migration 0009, BL-MEMOS-041): thread_agents is the
+  // structural analogue of thread_participants -- same append-only,
+  // no-DELETE, tenant-consistency shape, proven the same way.
+  it("thread_agents rows are append-only: no DELETE, and UPDATE permits only left_at NULL -> NOT NULL", async () => {
+    const server = makeServer();
+    const { thread } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-agents-append-only", tenant_id: "tenant-a",
+      grant_agent_id: "agent-invariant", grant_workspace_id: "workspace-invariant",
+    });
+    expect(() => server.db.prepare("DELETE FROM thread_agents WHERE thread_id=?").run(thread.threadId)).toThrow(/never be deleted/);
+    expect(() => server.db.prepare("UPDATE thread_agents SET agent_id='someone-else' WHERE thread_id=?").run(thread.threadId)).toThrow(/append-only/);
+    // The one permitted transition still updates cleanly.
+    expect(() => server.db.prepare("UPDATE thread_agents SET left_at=? WHERE thread_id=?").run(new Date().toISOString(), thread.threadId)).not.toThrow();
+  });
+
+  it("thread_agents refuses a row naming a foreign tenant (tenant-consistency trigger)", async () => {
+    const server = makeServer();
+    const { thread } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-agents-tenant", tenant_id: "tenant-a",
+      grant_agent_id: "agent-invariant", grant_workspace_id: "workspace-invariant",
+    });
+    expect(() =>
+      server.db
+        .prepare("INSERT INTO thread_agents (agent_attachment_id, tenant_id, thread_id, agent_id, workspace_id, joined_at) VALUES ('att-x','tenant-b',?,'agent-foreign','workspace-foreign',?)")
+        .run(thread.threadId, new Date().toISOString()),
+    ).toThrow(/tenant_id must match/);
+  });
+
+  // PH-MEMOS-3 stage 2 (migration 0009, BL-MEMOS-043): a record with
+  // visibility=AGENT requires a non-null agent_id, and any agent_id must
+  // have attached to the record's own thread_id at some point -- both
+  // enforced unconditionally by trg_protected_memory_records_agent_rules,
+  // independent of whatever the handler already checked.
+  it("protected_memory_records refuses visibility=AGENT with a null agent_id, and any agent_id that never attached to thread_id", async () => {
+    const server = makeServer();
+    const { thread } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-record-agent-rules", tenant_id: "tenant-a",
+      grant_agent_id: "agent-attached", grant_workspace_id: "workspace-attached",
+    });
+    await server.threadHandlers.msp_thread_message_append({
+      thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi",
+    });
+    const insertRecord = (recordId, agentId, visibility) =>
+      server.db
+        .prepare(
+          `INSERT INTO protected_memory_records
+             (record_id, tenant_id, thread_id, session_id, kind, status, asserted_by_speaker_id, subject_person_id,
+              scope_json, body_json, source_message_refs_json, supersedes_record_id, verification_state, version,
+              created_at, updated_at, agent_id, visibility)
+           VALUES (?, ?, ?, NULL, 'PREFERENCE', 'ACTIVE', 'alice', 'alice', '{}', '{}', '[]', NULL, 'CANDIDATE', 1, ?, ?, ?, ?)`,
+        )
+        .run(recordId, thread.tenantId, thread.threadId, new Date().toISOString(), new Date().toISOString(), agentId, visibility);
+    expect(() => insertRecord("memory-record_null-agent-visible", null, "AGENT")).toThrow(/requires a non-NULL agent_id/);
+    expect(() => insertRecord("memory-record_never-attached", "agent-stranger", "THREAD")).toThrow(/must have attached to thread_id/);
+    expect(() => insertRecord("memory-record_ok", "agent-attached", "AGENT")).not.toThrow();
+  });
+
+  // PH-MEMOS-3 stage 2 (migration 0009, BL-MEMOS-112): the recreated
+  // trg_thread_pending_deliveries_update_guard now also pins agent_id/
+  // workspace_id on both permitted transitions -- without this, a
+  // reconcile UPDATE could rewrite the very agent id the drain-time
+  // currency re-check depends on.
+  it("thread_pending_deliveries' reconcile UPDATE cannot rewrite agent_id/workspace_id", async () => {
+    const server = makeServer();
+    const { thread } = await server.threadHandlers.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa", external_room_ref: "room-pending-agent-pin", tenant_id: "tenant-a",
+      grant_agent_id: "agent-pending", grant_workspace_id: "workspace-pending",
+    });
+    await server.threadHandlers.msp_thread_delivery_record({
+      inbound_message_id: "not-arrived", source_event_id: "not-arrived:assistant", receipt_id: "receipt-pending-agent-pin", outcome: "ACCEPTED", text: "t",
+      delivery_scope: { tenantId: thread.tenantId, businessId: null, channelAccountId: "oa", externalRoomRef: "room-pending-agent-pin", agentId: "agent-pending", workspaceId: "workspace-pending" },
+    });
+    expect(() =>
+      server.db.prepare("UPDATE thread_pending_deliveries SET agent_id='agent-rewritten' WHERE receipt_id=?").run("receipt-pending-agent-pin"),
+    ).toThrow(/permit only a pending/i);
+  });
 });
 
 // W5: every journal entry's `actor` is the HMAC of the raw speaker id --
