@@ -626,7 +626,18 @@
             "BL-MEMOS-058",
             "BL-MEMOS-059"
           ],
-          "label": "Implement PH-MEMOS-4 lifecycle and erasure (spec 9960f91)",
+          "label": "Implement PH-MEMOS-4 lifecycle and erasure (fcd6af1)"
+        }
+      }
+    },
+    "a353cc3faea23d868": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-057"
+          ],
+          "label": "PH-MEMOS-4 code review, round 1 (fcd6af1)",
           "status": "open"
         }
       }
