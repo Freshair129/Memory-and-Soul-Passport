@@ -41,6 +41,25 @@ function sha256(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
+// The same filename filter migrate.mjs's own MIGRATION_FILE_PATTERN applies
+// (`/^(\d{4})_.*\.sql$/`), sorted the same way `loadMigrationFiles` sorts
+// (lexicographic on the name, which sorts numerically here because the
+// version prefix is zero-padded to 4 digits) -- this is the actual pending
+// set for `rootMigrationsDir` on THIS checkout, not a count fixed at
+// whatever it happened to be when this test was written (RKOI review: a
+// hard-coded 7 broke the moment a cherry-pick target added 0008/0009).
+// Every assertion below that cares how many root migrations exist, or what
+// their version numbers are, is derived from this instead of a literal.
+function rootMigrationFileNames() {
+  return readdirSync(rootMigrationsDir)
+    .filter((name) => /^\d{4}_.*\.sql$/.test(name))
+    .sort();
+}
+
+function rootMigrationVersions() {
+  return rootMigrationFileNames().map((name) => Number(name.slice(0, 4)));
+}
+
 // Spawns `n` copies of the fixture worker, all pointed at the SAME fresh
 // `dbPath`/`migrationsDir`, all blocked on the same barrier file, then drops
 // the barrier once every child has had a moment to reach its poll loop.
@@ -110,12 +129,14 @@ describe("db/migrate concurrent cold start (multi-process)", () => {
         expect(code).toBe(0);
       }
 
-      // Across all 6 processes, the 7 root migrations were applied exactly
+      // Across all 6 processes, every root migration was applied exactly
       // once in total (not once per process, not zero times).
+      const expectedVersions = rootMigrationVersions();
+      const expectedNewestVersion = expectedVersions[expectedVersions.length - 1];
       const totalApplied = results.reduce((sum, { parsed }) => sum + parsed.appliedCount, 0);
-      expect(totalApplied).toBe(7);
+      expect(totalApplied).toBe(expectedVersions.length);
       for (const { parsed } of results) {
-        expect(parsed.currentVersion).toBe(7);
+        expect(parsed.currentVersion).toBe(expectedNewestVersion);
       }
 
       // schema_migrations has EXACTLY one row per migration version, with
@@ -125,9 +146,9 @@ describe("db/migrate concurrent cold start (multi-process)", () => {
       const db = open(dbPath);
       cleanups.push(() => db.close());
       const rows = db.prepare("SELECT version, name, checksum FROM schema_migrations ORDER BY version").all();
-      const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
+      const migrationFileNames = rootMigrationFileNames();
       expect(rows).toHaveLength(migrationFileNames.length);
-      expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(rows.map((row) => row.version)).toEqual(expectedVersions);
       for (const row of rows) {
         const fileName = migrationFileNames.find((name) => name.startsWith(`${String(row.version).padStart(4, "0")}_`));
         expect(fileName, `migration file for version ${row.version}`).toBeTruthy();
@@ -135,7 +156,7 @@ describe("db/migrate concurrent cold start (multi-process)", () => {
         expect(row.checksum).toBe(sha256(sql));
         expect(row.name).toBe(fileName);
       }
-      expect(db.pragma("user_version", { simple: true })).toBe(7);
+      expect(db.pragma("user_version", { simple: true })).toBe(expectedNewestVersion);
 
       // The schema itself is correct, not just the bookkeeping table --
       // spot-check the same tables/columns migrate.test.mjs checks for a
@@ -281,8 +302,10 @@ describe("db/migrate concurrent cold start (multi-process)", () => {
 
       for (const iterationResult of loopResults) {
         expect(iterationResult.allOk, `iteration ${iterationResult.iteration} had a process fail`).toBe(true);
-        expect(iterationResult.totalApplied, `iteration ${iterationResult.iteration} applied count`).toBe(7);
-        expect(iterationResult.rowCount, `iteration ${iterationResult.iteration} schema_migrations row count`).toBe(7);
+        expect(iterationResult.totalApplied, `iteration ${iterationResult.iteration} applied count`).toBe(expectedCount);
+        expect(iterationResult.rowCount, `iteration ${iterationResult.iteration} schema_migrations row count`).toBe(
+          expectedCount,
+        );
         expect(iterationResult.checksumsOk, `iteration ${iterationResult.iteration} checksums`).toBe(true);
       }
     },
