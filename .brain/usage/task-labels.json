@@ -530,6 +530,13 @@
             "BL-MEMOS-055"
           ],
           "label": "PH-MEMOS-4 lifecycle + erasure spec (design v0.5.0b, e9e8534)"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-050..057"
+          ],
+          "label": "PH-MEMOS-4 spec revision round 2 (design v0.5.1b)",
+          "status": "open"
         }
       }
     },
@@ -540,8 +547,7 @@
           "task_ids": [
             "BL-MEMOS-050..057"
           ],
-          "label": "PH-MEMOS-4 spec review, round 1 (e9e8534)",
-          "status": "open"
+          "label": "PH-MEMOS-4 spec review, round 1 (4 critical: leave rejoin loophole, GROUP erasure/export leak, erasure gaps)"
         }
       }
     }
