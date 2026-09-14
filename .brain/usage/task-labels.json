@@ -362,6 +362,15 @@
             "BL-MEMOS-049"
           ],
           "label": "Keyring parser V8 fix, transport escaped-key pre-scan, and stage 2 implementation (3a88991..f788e39)"
+        },
+        "12": {
+          "task_ids": [
+            "BL-MEMOS-047",
+            "BL-MEMOS-045",
+            "BL-MEMOS-048"
+          ],
+          "label": "Stage 2 revision: iterative scanner, nonce expiry/bounds, replay+departed tests, GKS/legacy JSON, journal",
+          "status": "open"
         }
       }
     },
@@ -414,8 +423,7 @@
           "task_ids": [
             "BL-MEMOS-047"
           ],
-          "label": "Stage 2 implementation code review, round 1 (f788e39)",
-          "status": "open"
+          "label": "Stage 2 implementation code review, round 1 (1 critical: recursive scanner stack crash)"
         }
       }
     },
