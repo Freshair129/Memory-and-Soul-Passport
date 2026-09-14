@@ -67,8 +67,11 @@
 //      regardless of whether the migration committed or threw.
 // Root migrations 0003 and 0005 predate this mode and were never edited to
 // use it (see docs/NOTES.md for exactly which of their rebuilds carried
-// real foreign-key risk and which did not); the design's 0008 (a `vaults`
-// rebuild) is the first migration that needs it. The directive is part of
+// real foreign-key risk and which did not); 0008 (TASK-MEMOS-002 stage 1,
+// thread memory) shipped as brand-new CREATE TABLE statements only, never a
+// rebuild, so it does not need this mode either -- a principal-vaults
+// rebuild, if one is still needed, is a later migration that will. The
+// directive is part of
 // the migration file's text, so the existing checksum-drift guard covers it
 // automatically; the runner itself never decides on its own to relax
 // foreign keys. A migration without the directive is applied exactly as

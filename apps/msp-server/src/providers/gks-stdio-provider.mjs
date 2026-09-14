@@ -3,6 +3,7 @@
 // the same newline-delimited JSON-RPC framing on both links.
 import { spawn } from "node:child_process";
 import { GksProviderUnavailableError } from "@freshair129/msp-contracts/errors";
+import { containsEscapedObjectKey } from "../transport/escaped-object-key-scan.mjs";
 
 function parseArgs(value) {
   if (!value) return [];
@@ -150,9 +151,28 @@ async function callGksTool({ command, args, cwd, env }, toolName, input) {
       if (newline < 0) return;
       const body = buffer.subarray(0, newline);
       buffer = buffer.subarray(newline + 1);
+      const text = body.toString("utf8");
+      // RKOI review (stage-2 revision, WARNING 4): the same V8 JSON.parse
+      // non-first-key-corruption engine bug the parent transport already
+      // defends against (see escaped-object-key-scan.mjs's own header)
+      // applies equally here -- this module also calls the native
+      // JSON.parse repeatedly, in the same long-lived MSP process, on text
+      // it does not control (GKS's own response). Refused the same way,
+      // before JSON.parse ever runs: the existing malformed-NDJSON path
+      // already fails this one in-flight GKS request closed (reject every
+      // pending call on THIS child, close it) without crashing the MSP
+      // server process itself -- a fresh callGksTool() spawns a brand-new
+      // child for the next request, so "that request only" is exactly what
+      // this already does.
+      if (containsEscapedObjectKey(text)) {
+        const error = unavailable("GKS response contained an object key with an escape sequence.");
+        rejectPending(error);
+        close();
+        return;
+      }
       let message;
       try {
-        message = JSON.parse(body.toString("utf8"));
+        message = JSON.parse(text);
       } catch {
         const error = unavailable("GKS returned malformed NDJSON.");
         rejectPending(error);

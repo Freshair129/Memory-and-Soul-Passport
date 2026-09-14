@@ -5,7 +5,24 @@
 // re-exports domain/errors.mjs's existing vocabulary unchanged and adds the
 // error shapes this packet's contract-shaping/validation logic needs that
 // WP-12 had no occasion to define yet.
-export { MemoryConflictError, MemoryNotFoundError, MspRuntimeError, SchemaVersionError } from "@freshair129/msp-core/errors";
+export {
+  AgentNotCurrentError,
+  CompactionLeaseConflictError,
+  GrantNonceRequiredError,
+  GrantReplayedError,
+  IdentityHmacUnconfiguredError,
+  MemoryConflictError,
+  MemoryNotFoundError,
+  MspRuntimeError,
+  PrincipalErasedError,
+  RecordSubjectMismatchError,
+  SchemaVersionError,
+  ThreadAudienceMismatchError,
+  ThreadConflictError,
+  ThreadNotFoundError,
+  ThreadPayloadTooLargeError,
+  ThreadValidationError,
+} from "@freshair129/msp-core/errors";
 
 import { MspRuntimeError } from "@freshair129/msp-core/errors";
 
@@ -66,5 +83,57 @@ export class GksProviderInvalidResponseError extends MspRuntimeError {
 export class VaultScopeDeniedError extends MspRuntimeError {
   constructor(message = "vault_scope_denied: caller's mounted vault does not include the requested vault_id.") {
     super(message, "vault_scope_denied");
+  }
+}
+
+/**
+ * API-011 thread memory (TASK-MEMOS-002), C-2: the thread/session/job/
+ * participant grant does not authorize this operation. Mirrors
+ * VaultScopeDeniedError exactly -- same reasoning about the wire error
+ * envelope carrying only `.message`, so every test asserting this rejection
+ * matches on the message text, which is why the literal string
+ * "thread_scope_denied" is baked into the default message here too. Raised
+ * by contracts/thread-access.mjs's assertThreadScope, never caught and
+ * turned into a fabricated success envelope anywhere in this packet.
+ */
+export class ThreadScopeDeniedError extends MspRuntimeError {
+  constructor(message = "thread_scope_denied: the grant does not authorize this thread operation.") {
+    super(message, "thread_scope_denied");
+  }
+}
+
+// RKOI review (post-implementation, items 9-10): thread-access.mjs's
+// verifyThreadGrant now resolves its HMAC key through an injected
+// `keyFor(tenantId)` (stage 2 will add a real per-tenant keyring without
+// rewriting the guard). These four codes replace the generic
+// thread_scope_denied specifically for grant-verification failures, so a
+// caller can tell "nobody signed a key for this tenant" from "this grant
+// does not authorize this scope":
+//   - no key resolves for the grant's claimed tenant;
+//   - the grant is missing, malformed, or names a different operation than
+//     the one it was sent with, or the HMAC signature itself does not match;
+//   - the grant's expiry window has passed or is implausible;
+//   - the grant's payloadHash does not match this exact request body.
+export class GrantUnconfiguredError extends MspRuntimeError {
+  constructor(message = "No thread service key is configured for this grant's tenant.") {
+    super(`grant_unconfigured: ${message}`, "grant_unconfigured");
+  }
+}
+
+export class GrantSignatureInvalidError extends MspRuntimeError {
+  constructor(message = "The grant is missing, malformed, or its signature does not match.") {
+    super(`grant_signature_invalid: ${message}`, "grant_signature_invalid");
+  }
+}
+
+export class GrantExpiredError extends MspRuntimeError {
+  constructor(message = "The grant has expired or carries an implausible lifetime.") {
+    super(`grant_expired: ${message}`, "grant_expired");
+  }
+}
+
+export class GrantPayloadMismatchError extends MspRuntimeError {
+  constructor(message = "The grant was not issued for this exact request body.") {
+    super(`grant_payload_mismatch: ${message}`, "grant_payload_mismatch");
   }
 }

@@ -1,7 +1,7 @@
 ---
-version: "0.2.6b"
+version: "0.2.7b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-14T00:20:00+07:00,JANUS"
+last_update: "2026-09-14T10:00:00+07:00,ATHER"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -90,6 +90,13 @@ The repository-root `migrations/` directory is canonical. `msp-storage` owns the
 - Every GKS child process (pipeline relay, promote, stage-evidence export) gets an environment built from an explicit allowlist — GKS's own `GKS_*` configuration plus OS basics — never a copy of MSP's own process environment, and both halves of that allowlist match a variable name case-insensitively (OS basics by whole name, GKS's configuration by `GKS_` prefix) so a caller's casing cannot silently drop a name, which MSP's caller may hand it in full. The Tier 4 worker token is used only for the explicit loopback query and, like every other MSP-internal credential, is never forwarded to a GKS child.
 - A malformed, foreign-scope, redirected or unconfigured pipeline hop fails closed; MSP never turns it into an empty success.
 
+## Multi-user, multi-agent memory surface (API-011, proposed)
+
+MSP's thread/session/protected-memory surface for many concurrent users and
+agents — reconciling the unmerged `codex/msp-thread-memory` branch with
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` — is proposed, not built;
+see [`ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md`](ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md) and the design's v0.3.0b rewrite.
+
 ## Change risk
 
 Risk is HIGH because code crosses package and repository boundaries and migration ownership moves. Mitigation is byte comparison for copied SQL and logic, source-baseline tests, standalone package tests, external-process proof, and a final GoVibe consumer compatibility gate.
@@ -98,6 +105,7 @@ Risk is HIGH because code crosses package and repository boundaries and migratio
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.7b | 2026-09-14 | beta | Linked the proposed multi-user/multi-agent memory surface (API-011): `ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md` and the `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.0b rewrite. No code change. | working-tree | ATHER |
 | 0.2.6b | 2026-09-14 | beta | Migration ownership paragraph corrected: the structural foreign-key check is not directive-gated -- it now runs for every pending migration, plain or directive (RKOI follow-up warning 2); `-- msp-migration: foreign-keys=off` (WP-E0) relaxes row-level enforcement only. | working-tree | JANUS |
 | 0.2.5b | 2026-09-13 | beta | Migration ownership paragraph now names the runner's `-- msp-migration: foreign-keys=off` mode (WP-E0), for rebuilding a table other tables reference by foreign key once the database can hold rows the rebuild would orphan. | working-tree | JANUS |
 | 0.2.3b | 2026-09-13 | beta | `createMspStdioCaller` now builds the MSP child environment from an explicit allowlist (MSP runtime names + `GKS_*` + OS basics) instead of defaulting to a full copy of the caller's `process.env`. Breaking for `@freshair129/msp-client-js` consumers that relied on unrelated variables reaching the MSP child — including `NODE_OPTIONS`, which is withheld deliberately because it can load code into the child, so an operator passing `--max-old-space-size` that way must now set it another way; client version 0.1.0 -> 0.2.0. | fix/client-transport-env-allowlist | KIN |

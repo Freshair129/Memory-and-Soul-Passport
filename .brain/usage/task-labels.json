@@ -1,0 +1,757 @@
+{
+  "_comment": "Maps transcript segments to plan ids (docs/IMPLEMENTATION-PLAN-MEMORY-OS.md). Segment numbers come from collect-task-usage.mjs: subagents split on coordinator messages, coordinator splits on user prompts. OPS-MEMOS-* ids cover coordination work that is not a backlog item. Update this file, then re-run the collector.",
+  "agents": {
+    "a7cf259ecb5eb9ea0": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-001"
+          ],
+          "label": "Design v0.1.0b review, round 1 (13 critical)"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-001"
+          ],
+          "label": "Design v0.2.0b review, round 2 (2 critical)"
+        },
+        "3": {
+          "task_ids": [
+            "BL-MEMOS-001"
+          ],
+          "label": "Design v0.2.1b closure check (approved)"
+        },
+        "4": {
+          "task_ids": [
+            "BL-MEMOS-002"
+          ],
+          "label": "WP-E0 runner review, round 1 (1 critical)"
+        },
+        "5": {
+          "task_ids": [
+            "BL-MEMOS-002"
+          ],
+          "label": "WP-E0 revision confirmation (approved)"
+        },
+        "6": {
+          "task_ids": [
+            "BL-MEMOS-003"
+          ],
+          "label": "Directive near-miss fix review (approved)"
+        },
+        "7": {
+          "task_ids": [
+            "BL-MEMOS-004"
+          ],
+          "label": "Plain-path FK check review, round 1 (1 critical)"
+        },
+        "8": {
+          "task_ids": [
+            "BL-MEMOS-004"
+          ],
+          "label": "Plain-path FK check review, round 2 (1 critical)"
+        },
+        "9": {
+          "task_ids": [
+            "BL-MEMOS-004"
+          ],
+          "label": "Plain-path FK check review, round 3 (approved)"
+        },
+        "10": {
+          "task_ids": [
+            "BL-MEMOS-005"
+          ],
+          "label": "FK target-type follow-up review (conditional approval)"
+        },
+        "11": {
+          "task_ids": [
+            "BL-MEMOS-005"
+          ],
+          "label": "Shadow non-key fixup confirmation (approved)"
+        },
+        "12": {
+          "task_ids": [
+            "BL-MEMOS-010"
+          ],
+          "label": "Thread-memory branch vs design reconciliation (input to TASK-MEMOS-001)"
+        },
+        "13": {
+          "task_ids": [
+            "BL-MEMOS-012"
+          ],
+          "label": "TASK-MEMOS-001 docs review, round 1 (3 critical)"
+        },
+        "14": {
+          "task_ids": [
+            "BL-MEMOS-012"
+          ],
+          "label": "TASK-MEMOS-001 docs review, round 2 (1 critical)"
+        },
+        "15": {
+          "task_ids": [
+            "BL-MEMOS-012"
+          ],
+          "label": "TASK-MEMOS-001 docs review, round 3 (1 critical: delivery grant channelType)"
+        },
+        "16": {
+          "task_ids": [
+            "BL-MEMOS-012"
+          ],
+          "label": "TASK-MEMOS-001 docs review, round 4 (approved, 9 warnings)"
+        },
+        "17": {
+          "task_ids": [
+            "BL-MEMOS-012"
+          ],
+          "label": "TASK-MEMOS-001 docs closure check (7/9 closed; line edits applied by coordinator in 445bd90)"
+        },
+        "18": {
+          "task_ids": [
+            "BL-MEMOS-040..049"
+          ],
+          "label": "Stage 2 spec review, round 1 (2 critical: pending-delivery agent gate, record dedup/supersede leak)"
+        },
+        "19": {
+          "task_ids": [
+            "BL-MEMOS-040..049"
+          ],
+          "label": "Stage 2 spec review, round 2 (APPROVED with warnings, 72e593f)"
+        },
+        "20": {
+          "task_ids": [
+            "BL-MEMOS-040..049"
+          ],
+          "label": "Stage 2 spec closure check (APPROVED, ready for KIN, 0f3f15a)"
+        }
+      }
+    },
+    "a6a633b1e068abe6c": {
+      "actor": "janus",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-002"
+          ],
+          "label": "WP-E0 migration-runner foreign-keys=off mode"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-002"
+          ],
+          "label": "WP-E0 revision (structural FK check, guards)"
+        }
+      }
+    },
+    "a7bb5fc0a0bfc28e6": {
+      "actor": "janus",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-003"
+          ],
+          "label": "Refuse near-miss directive spellings"
+        }
+      }
+    },
+    "a765bbc71c9aa43a1": {
+      "actor": "janus",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-004"
+          ],
+          "label": "Plain-path structural FK check (collation parser)"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-004"
+          ],
+          "label": "Revision 1: delegate to SQLite (child-side probe)"
+        },
+        "3": {
+          "task_ids": [
+            "BL-MEMOS-004"
+          ],
+          "label": "Revision 2: parent-side DELETE probe"
+        }
+      }
+    },
+    "ad29a77e7f8ccce49": {
+      "actor": "janus",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-005"
+          ],
+          "label": "FK target type via table_list, directive post-exec probe"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-005"
+          ],
+          "label": "Shadow non-key refusal, main. qualification, internal targets"
+        }
+      }
+    },
+    "a4376640874a049e8": {
+      "actor": "explore",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "OPS-MEMOS-001"
+          ],
+          "label": "Trace LINE OA agent flow to MSP (investigation)"
+        }
+      }
+    },
+    "a2d9519b2d3bcd6bf": {
+      "actor": "ather",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-010",
+            "BL-MEMOS-011"
+          ],
+          "label": "ADR + design v0.3.0b draft"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-010",
+            "BL-MEMOS-011"
+          ],
+          "label": "ADR/design/plan revision after RKOI round 1 (design v0.3.1b)"
+        },
+        "3": {
+          "task_ids": [
+            "BL-MEMOS-010",
+            "BL-MEMOS-011"
+          ],
+          "label": "Docs revision round 3: frozen wire values, aligned to stage-1 code (design v0.3.2b)"
+        },
+        "4": {
+          "task_ids": [
+            "BL-MEMOS-010",
+            "BL-MEMOS-011"
+          ],
+          "label": "Docs revision round 4: delivery claim set, room hash, DEC-MEMOS-15, schema consistency (design v0.3.3b, commit 1c4a62f)"
+        },
+        "5": {
+          "task_ids": [
+            "BL-MEMOS-010",
+            "BL-MEMOS-011"
+          ],
+          "label": "Docs round 5: fold RKOI round-4 warnings (design v0.3.4b, commit 36b6211)"
+        },
+        "6": {
+          "task_ids": [
+            "BL-MEMOS-010",
+            "BL-MEMOS-011"
+          ],
+          "label": "Docs round 6: required room claim, DEC-MEMOS-16, room-scoped sweep (design v0.3.5b, commits b822901, c6e2820)"
+        },
+        "7": {
+          "task_ids": [
+            "BL-MEMOS-040",
+            "BL-MEMOS-041",
+            "BL-MEMOS-042",
+            "BL-MEMOS-043",
+            "BL-MEMOS-044",
+            "BL-MEMOS-046",
+            "BL-MEMOS-048",
+            "BL-MEMOS-049"
+          ],
+          "label": "Stage 2 multi-agent spec (design v0.4.0b, f74ad0d)"
+        },
+        "8": {
+          "task_ids": [
+            "BL-MEMOS-040..049",
+            "BL-MEMOS-112"
+          ],
+          "label": "Stage 2 spec revision round 2 (design v0.4.1b, 72e593f)"
+        },
+        "9": {
+          "task_ids": [
+            "BL-MEMOS-040..049",
+            "BL-MEMOS-112"
+          ],
+          "label": "Stage 2 spec: fold round-2 warnings (design v0.4.2b, 0f3f15a)"
+        }
+      }
+    },
+    "ab508b7a790efd268": {
+      "actor": "kin",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-020..032"
+          ],
+          "label": "TASK-MEMOS-002 stage 1: port thread memory, C-1/C-2 fixes, 14-item RKOI delta (delta queued into the same run)"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-033",
+            "BL-MEMOS-102",
+            "BL-MEMOS-108",
+            "BL-MEMOS-109",
+            "BL-MEMOS-111"
+          ],
+          "label": "Stage 1 revision: delivery/HMAC, DEC-MEMOS-15, room check, per-tool audience, schema integrity (0508b8b..95629e2)"
+        },
+        "3": {
+          "task_ids": [
+            "BL-MEMOS-033",
+            "BL-MEMOS-111",
+            "BL-MEMOS-102"
+          ],
+          "label": "Stage 1 revision round 3: required room claim, DEC-MEMOS-16, 0008 nits, output-schema contract test (95629e2..467d6ba)"
+        },
+        "4": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1 follow-ups: best-effort delivery reconcile on append, RSK-09 pointer (467d6ba..3d5ea92)"
+        },
+        "5": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1: error code in reconcile_skipped journal entry (707406d)"
+        },
+        "6": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Stage 2: per-tenant MSP_THREAD_SERVICE_KEYRING (707406d..0a7dd0d)"
+        },
+        "7": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Keyring revision: no key echo, strict parser, parse before open, docs (0a7dd0d..fd8095f)"
+        },
+        "8": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Keyring doc nits (escape typo, round label, GATE-A row) (623e931)"
+        },
+        "9": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Keyring parser: decode values in scanner, not via native JSON.parse keys (V8 bug)"
+        },
+        "10": {
+          "task_ids": [
+            "BL-MEMOS-040..049"
+          ],
+          "label": "Transport escaped-key pre-scan (server + client), queued after keyring fix"
+        },
+        "11": {
+          "task_ids": [
+            "BL-MEMOS-040",
+            "BL-MEMOS-041",
+            "BL-MEMOS-042",
+            "BL-MEMOS-043",
+            "BL-MEMOS-044",
+            "BL-MEMOS-045",
+            "BL-MEMOS-046",
+            "BL-MEMOS-048",
+            "BL-MEMOS-112",
+            "BL-MEMOS-049"
+          ],
+          "label": "Keyring parser V8 fix, transport escaped-key pre-scan, and stage 2 implementation (3a88991..f788e39)"
+        },
+        "12": {
+          "task_ids": [
+            "BL-MEMOS-047",
+            "BL-MEMOS-045",
+            "BL-MEMOS-048"
+          ],
+          "label": "Stage 2 revision: iterative scanner, nonce expiry/bounds, replay+departed tests, GKS/legacy JSON, journal (efa395e, 4d0df3c)"
+        },
+        "13": {
+          "task_ids": [
+            "BL-MEMOS-047"
+          ],
+          "label": "Stage 2 non-blocking fold: journal workspace_id, legacy audit columns, grantExpiresAt bounds (40843b2)"
+        }
+      }
+    },
+    "afd6aa297b9a3d524": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1 code review (2 critical: delivery refusal, VERIFIED lock-up)"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Docs-review cross-check points for stage-1 code"
+        },
+        "3": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1 code re-review, round 2 (1 critical: room check skipped without externalRoomRef)"
+        },
+        "4": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1 code re-review, round 3 (APPROVED, 0 critical)"
+        },
+        "5": {
+          "task_ids": [
+            "BL-MEMOS-033"
+          ],
+          "label": "Stage 1 follow-up confirmation (APPROVED, 3d5ea92)"
+        },
+        "6": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Review BL-MEMOS-049 keyring (1 critical: key echoed in startup error)"
+        },
+        "7": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Keyring re-review, round 2 (APPROVED, fd8095f)"
+        },
+        "8": {
+          "task_ids": [
+            "BL-MEMOS-047"
+          ],
+          "label": "Stage 2 implementation code review, round 1 (1 critical: recursive scanner stack crash)"
+        },
+        "9": {
+          "task_ids": [
+            "BL-MEMOS-047"
+          ],
+          "label": "Stage 2 implementation code review, round 2 (APPROVED, 4d0df3c)"
+        },
+        "10": {
+          "task_ids": [
+            "BL-MEMOS-047"
+          ],
+          "label": "Confirm stage 2 non-blocking fold (APPROVED, 40843b2)"
+        }
+      }
+    },
+    "a9a5d8be45b214928": {
+      "actor": "ghost",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-049"
+          ],
+          "label": "Root-cause keyring fuzz anomaly: V8 JSON.parse non-first-key corruption"
+        }
+      }
+    },
+    "a8d3c47cdf31340cd": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-033",
+            "BL-MEMOS-040..049"
+          ],
+          "label": "V8 JSON.parse blast radius: 0 critical, transport pre-scan and CI assertion required"
+        }
+      }
+    },
+    "ae6c2c88923bb2362": {
+      "actor": "janus",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-049",
+            "BL-MEMOS-047"
+          ],
+          "label": "CI engine canary for V8 JSON.parse bug (e0a3624)"
+        }
+      }
+    },
+    "a0d58fa2e909241ec": {
+      "actor": "janus",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-080"
+          ],
+          "label": "Fix concurrent cold-start migration race (cbce394)"
+        }
+      }
+    },
+    "a46f6a88198a982ce": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-080"
+          ],
+          "label": "Review concurrent migration lock fix (0 critical; counts, crash wording, docs)"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-080"
+          ],
+          "label": "Confirm migration fix revision (APPROVED conditional on Ubuntu CI, ea1b5f2)"
+        }
+      }
+    },
+    "a547846223eeff25d": {
+      "actor": "janus",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-080"
+          ],
+          "label": "Revise migration lock fix: derived counts, hung-holder wording, typed lock-open error (ea1b5f2)"
+        }
+      }
+    }
+  },
+  "coordinator": {
+    "1": {
+      "task_ids": [
+        "BL-MEMOS-001"
+      ],
+      "label": "Explore repo and draft design v0.1.0b"
+    },
+    "2": {
+      "task_ids": [
+        "BL-MEMOS-001"
+      ],
+      "label": "Dispatch RKOI design review round 1"
+    },
+    "3": {
+      "task_ids": [
+        "BL-MEMOS-001"
+      ],
+      "label": "Revise design to v0.2.0b, dispatch round 2"
+    },
+    "4": {
+      "task_ids": [
+        "BL-MEMOS-001"
+      ],
+      "label": "Revise design to v0.2.1b, dispatch closure check"
+    },
+    "5": {
+      "task_ids": [
+        "BL-MEMOS-001"
+      ],
+      "label": "Fold warnings into v0.2.2b, commit, open PR #15"
+    },
+    "6": {
+      "task_ids": [
+        "BL-MEMOS-002"
+      ],
+      "label": "Merge PR #15, dispatch JANUS WP-E0"
+    },
+    "7": {
+      "task_ids": [
+        "OPS-MEMOS-000"
+      ],
+      "label": "/model command (no model call)"
+    },
+    "8": {
+      "task_ids": [
+        "OPS-MEMOS-000"
+      ],
+      "label": "/model command output (no model call)"
+    },
+    "9": {
+      "task_ids": [
+        "BL-MEMOS-002"
+      ],
+      "label": "Verify WP-E0, dispatch RKOI review"
+    },
+    "10": {
+      "task_ids": [
+        "BL-MEMOS-002"
+      ],
+      "label": "Dispatch WP-E0 revision"
+    },
+    "11": {
+      "task_ids": [
+        "BL-MEMOS-002"
+      ],
+      "label": "Confirm revision, open PR #16"
+    },
+    "12": {
+      "task_ids": [
+        "BL-MEMOS-003"
+      ],
+      "label": "Merge PR #16, dispatch near-miss fix"
+    },
+    "13": {
+      "task_ids": [
+        "BL-MEMOS-003"
+      ],
+      "label": "Open PR #17, dispatch plain-path check"
+    },
+    "14": {
+      "task_ids": [
+        "BL-MEMOS-003"
+      ],
+      "label": "Merge PR #17"
+    },
+    "15": {
+      "task_ids": [
+        "BL-MEMOS-004"
+      ],
+      "label": "Open PR #18, dispatch target-type follow-up"
+    },
+    "16": {
+      "task_ids": [
+        "BL-MEMOS-004"
+      ],
+      "label": "Merge PR #18"
+    },
+    "17": {
+      "task_ids": [
+        "BL-MEMOS-005"
+      ],
+      "label": "Open PR #19, dispatch LINE flow investigation"
+    },
+    "18": {
+      "task_ids": [
+        "BL-MEMOS-010"
+      ],
+      "label": "Dispatch RKOI branch vs design reconciliation"
+    },
+    "19": {
+      "task_ids": [
+        "BL-MEMOS-006"
+      ],
+      "label": "Write memory OS plan into zuri-ai roadmap"
+    },
+    "20": {
+      "task_ids": [
+        "BL-MEMOS-006"
+      ],
+      "label": "Merge PR #19, push and open zuri-ai PR #380"
+    },
+    "21": {
+      "task_ids": [
+        "BL-MEMOS-006"
+      ],
+      "label": "Renumber PR #380 to TASK-MEMOS"
+    },
+    "22": {
+      "task_ids": [
+        "BL-MEMOS-006"
+      ],
+      "label": "Rebase and merge PR #380"
+    },
+    "23": {
+      "task_ids": [
+        "OPS-MEMOS-001"
+      ],
+      "label": "Check whether MSP is wired to LINE OA"
+    },
+    "24": {
+      "task_ids": [
+        "BL-MEMOS-010"
+      ],
+      "label": "Adopt defaults, dispatch ATHER (001) and KIN (002 stage 1)"
+    },
+    "25": {
+      "task_ids": [
+        "BL-MEMOS-012"
+      ],
+      "label": "Write implementation plan, commit docs, dispatch RKOI docs review"
+    },
+    "26": {
+      "task_ids": [
+        "OPS-MEMOS-002"
+      ],
+      "label": "Task usage ledger"
+    },
+    "27": {
+      "task_ids": [
+        "BL-MEMOS-033",
+        "BL-MEMOS-012"
+      ],
+      "label": "Triage reviews; dispatch KIN/ATHER; commit docs rounds 4-5 and closure edits; dispatch code re-review"
+    },
+    "28": {
+      "task_ids": [
+        "BL-MEMOS-040..049"
+      ],
+      "label": "Start stage 2: stacked branches, dispatch ATHER spec and KIN keyring"
+    },
+    "29": {
+      "task_ids": [
+        "BL-MEMOS-014",
+        "BL-MEMOS-087"
+      ],
+      "label": "Record owner confirmation of DEC-MEMOS-01..16 (docs 214a7d2)"
+    },
+    "30": {
+      "task_ids": [
+        "BL-MEMOS-049",
+        "BL-MEMOS-033",
+        "BL-MEMOS-040..049"
+      ],
+      "label": "Fix it all: fuzz anomaly, keyring nits, stage-2 spec, Sonnet trailer rewrite"
+    },
+    "31": {
+      "task_ids": [
+        "BL-MEMOS-014",
+        "BL-MEMOS-087"
+      ],
+      "label": "Record owner confirmation of DEC-MEMOS-17..21 (docs 8737285)"
+    },
+    "32": {
+      "task_ids": [
+        "BL-MEMOS-087"
+      ],
+      "label": "Record owner confirmation of RKOI rulings 1-4 (docs ace74fc)"
+    },
+    "33": {
+      "task_ids": [
+        "BL-MEMOS-047"
+      ],
+      "label": "Fix it all (2nd): confirm stage-2 review findings are all dispatched"
+    },
+    "34": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "Open all PRs: script prepared (agent push blocked); canary rebases; trailer rewrite; integer expiresAt; lockTimeoutMs fix"
+    },
+    "35": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "Verify reported PR opening: none found on GitHub"
+    },
+    "36": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "Diagnose WSL bash error; point to Git Bash"
+    },
+    "37": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "PRs #20-#26 opened by owner; CI and mergeability check"
+    },
+    "38": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "Fix PRs: #23/#24 bodies and ready; #26 doc version renumber (9d18119); ledger push"
+    }
+  }
+}

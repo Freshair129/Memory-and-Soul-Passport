@@ -2,8 +2,8 @@
 title: "API Contract: Persistent-Memory MSP Runtime (msp_memory_*)"
 doc_id: "API-009-PERSISTENT-MEMORY-CONTRACT"
 status: "draft"
-version: "0.1.2+draft"
-updated: "2026-09-08"
+version: "0.1.3+draft"
+updated: "2026-09-15"
 owner: "Boss (CEO)"
 source_of_truth: true
 prd_system: "SYSTEM-05::Agent-Team-Management-System"
@@ -376,6 +376,29 @@ Response:
   `dry_run: false`, `links_create`) is recorded in the append-only `journal`
   table, retrievable through the existing `msp_context_audit` tool.
 - No tool in this contract accepts a filesystem-path argument.
+- **Amendment (v0.1.3+draft, 2026-09-15) — transport-level JSON escaped-key
+  refusal, every tool.** `apps/msp-server/src/transport/stdio-jsonrpc-server.mjs`
+  refuses, before the real `JSON.parse` ever runs, any inbound line whose
+  object keys (at any nesting depth, including inside a tool's own
+  `arguments`, e.g. `msp_memory_upsert`'s `body_json`) contain a backslash
+  escape sequence. This defends against a real V8 `JSON.parse` engine bug
+  (Node 23 through at least 26.8; see `docs/NOTES.md`) that can hand a
+  caller a corrupted, non-first object key after an earlier parse in the
+  same long-lived process shared the same leading key(s) -- proven to reach
+  real storage: one caller's request body can corrupt a LATER, unrelated
+  caller's request body, with the corrupted key persisted and read back
+  inside the second caller's own vault. There is no isolation or auth
+  bypass (every scope decision reads values, never a corrupted key; grant
+  corruption fails closed as a signature mismatch) -- this rule exists so
+  the wrong key is never stored in the first place. The refusal answers a
+  JSON-RPC error (`invalid_request: object keys must not contain escape
+  sequences.`) with `id: null` (there is no way to safely learn the real
+  request id without the same unsafe parse) and never echoes any key
+  material. Escapes inside VALUES are unaffected and remain accepted; a
+  key containing a literal, unescaped non-ASCII character (Thai, emoji,
+  anything JSON never requires escaping) is not a "backslash escape" and is
+  also accepted. `packages/msp-client-js` applies the identical scan to
+  every inbound response it parses, for the same reason on its own side.
 
 **Amendment (v0.1.1+draft, 2026-08-05) — vault-scope enforcement is not yet
 implemented.** The requirement above is not withdrawn — it remains the
@@ -427,6 +450,7 @@ independently verified before any real multi-agent use of
 
 | Version | Date | Summary |
 |---|---|---|
+| 0.1.3+draft | 2026-09-15 | RKOI ruling (merge-blocking, TASK-MEMOS-002 stage 2): added §6's transport-level escaped-object-key refusal, which applies to every tool in this contract (any inbound request whose object keys contain a JSON escape sequence, at any nesting depth, is refused before parsing). Defends against a real V8 `JSON.parse` engine bug; see `docs/NOTES.md`. |
 | 0.1.2+draft | 2026-09-08 | Added the GenesisRAG17 relay pointer, nine-tool names, machine-schema source, exact ownership boundary and pinned zuri-ai contract/acceptance links. The existing `msp_memory_*` and legacy `msp_*` shapes remain unchanged. |
 | 0.1.1+draft | 2026-08-05 | Owner-approved corrections against the actual `packages/msp-runtime` implementation. §4.1: corrected the no-op-on-unchanged-content behavior (an unchanged-`source_hash` upsert on a non-`forgotten` entity writes no `entity_history` row and does not increment `current_version`, returning `created: false, changed: false`) and documented the `changed: boolean` response field the code already returns; this was previously misdocumented as writing history and incrementing version on every call. §6: added an explicit amendment note that vault-scope enforcement and the `vault_scope_denied` error are NOT implemented in v1 (the schema lacks `entities.vault_id`, and `promotions.idempotency_key` is globally unique rather than vault-scoped, risking cross-agent Global-Private disclosure); implementation is mandated by blocking work packet WP-14 before any real multi-agent use. |
 | 0.1.0+draft | 2026-08-04 | Initial wire contract for the nine new `msp_memory_*` tools and their `govibe.memory.*` GoVibe-side exposure; documented request/response shapes, the bi-temporal point-read parameters, the soft-delete-only `msp_memory_forget` contract, the hybrid search degradation-reporting contract, and the fail-closed error table. |
