@@ -487,8 +487,7 @@
           "task_ids": [
             "BL-MEMOS-080"
           ],
-          "label": "Fix concurrent cold-start migration race (fix/migrate-concurrent-cold-start)",
-          "status": "open"
+          "label": "Fix concurrent cold-start migration race (cbce394)"
         }
       }
     }
