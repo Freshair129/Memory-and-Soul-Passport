@@ -611,6 +611,25 @@
           "label": "Sync msp-client-js lockfile version drift (main, PR #27)"
         }
       }
+    },
+    "a63181406e1138f79": {
+      "actor": "kin",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050",
+            "BL-MEMOS-051",
+            "BL-MEMOS-053",
+            "BL-MEMOS-054",
+            "BL-MEMOS-055",
+            "BL-MEMOS-056",
+            "BL-MEMOS-058",
+            "BL-MEMOS-059"
+          ],
+          "label": "Implement PH-MEMOS-4 lifecycle and erasure (spec 9960f91)",
+          "status": "open"
+        }
+      }
     }
   },
   "coordinator": {
@@ -870,8 +889,7 @@
       "task_ids": [
         "BL-MEMOS-050..057"
       ],
-      "label": "Commit spec round 4; fix+PR lockfile drift on main; dispatch RKOI round 4",
-      "status": "open"
+      "label": "Commit spec round 4; gitignore worktrees fix+PR (#28); fold RKOI carry-forwards; dispatch KIN implementation"
     }
   }
 }
