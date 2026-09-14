@@ -21,7 +21,10 @@ const ASSURANCE_RANK = { UNRESOLVED: 0, PENDING: 1, VERIFIED: 2 };
 // PH-MEMOS-3 stage 2 (BL-MEMOS-048, Sec.6.1.1): every mutating tool except
 // msp_thread_message_append (source_event_id already gives it replay
 // protection -- a second layer would be redundant) and msp_thread_context
-// (read-only, nothing to replay).
+// (read-only, nothing to replay). PH-MEMOS-4 (Sec.7.1/Sec.8.6/Sec.11.2)
+// adds all five new tools EXCEPT msp_thread_retention_tick, whose nonce
+// requirement is conditional on dry_run (DEC-MEMOS-35, checked separately
+// below, not a blanket membership in this set).
 const NONCE_REQUIRED_TOOLS = new Set([
   "msp_thread_resolve",
   "msp_thread_memory_record",
@@ -31,7 +34,19 @@ const NONCE_REQUIRED_TOOLS = new Set([
   "msp_session_compaction_claim",
   "msp_session_compaction_commit",
   "msp_session_compaction_retry",
+  "msp_thread_participant_lifecycle",
+  "msp_thread_agent_detach",
+  "msp_thread_principal_erase",
+  "msp_thread_principal_export",
 ]);
+
+// PH-MEMOS-4 (Sec.11.2): the three new tools that are NOT thread-bound --
+// tenant/principal-scoped (erase/export) or tenant-scoped (retention),
+// never routed through threadLookupFor. Named explicitly here, the same
+// way NONCE_REQUIRED_TOOLS is already named as one guard edit site, so the
+// deny-all fall-through below excludes them by name instead of refusing
+// them unconditionally the instant they are registered.
+const NON_THREAD_BOUND_TOOLS = new Set(["msp_session_sweep", "msp_thread_delivery_record", "msp_thread_principal_erase", "msp_thread_retention_tick", "msp_thread_principal_export"]);
 
 // RKOI review (2nd round), WARNING 3: the SAME message for "no thread
 // resolves at all" and "a thread resolves, but not to this grant's scope" --
@@ -97,7 +112,14 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
       // type problem, never silently coerced. The value is used EXACTLY as
       // given -- never trimmed -- so `" padnonce "` and `"padnonce"` are
       // two distinct nonces, not the same one collapsed by trimming.
-      if (NONCE_REQUIRED_TOOLS.has(name)) {
+      // PH-MEMOS-4 (Sec.11.2, DEC-MEMOS-35): msp_thread_retention_tick's
+      // nonce is required only when dry_run is NOT true -- a dry_run:true
+      // call is fully read-only with respect to mutation and replay, the
+      // same exemption msp_thread_context already has for being genuinely
+      // read-only, so it is checked here as an addition to the set rather
+      // than a blanket member of it.
+      const nonceRequired = NONCE_REQUIRED_TOOLS.has(name) || (name === "msp_thread_retention_tick" && input.dry_run !== true);
+      if (nonceRequired) {
         if (grant.nonce === undefined || grant.nonce === null) throw new GrantNonceRequiredError();
         if (typeof grant.nonce !== "string") {
           throw new ThreadValidationError(`nonce must be a string, got ${typeof grant.nonce}.`);
@@ -242,8 +264,76 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
         if (!registry.findCurrentAgent(thread.threadId, grant.agentId, grant.workspaceId)) {
           throw new AgentNotCurrentError();
         }
-      } else if (!["msp_session_sweep", "msp_thread_delivery_record"].includes(name)) {
+      } else if (!NON_THREAD_BOUND_TOOLS.has(name)) {
         assertThreadScope(false, SCOPE_MESSAGE);
+      }
+
+      // PH-MEMOS-4 (BL-MEMOS-050, Sec.7.1): msp_thread_participant_lifecycle
+      // is thread-bound in the guard's ordinary sense (input.thread_id), so
+      // it already received the full generic `else if (thread)` check above
+      // -- both actions only add their own extra checks on top of it, the
+      // same shape msp_thread_memory_record's writePrivate+DIRECT check
+      // already has.
+      if (name === "msp_thread_participant_lifecycle") {
+        // DEC-MEMOS-22: `leave` always requires assertParticipants,
+        // unconditionally, self or third-party -- no self-service
+        // exception. DEC-MEMOS-23: `close_for_relink` requires the SAME
+        // claim, plus assertRelink below -- neither substitutes for the
+        // other, and grant.operator never substitutes for either.
+        assertThreadScope(
+          grant.assertParticipants === true,
+          "thread_scope_denied: participant lifecycle changes require assertParticipants.",
+        );
+        if (input.action === "close_for_relink") {
+          // DEC-MEMOS-23: GROUP/ROOM threads have no single-Person binding
+          // to relink.
+          assertThreadScope(thread.audienceKind === "DIRECT", "thread_scope_denied: close_for_relink is DIRECT-only.");
+          assertThreadScope(
+            grant.assertRelink === true,
+            "thread_scope_denied: close_for_relink requires assertRelink in addition to assertParticipants.",
+          );
+        }
+      }
+
+      // PH-MEMOS-4 (BL-MEMOS-053/054/055, Sec.11.2): the three tenant/
+      // principal-scoped tools -- not thread-bound, so `thread` is always
+      // null here; every check below is a NEW guard branch, name-matched
+      // rather than the generic `else if (thread)` path.
+      if (name === "msp_thread_principal_erase" || name === "msp_thread_principal_export") {
+        // DEC-MEMOS-25: self (principal_id absent or === grant.principalId)
+        // requires dataSubjectAccess; naming a DIFFERENT principal_id
+        // additionally requires dataSubjectAdmin -- both claims together,
+        // dataSubjectAdmin alone is not sufficient. Neither claim is
+        // operator (DEC-MEMOS-26) -- this is not a worker/compaction
+        // concern.
+        assertThreadScope(
+          grant.dataSubjectAccess === true,
+          "thread_scope_denied: this operation requires dataSubjectAccess.",
+        );
+        const requestedPrincipalId = input.principal_id;
+        if (requestedPrincipalId !== undefined && requestedPrincipalId !== null && requestedPrincipalId !== grant.principalId) {
+          assertThreadScope(
+            grant.dataSubjectAdmin === true,
+            "thread_scope_denied: acting on a different principal's data requires dataSubjectAdmin.",
+          );
+        }
+        // Defaults to the grant's own principal -- the self-erasure/export
+        // case (Sec.11.2). Overwritten unconditionally, exactly like
+        // msp_session_sweep already overwrites its own scope fields from
+        // the grant, never trusted from the request body past this point.
+        input.principal_id = requestedPrincipalId ?? grant.principalId;
+        input.tenant_id = grant.tenantId;
+      }
+
+      if (name === "msp_thread_retention_tick") {
+        // DEC-MEMOS-26: retention reuses `operator` via an EXPLICIT name
+        // check, not the `msp_session_` prefix match below -- this tool's
+        // name does not share that prefix.
+        assertThreadScope(grant.operator === true, "thread_scope_denied: this operation requires an operator grant.");
+        // Deliberately whole-tenant, never room-scoped -- every row this
+        // tool touches is WHERE tenant_id = grant.tenantId, with no room/
+        // channel-account filter at all (Sec.11.2, a stated ruling).
+        input.tenant_id = grant.tenantId;
       }
 
       if (name === "msp_thread_context") {

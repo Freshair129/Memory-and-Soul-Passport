@@ -690,6 +690,117 @@
           }
         }
       }
+    },
+    {
+      "name": "msp_thread_participant_lifecycle",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "thread_id",
+          "action",
+          "access"
+        ],
+        "properties": {
+          "thread_id": {
+            "$ref": "#/$defs/string"
+          },
+          "action": {
+            "enum": [
+              "leave",
+              "close_for_relink"
+            ]
+          },
+          "speaker_id": {
+            "$ref": "#/$defs/string"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_thread_agent_detach",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "thread_id",
+          "access"
+        ],
+        "properties": {
+          "thread_id": {
+            "$ref": "#/$defs/string"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_thread_principal_erase",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "idempotency_key",
+          "access"
+        ],
+        "properties": {
+          "principal_id": {
+            "$ref": "#/$defs/string"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_thread_retention_tick",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "access"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "now": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
+    },
+    {
+      "name": "msp_thread_principal_export",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "access"
+        ],
+        "properties": {
+          "principal_id": {
+            "$ref": "#/$defs/string"
+          },
+          "access": {
+            "$ref": "#/$defs/access"
+          }
+        }
+      }
     }
   ]
 }

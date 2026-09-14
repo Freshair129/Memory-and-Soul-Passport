@@ -83,6 +83,15 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
     const value = Number(env[name] ?? fallback);
     return Number.isInteger(value) && value > 0 ? value : fallback;
   };
+  // PH-MEMOS-4 (BL-MEMOS-054, Sec.11.2, DEC-MEMOS-29): absent or 0 means
+  // msp_thread_retention_tick is a documented, always-callable no-op that
+  // mutates nothing -- never refused. Unlike parsePositiveEnv's other
+  // callers (idle timeout, recent exchanges), 0/absent is a valid,
+  // deliberately distinct value here, not a fallback to a positive
+  // default -- so this reads the env var directly rather than reusing
+  // parsePositiveEnv's "fall back to a positive default" shape.
+  const retentionDaysRaw = Number(env.MSP_THREAD_RETENTION_DAYS ?? 0);
+  const retentionDays = Number.isInteger(retentionDaysRaw) && retentionDaysRaw > 0 ? retentionDaysRaw : 0;
   const threadHandlers = createThreadHandlers({
     db,
     journal,
@@ -90,6 +99,7 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
     idleTimeoutMinutes: parsePositiveEnv("MSP_THREAD_IDLE_TIMEOUT_MINUTES", 30),
     recentExchangeCount: parsePositiveEnv("MSP_THREAD_RECENT_EXCHANGES", 6),
     allowTestClock,
+    retentionDays,
   });
   // RKOI review, item 9: verifyThreadGrant resolves its HMAC key through a
   // `keyFor(tenantId)` function -- stage 1 always resolved to the single

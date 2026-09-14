@@ -66,6 +66,21 @@ const SUPERSESSION_REFUSAL = "supersedes_record_id does not name a record this c
 // #consumeNonce's own comment for why this exists at all.
 const TEN_YEARS_MS = 10 * 365 * 24 * 60 * 60 * 1000;
 
+// PH-MEMOS-4 (BL-MEMOS-054, design Sec.11.2, DEC-MEMOS-29): the five
+// content tables msp_thread_retention_tick's age-based pass tombstones,
+// each with its own age timestamp column and its own tombstone UPDATE
+// shape (each already permitted by an 0008/0009-shipped trigger -- no new
+// schema). Bounded to 200 rows per table per call (DEC-MEMOS-29, reusing
+// DEC-MEMOS-20's existing bound).
+const RETENTION_TABLES = [
+  { key: "threadMessages", table: "thread_messages", idColumn: "message_id", ageColumn: "occurred_at", tombstoneSql: "redaction_state = 'tombstoned', text = ''" },
+  { key: "protectedMemoryRecords", table: "protected_memory_records", idColumn: "record_id", ageColumn: "created_at", tombstoneSql: "redaction_state = 'tombstoned', body_json = '{}', scope_json = '{}'" },
+  { key: "sessionSummaries", table: "session_summaries", idColumn: "summary_id", ageColumn: "created_at", tombstoneSql: "redaction_state = 'tombstoned', summary_json = '{}'" },
+  { key: "threadDeliveryReceipts", table: "thread_delivery_receipts", idColumn: "receipt_id", ageColumn: "recorded_at", tombstoneSql: "redaction_state = 'tombstoned', text = ''" },
+  { key: "threadPendingDeliveries", table: "thread_pending_deliveries", idColumn: "receipt_id", ageColumn: "recorded_at", tombstoneSql: "redaction_state = 'tombstoned', text = ''" },
+];
+const RETENTION_ROW_BOUND = 200;
+
 export class ThreadMemoryValidationError extends ThreadValidationError {}
 export class ThreadMemoryConflictError extends ThreadConflictError {}
 export class ThreadMemoryNotFoundError extends ThreadNotFoundError {}
@@ -853,6 +868,17 @@ export class ThreadMemoryStore {
     let result;
     try {
     result = this.#db.transaction(() => {
+      // PH-MEMOS-4 (design Sec.7.1 WARNING 2, BL-MEMOS-050): a concurrent
+      // close_for_relink could have closed this thread in the window
+      // between the guard's earlier read (thread.status === 'ACTIVE') and
+      // this write -- re-checked here, inside this SAME synchronous
+      // transaction, immediately before either the message INSERT or the
+      // participant-insert path (#applyHumanParticipant, below) can run.
+      // Never applies the append either way once the thread has closed.
+      const liveStatus = this.#db.prepare("SELECT status FROM threads WHERE thread_id = ?").get(thread.threadId)?.status;
+      if (liveStatus !== "ACTIVE") {
+        throw new ThreadMemoryConflictError("the thread's status changed while this call was in flight; retry");
+      }
       const referencedExchange = messageDirection === 'OUTBOUND' && exchangeId ? this.#db.prepare("SELECT * FROM thread_messages WHERE thread_id=? AND exchange_id=? AND direction='INBOUND' ORDER BY sequence LIMIT 1").get(thread.threadId, exchangeId) : null;
       if (messageDirection === 'OUTBOUND' && (!referencedExchange || replyToMessageId !== referencedExchange.message_id)) {
         throw new ThreadMemoryValidationError('Outbound requires its explicit exchange_id and reply_to_message_id.');
@@ -952,6 +978,16 @@ export class ThreadMemoryStore {
       return { message: rowMessage(this.#db.prepare("SELECT * FROM thread_messages WHERE message_id = ?").get(id)), session: rowSession(this.#getSession(session.session_id)), deduplicated: false };
     })();
     } catch (error) {
+      // PH-MEMOS-4 (design Sec.7.1 WARNING 2, narrowed round 3): the
+      // close_for_relink/in-flight-append race's one remaining
+      // interleaving surfaces exactly SQLITE_BUSY_SNAPSHOT, never any
+      // other SQLITE_BUSY* code -- caught and re-mapped ONLY on that exact
+      // code, so a plain SQLITE_BUSY from an unrelated lock timeout is not
+      // caught here at all and propagates unmapped, like any other native
+      // error this design does not otherwise map.
+      if (error?.code === "SQLITE_BUSY_SNAPSHOT") {
+        throw new ThreadMemoryConflictError("the thread's status changed while this call was in flight; retry");
+      }
       translateTriggerError(error);
     }
 
@@ -1732,6 +1768,448 @@ export class ThreadMemoryStore {
       if (!result.changes) throw new CompactionLeaseConflictError("Compaction job is missing or already terminal.");
       return this.#jobResult(this.#db.prepare("SELECT * FROM session_compaction_jobs WHERE job_id = ?").get(id));
     })();
+  }
+
+  // PH-MEMOS-4 (BL-MEMOS-050, design Sec.7.1): msp_thread_participant_
+  // lifecycle's two actions. Every authorization decision (assertParticipants,
+  // assertRelink, DIRECT-only) is already made by the guard before this
+  // method ever runs -- this method performs the write the guard already
+  // authorized, plus the store-layer defenses the guard's earlier read
+  // cannot cover (the close_for_relink status race, Sec.7.1 WARNING 2).
+  participantLifecycle({ threadId, action, speakerId = null, agentId = null, workspaceId = null, nonce, grantExpiresAt, now } = {}) {
+    const thread = this.#requireThread(threadId);
+    const timestamp = iso(now);
+
+    if (action === "leave") {
+      const speaker = requiredString(speakerId, "speaker_id");
+      let closed;
+      try {
+        closed = this.#db.transaction(() => {
+          const row = this.#db
+            .prepare("SELECT * FROM thread_participants WHERE thread_id = ? AND speaker_id = ? AND left_at IS NULL")
+            .get(thread.threadId, speaker);
+          // Reusing ThreadNotFoundError/not_found's existing definition --
+          // the same code every other "no matching row" case in this
+          // design already uses; no new code for "not currently a
+          // participant" (design Sec.7.1).
+          if (!row) throw new ThreadMemoryNotFoundError(`speaker_id "${speaker}" is not currently a participant of thread_id "${thread.threadId}".`);
+          this.#db.prepare("UPDATE thread_participants SET left_at = ? WHERE membership_id = ?").run(timestamp, row.membership_id);
+          this.#consumeNonce(thread.tenantId, nonce, grantExpiresAt);
+          return row.speaker_id;
+        })();
+      } catch (error) {
+        translateTriggerError(error);
+      }
+      // Sec.8.4: `leave` concerns a HUMAN participant's membership, so
+      // `actor` is `principalHmac` of the affected speaker_id -- never
+      // `grant.agentId` and never a raw id (W5).
+      this.#journalAppend({
+        actor: this.#hmacPrincipal(closed),
+        toolName: "msp_thread_participant_lifecycle",
+        ref: thread.threadId,
+        workspaceId: workspaceId || thread.tenantId,
+        payload: { action: "leave", speaker_id_hmac: this.#hmacPrincipal(closed) },
+        policyDecision: "allow",
+      });
+      return { threadId: thread.threadId, speakerId: closed, leftAt: timestamp };
+    }
+
+    if (action === "close_for_relink") {
+      let closedHumanSpeakerId = null;
+      try {
+        closedHumanSpeakerId = this.#db.transaction(() => {
+          const current = this.#db
+            .prepare("SELECT * FROM thread_participants WHERE thread_id = ? AND speaker_kind = 'HUMAN' AND left_at IS NULL")
+            .get(thread.threadId);
+          if (current) {
+            this.#db.prepare("UPDATE thread_participants SET left_at = ? WHERE membership_id = ?").run(timestamp, current.membership_id);
+          }
+          // Sec.7.1 WARNING 2: the AND status='ACTIVE' clause is
+          // load-bearing, not decorative -- the handler checks the
+          // driver's own affected-row count and refuses with a typed
+          // conflict if it is 0 (the thread was already CLOSED by a
+          // concurrent call).
+          const info = this.#db
+            .prepare("UPDATE threads SET status = 'CLOSED', updated_at = ? WHERE thread_id = ? AND status = 'ACTIVE'")
+            .run(timestamp, thread.threadId);
+          if (info.changes === 0) {
+            throw new ThreadMemoryConflictError("the thread's status changed while this call was in flight; retry");
+          }
+          this.#consumeNonce(thread.tenantId, nonce, grantExpiresAt);
+          return current ? current.speaker_id : null;
+        })();
+      } catch (error) {
+        // Sec.7.1 WARNING 2 (RKOI PH-MEMOS-4 review round 3): this specific
+        // race only ever raises SQLITE_BUSY_SNAPSHOT -- caught and
+        // re-mapped to a typed conflict EXACTLY on that code, never a
+        // broader "code starts with SQLITE_BUSY" match, which would also
+        // catch a plain SQLITE_BUSY from an unrelated lock-timeout cause
+        // and falsely claim "the thread's status changed" for it. A plain
+        // SQLITE_BUSY is not caught here at all -- it propagates unmapped,
+        // exactly like any other native error this design does not map.
+        if (error?.code === "SQLITE_BUSY_SNAPSHOT") {
+          throw new ThreadMemoryConflictError("the thread's status changed while this call was in flight; retry");
+        }
+        translateTriggerError(error);
+      }
+      // Sec.7.1/Sec.8.4: `close_for_relink` concerns a HUMAN participant's
+      // membership too -- actor is the closed thread's last HUMAN
+      // participant, if any (never a raw id, W5). "If any": a DIRECT
+      // thread that never had a HUMAN participant at all (e.g. only AGENT
+      // messages posted before anyone joined) falls back to a fixed system
+      // label, the same convention msp:session-router/msp:compaction-worker
+      // already use.
+      const lastHuman =
+        closedHumanSpeakerId ??
+        this.#db.prepare("SELECT speaker_id FROM thread_participants WHERE thread_id = ? AND speaker_kind = 'HUMAN' ORDER BY joined_at DESC LIMIT 1").get(thread.threadId)?.speaker_id ??
+        null;
+      this.#journalAppend({
+        actor: lastHuman ? this.#hmacPrincipal(lastHuman) : "msp:thread-lifecycle",
+        toolName: "msp_thread_participant_lifecycle",
+        ref: thread.threadId,
+        workspaceId: workspaceId || thread.tenantId,
+        payload: { action: "close_for_relink", speaker_id_hmac: lastHuman ? this.#hmacPrincipal(lastHuman) : null },
+        policyDecision: "allow",
+      });
+      return { threadId: thread.threadId, status: "CLOSED", closedAt: timestamp };
+    }
+
+    throw new ThreadMemoryValidationError("action must be 'leave' or 'close_for_relink'.");
+  }
+
+  // PH-MEMOS-4 (BL-MEMOS-051, design Sec.8.6): msp_thread_agent_detach --
+  // self-only, no third-party case at all (DEC-MEMOS-24). The guard's
+  // generic agent-currency gate already guarantees the row to close
+  // exists before this handler ever runs (a non-current agent is refused
+  // agent_not_current at the guard, before this method runs at all) -- the
+  // `info.changes !== 1` branch below is defense in depth, not a
+  // caller-facing case.
+  detachAgent({ threadId, agentId, workspaceId, nonce, grantExpiresAt, now } = {}) {
+    const thread = this.#requireThread(threadId);
+    const timestamp = iso(now);
+    const agent = requiredString(agentId, "agentId");
+    const workspace = requiredString(workspaceId, "workspaceId");
+    this.#db.transaction(() => {
+      const info = this.#db
+        .prepare("UPDATE thread_agents SET left_at = ? WHERE thread_id = ? AND agent_id = ? AND workspace_id = ? AND left_at IS NULL")
+        .run(timestamp, thread.threadId, agent, workspace);
+      if (info.changes !== 1) {
+        throw new AgentNotCurrentError();
+      }
+      this.#consumeNonce(thread.tenantId, nonce, grantExpiresAt);
+    })();
+    // Sec.8.4: agent-attributable -- actor is grant.agentId in plain text
+    // (not a W5 regression, agentId is not personal data).
+    this.#journalAppend({
+      actor: agent,
+      toolName: "msp_thread_agent_detach",
+      ref: thread.threadId,
+      workspaceId: workspace,
+      payload: { workspace_id: workspace },
+      policyDecision: "allow",
+    });
+    return { threadId: thread.threadId, agentId: agent, workspaceId: workspace, leftAt: timestamp };
+  }
+
+  // PH-MEMOS-4 (BL-MEMOS-053, design Sec.11.1/Sec.11.2): the DEC-MEMOS-34
+  // qualifying-thread set -- computed once, reused identically by erasure
+  // (session_summaries/thread_delivery_receipts disposition) and export
+  // (session_summaries inclusion). Two independent disqualifying
+  // conditions, both required to hold for a thread to qualify: (a) across
+  // the thread's ENTIRE HUMAN participant history (current or departed,
+  // no left_at filter), the principal is the thread's only-ever HUMAN
+  // participant -- checked as two separate counts, either of which
+  // disqualifies, since two different person_ids under one shared
+  // speaker_id are schema-legal and must not slip through a
+  // speaker_id-only count; (b) the thread carries no thread_messages row
+  // with speaker_kind NOT IN ('HUMAN', 'AGENT') anywhere on it, since
+  // UNKNOWN/OPERATOR speakers post messages with no thread_participants
+  // row at all, so condition (a) alone is blind to an unresolved second
+  // person's content. The exact SQL shape design Sec.11.2 gives verbatim.
+  #qualifyingThreadIds(tenantId, principalId) {
+    return this.#db
+      .prepare(
+        `SELECT thread_id FROM thread_participants
+         WHERE tenant_id = ? AND speaker_kind = 'HUMAN'
+         GROUP BY thread_id
+         HAVING COUNT(DISTINCT speaker_id) = 1
+            AND COUNT(DISTINCT CASE WHEN person_id IS NOT NULL THEN person_id END) <= 1
+            AND MIN(speaker_id) = ?
+         EXCEPT
+         SELECT thread_id FROM thread_messages
+         WHERE tenant_id = ? AND speaker_kind NOT IN ('HUMAN', 'AGENT')`,
+      )
+      .all(tenantId, principalId, tenantId)
+      .map((row) => row.thread_id);
+  }
+
+  // PH-MEMOS-4 (BL-MEMOS-053, design Sec.11.2): msp_thread_principal_erase.
+  // Not thread-bound -- tenant/principal-scoped, spanning every thread the
+  // principal has ever touched in the calling grant's own tenantId. Every
+  // authorization decision (dataSubjectAccess/dataSubjectAdmin) is already
+  // made by the guard before this method ever runs.
+  erasePrincipal({ principalId, tenantId, idempotencyKey, agentId, workspaceId, nonce, grantExpiresAt, now } = {}) {
+    const tenant = requiredString(tenantId, "tenant_id");
+    const principal = requiredString(principalId, "principal_id");
+    const key = requiredString(idempotencyKey, "idempotency_key");
+    if (key.length > 128) throw new ThreadMemoryValidationError("idempotency_key must be at most 128 characters.");
+    const agent = requiredString(agentId, "agentId");
+    const workspace = requiredString(workspaceId, "workspaceId");
+    const timestamp = iso(now);
+
+    // DEC-MEMOS-27: idempotency, before any write. Found, SAME
+    // principal_id: return the stored receipt unchanged (replay: true),
+    // no writes at all -- not even a no-op UPDATE pass. Found, DIFFERENT
+    // principal_id: refuse conflict.
+    const existingReceipt = this.#db.prepare("SELECT * FROM erasure_receipts WHERE tenant_id = ? AND idempotency_key = ?").get(tenant, key);
+    if (existingReceipt) {
+      if (existingReceipt.principal_id !== principal) {
+        throw new ThreadMemoryConflictError("idempotency_key was already used for a different principal_id.");
+      }
+      return {
+        erasureReceiptId: existingReceipt.erasure_receipt_id,
+        principalId: principal,
+        tenantId: tenant,
+        tablesAffected: parseJson(existingReceipt.tables_affected_json, {}),
+        replay: true,
+      };
+    }
+
+    let result;
+    try {
+      result = this.#db.transaction(() => {
+        this.#consumeNonce(tenant, nonce, grantExpiresAt);
+
+        // Stage 1: RESOLVE every matching row set first (Sec.11.2,
+        // DEC-MEMOS-32/34) -- nothing is written yet.
+        const qualifyingThreadIds = this.#qualifyingThreadIds(tenant, principal);
+
+        // Stage 2: TOMBSTONE. Every UPDATE is scoped
+        // AND redaction_state = 'none', so it is naturally a no-op on
+        // anything already tombstoned.
+        const messages = this.#db
+          .prepare("UPDATE thread_messages SET redaction_state = 'tombstoned', text = '' WHERE tenant_id = ? AND speaker_id = ? AND speaker_kind = 'HUMAN' AND redaction_state = 'none'")
+          .run(tenant, principal);
+
+        // Requires migration 0010: the recreated
+        // trg_protected_memory_records_update_guard permits scope_json ->
+        // '{}' alongside body_json -> '{}' (design Sec.11.2, CRITICAL 4
+        // item 1). Before 0010 this UPDATE is refused by the shipped 0009
+        // trigger, which is this tool's own delivery gate.
+        const records = this.#db
+          .prepare(
+            "UPDATE protected_memory_records SET redaction_state = 'tombstoned', body_json = '{}', scope_json = '{}' WHERE tenant_id = ? AND (asserted_by_speaker_id = ? OR subject_person_id = ?) AND redaction_state = 'none'",
+          )
+          .run(tenant, principal, principal);
+
+        let summaries = { changes: 0 };
+        let receipts = { changes: 0 };
+        if (qualifyingThreadIds.length > 0) {
+          const placeholders = qualifyingThreadIds.map(() => "?").join(",");
+          summaries = this.#db
+            .prepare(`UPDATE session_summaries SET redaction_state = 'tombstoned', summary_json = '{}' WHERE tenant_id = ? AND thread_id IN (${placeholders}) AND redaction_state = 'none'`)
+            .run(tenant, ...qualifyingThreadIds);
+          // Joined via message_id -> thread_messages.thread_id (design
+          // Sec.11.2 -- thread_delivery_receipts has no thread_id column
+          // of its own).
+          receipts = this.#db
+            .prepare(
+              `UPDATE thread_delivery_receipts SET redaction_state = 'tombstoned', text = '' WHERE tenant_id = ? AND redaction_state = 'none'
+               AND message_id IN (SELECT message_id FROM thread_messages WHERE thread_id IN (${placeholders}))`,
+            )
+            .run(tenant, ...qualifyingThreadIds);
+        }
+        // thread_pending_deliveries: out of scope entirely (Sec.11.1,
+        // corrected -- AGENT-authored reply text, not the principal's
+        // own, no reliable principal-attribution column). No UPDATE
+        // issued against this table at all.
+
+        // Stage 3: CLOSE PARTICIPANTS, only after every content-table
+        // UPDATE above has run. The explicit speaker_kind = 'HUMAN'
+        // filter matches thread_messages' own WHERE clause above, even
+        // though currently unreachable in practice (only HUMAN speakers
+        // are ever recorded as participants at all, Sec.7 rule 1).
+        const participants = this.#db
+          .prepare("UPDATE thread_participants SET left_at = ? WHERE tenant_id = ? AND speaker_id = ? AND speaker_kind = 'HUMAN' AND left_at IS NULL")
+          .run(timestamp, tenant, principal);
+
+        const tablesAffected = {
+          threadMessages: messages.changes,
+          protectedMemoryRecords: records.changes,
+          sessionSummaries: summaries.changes,
+          threadDeliveryReceipts: receipts.changes,
+          threadParticipants: participants.changes,
+        };
+
+        const receiptId = ref("erasure-receipt");
+        // DEC-MEMOS-27/28: raw principal_id, like every other content
+        // table's speaker/person columns -- W5 pseudonymization is scoped
+        // to the journal entry below, not this table.
+        this.#db
+          .prepare(
+            "INSERT INTO erasure_receipts (erasure_receipt_id, tenant_id, principal_id, idempotency_key, requested_by_agent_id, tables_affected_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          )
+          .run(receiptId, tenant, principal, key, agent, JSON.stringify(tablesAffected), timestamp);
+
+        return { erasureReceiptId: receiptId, tablesAffected };
+      })();
+    } catch (error) {
+      translateTriggerError(error);
+    }
+
+    // W5: pseudonym only -- actor is principalHmac of the erased
+    // principal, never the raw id. This is distinct from erasure_receipts
+    // itself, which DOES store the raw principal_id (DEC-MEMOS-28).
+    this.#journalAppend({
+      actor: this.#hmacPrincipal(principal),
+      toolName: "msp_thread_principal_erase",
+      ref: result.erasureReceiptId,
+      workspaceId: workspace,
+      payload: { idempotency_key: key, tables_affected: result.tablesAffected, replay: false },
+      policyDecision: "allow",
+    });
+
+    return { erasureReceiptId: result.erasureReceiptId, principalId: principal, tenantId: tenant, tablesAffected: result.tablesAffected, replay: false };
+  }
+
+  // PH-MEMOS-4 (BL-MEMOS-054, design Sec.11.2): msp_thread_retention_tick.
+  // Not thread-bound, tenant-scoped via grant.tenantId -- deliberately
+  // whole-tenant, never room-scoped (a stated ruling, not a gap).
+  // Age-based and principal-agnostic (DEC-MEMOS-29): retentionDays is a
+  // deployment-wide ceiling threaded down from the composition root
+  // (server.mjs reads MSP_THREAD_RETENTION_DAYS once), never read from
+  // process.env here.
+  retentionTick({ tenantId, dryRun = false, retentionDays = 0, agentId, workspaceId, nonce, grantExpiresAt, now } = {}) {
+    const tenant = requiredString(tenantId, "tenant_id");
+    const agent = requiredString(agentId, "agentId");
+    const workspace = requiredString(workspaceId, "workspaceId");
+    const timestamp = iso(now);
+    const days = Number.isInteger(retentionDays) && retentionDays > 0 ? retentionDays : 0;
+    const cutoff = days > 0 ? new Date(Date.parse(timestamp) - days * 24 * 60 * 60 * 1000).toISOString() : null;
+
+    const tablesAffected = { threadMessages: 0, protectedMemoryRecords: 0, sessionSummaries: 0, threadDeliveryReceipts: 0, threadPendingDeliveries: 0 };
+
+    this.#db.transaction(() => {
+      // DEC-MEMOS-35: dry_run:true consumes no nonce -- fully read-only
+      // with respect to mutation and replay. dry_run:false is unchanged.
+      if (!dryRun) this.#consumeNonce(tenant, nonce, grantExpiresAt);
+      if (!cutoff) return;
+      for (const spec of RETENTION_TABLES) {
+        const candidateSql = `SELECT ${spec.idColumn} AS id FROM ${spec.table} WHERE tenant_id = ? AND redaction_state = 'none' AND ${spec.ageColumn} < ? LIMIT ${RETENTION_ROW_BOUND}`;
+        if (dryRun) {
+          // Runs the exact same SELECT the live pass would UPDATE from,
+          // without issuing any UPDATE at all (design Sec.11.2).
+          tablesAffected[spec.key] = this.#db.prepare(candidateSql).all(tenant, cutoff).length;
+        } else {
+          const info = this.#db.prepare(`UPDATE ${spec.table} SET ${spec.tombstoneSql} WHERE ${spec.idColumn} IN (${candidateSql})`).run(tenant, cutoff);
+          tablesAffected[spec.key] = info.changes;
+        }
+      }
+    })();
+
+    // DEC-MEMOS-35 (revised, RKOI PH-MEMOS-4 review round 2, WARNING 6):
+    // both dry_run:true and dry_run:false write a journal entry -- only
+    // the nonce exemption is dry-run-specific. Worker-driven, per Sec.8.4's
+    // existing convention for tenant/room-spanning entries.
+    this.#journalAppend({
+      actor: "msp:retention-tick",
+      toolName: "msp_thread_retention_tick",
+      ref: tenant,
+      workspaceId: workspace,
+      payload: { cutoff, dry_run: dryRun, tables_affected: tablesAffected },
+      policyDecision: "allow",
+    });
+
+    return { dryRun, cutoff, tablesAffected };
+  }
+
+  // PH-MEMOS-4 (BL-MEMOS-055, design Sec.11.2): msp_thread_principal_export.
+  // A read, not a mutation -- but the guard still requires a nonce claim
+  // (sensitive enough for the same replay-bounded-call discipline every
+  // other mutating-or-sensitive tool gets), so this method still consumes
+  // it, in its own small transaction, alongside the grant_nonces bookkeeping
+  // write (the only write this method performs).
+  exportPrincipal({ principalId, tenantId, agentId, workspaceId, nonce, grantExpiresAt, now } = {}) {
+    const tenant = requiredString(tenantId, "tenant_id");
+    const principal = requiredString(principalId, "principal_id");
+    requiredString(agentId, "agentId");
+    const workspace = requiredString(workspaceId, "workspaceId");
+    const timestamp = iso(now);
+
+    this.#db.transaction(() => {
+      this.#consumeNonce(tenant, nonce, grantExpiresAt);
+    })();
+
+    // DEC-MEMOS-30: excludes every tombstoned row, including the
+    // exporting principal's OWN previously-erased content -- once erased,
+    // content is permanently unexportable too.
+    const messages = this.#db
+      .prepare("SELECT * FROM thread_messages WHERE tenant_id = ? AND speaker_id = ? AND speaker_kind = 'HUMAN' AND redaction_state != 'tombstoned' ORDER BY thread_id, sequence")
+      .all(tenant, principal);
+
+    // DEC-MEMOS-31: ignores agent visibility entirely -- an AGENT-visibility
+    // record is included for its own asserter/subject regardless of which
+    // agent recorded it, since this tool is principal-scoped, never
+    // agent-scoped, by construction.
+    const records = this.#db
+      .prepare("SELECT * FROM protected_memory_records WHERE tenant_id = ? AND (asserted_by_speaker_id = ? OR subject_person_id = ?) AND redaction_state != 'tombstoned' ORDER BY created_at")
+      .all(tenant, principal, principal);
+
+    // DEC-MEMOS-34: session_summaries only for the identical
+    // qualifying-thread set erasure computes -- a GROUP/ROOM thread that
+    // has ever had a second distinct HUMAN speaker_id/person_id, or that
+    // carries even one UNKNOWN/OPERATOR message, is excluded entirely,
+    // never partially included.
+    const qualifyingThreadIds = this.#qualifyingThreadIds(tenant, principal);
+    let summaries = [];
+    if (qualifyingThreadIds.length > 0) {
+      const placeholders = qualifyingThreadIds.map(() => "?").join(",");
+      summaries = this.#db
+        .prepare(`SELECT * FROM session_summaries WHERE tenant_id = ? AND thread_id IN (${placeholders}) AND redaction_state != 'tombstoned' ORDER BY thread_id, summary_version`)
+        .all(tenant, ...qualifyingThreadIds);
+    }
+
+    // W5: pseudonym only, same convention as erasure -- counts only,
+    // never the exported content itself and never the raw principal_id.
+    this.#journalAppend({
+      actor: this.#hmacPrincipal(principal),
+      toolName: "msp_thread_principal_export",
+      ref: tenant,
+      workspaceId: workspace,
+      payload: { message_count: messages.length, record_count: records.length, summary_count: summaries.length },
+      policyDecision: "allow",
+    });
+
+    return {
+      principalId: principal,
+      tenantId: tenant,
+      generatedAt: timestamp,
+      messages: messages.map((row) => ({
+        messageId: row.message_id,
+        threadId: row.thread_id,
+        exchangeId: row.exchange_id,
+        sequence: row.sequence,
+        text: row.text,
+        occurredAt: row.occurred_at,
+        direction: row.direction,
+      })),
+      protectedRecords: records.map((row) => ({
+        recordId: row.record_id,
+        threadId: row.thread_id,
+        kind: row.kind,
+        body: parseJson(row.body_json, {}),
+        verificationState: row.verification_state,
+        status: row.status,
+      })),
+      summaries: summaries.map((row) => ({
+        summaryId: row.summary_id,
+        threadId: row.thread_id,
+        summaryVersion: row.summary_version,
+        summary: parseJson(row.summary_json, {}),
+        coveredFromSequence: row.covered_from_sequence,
+        coveredThroughSequence: row.covered_through_sequence,
+      })),
+    };
   }
 
   #sourceRows(sessionId, start, end) {
