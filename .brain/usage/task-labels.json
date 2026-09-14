@@ -517,6 +517,22 @@
           "label": "Revise migration lock fix: derived counts, hung-holder wording, typed lock-open error (ea1b5f2)"
         }
       }
+    },
+    "aaa2f08bc21c19281": {
+      "actor": "ather",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050",
+            "BL-MEMOS-051",
+            "BL-MEMOS-053",
+            "BL-MEMOS-054",
+            "BL-MEMOS-055"
+          ],
+          "label": "PH-MEMOS-4 lifecycle + erasure spec (design v0.5.0b)",
+          "status": "open"
+        }
+      }
     }
   },
   "coordinator": {
@@ -752,6 +768,13 @@
         "OPS-MEMOS-003"
       ],
       "label": "Fix PRs: #23/#24 bodies and ready; #26 doc version renumber (9d18119); ledger push"
+    },
+    "39": {
+      "task_ids": [
+        "BL-MEMOS-050..057"
+      ],
+      "label": "Merge all 7 PRs to main; start PH-MEMOS-4 spec on new branches",
+      "status": "open"
     }
   }
 }
