@@ -12,13 +12,12 @@ A segment whose status is `open` was still running when the ledger was generated
 
 | Segments | Requests | Input (total) | input_tokens | Cache write | Cache read | Output |
 |---:|---:|---:|---:|---:|---:|---:|
-| 102 | 4,698 | 2,074,802,877 | 10,658 | 44,062,821 | 2,030,729,398 | 4,719,405 |
+| 102 | 4,701 | 2,076,685,746 | 10,664 | 44,067,113 | 2,032,607,969 | 4,722,335 |
 
 ## Per task id
 
 | Task id | Segments | Start | End | Requests | Input (total) | Output |
 |---|---:|---|---|---:|---:|---:|
-| (unlabelled) | 3 | 2026-09-14T11:40:03+07:00 | 2026-09-14T12:25:41+07:00 | 8 | 4,951,492 | 3,327 |
 | BL-MEMOS-001 | 8 | 2026-09-13T09:50:21+07:00 | 2026-09-13T13:46:19+07:00 | 59 | 15,709,858 | 303,472 |
 | BL-MEMOS-002 | 8 | 2026-09-13T14:43:29+07:00 | 2026-09-13T15:20:00+07:00 | 149 | 29,710,329 | 176,078 |
 | BL-MEMOS-003 | 5 | 2026-09-13T15:24:31+07:00 | 2026-09-13T17:20:49+07:00 | 78 | 21,799,558 | 79,371 |
@@ -52,7 +51,7 @@ A segment whose status is `open` was still running when the ledger was generated
 | OPS-MEMOS-000 | 2 | 2026-09-13T14:53:06+07:00 | 2026-09-13T14:53:06+07:00 | 0 | 0 | 0 |
 | OPS-MEMOS-001 | 2 | 2026-09-13T18:28:15+07:00 | 2026-09-13T23:00:09+07:00 | 26 | 4,190,696 | 17,365 |
 | OPS-MEMOS-002 | 1 | 2026-09-13T23:46:44+07:00 | 2026-09-14T00:32:28+07:00 | 30 | 25,130,965 | 62,342 |
-| OPS-MEMOS-003 | 1 | 2026-09-14T08:56:28+07:00 | 2026-09-14T11:32:38+07:00 | 51 | 28,711,662 | 60,432 |
+| OPS-MEMOS-003 | 4 | 2026-09-14T08:56:28+07:00 | 2026-09-14T12:26:24+07:00 | 62 | 35,546,023 | 66,689 |
 
 ## Per segment
 
@@ -149,7 +148,7 @@ A segment whose status is `open` was still running when the ledger was generated
 | 89 | BL-MEMOS-049, BL-MEMOS-047 | janus `ae6c2c8` | 1 | CI engine canary for V8 JSON.parse bug (e0a3624) | done | 2026-09-14T08:30:49+07:00 | 2026-09-14T08:56:55+07:00 | 26m06s | 102 | 9,430,564 | 204 | 271,077 | 9,159,283 | 57,964 |
 | 90 | BL-MEMOS-040..049 | kin `ab508b7` | 10 | Transport escaped-key pre-scan (server + client), queued after keyring fix | done | 2026-09-14T08:48:03+07:00 | 2026-09-14T10:11:01+07:00 | 1h22m | 196 | 157,082,507 | 392 | 3,572,319 | 153,509,796 | 144,814 |
 | 91 | BL-MEMOS-047 | coordinator | 33 | Fix it all (2nd): confirm stage-2 review findings are all dispatched | done | 2026-09-14T08:49:37+07:00 | 2026-09-14T08:50:02+07:00 | 0m25s | 1 | 503,389 | 2 | 31 | 503,356 | 1,133 |
-| 92 | OPS-MEMOS-003 | coordinator | 34 | Open all PRs: script prepared (push blocked for agent); owner ran it: PRs #20-#26; canary rebases; trailer rewrite; integer expiresAt; lockTimeoutMs fix | done | 2026-09-14T08:56:28+07:00 | 2026-09-14T11:32:38+07:00 | 2h36m | 51 | 28,711,662 | 114 | 592,496 | 28,119,052 | 60,432 |
+| 92 | OPS-MEMOS-003 | coordinator | 34 | Open all PRs: script prepared (agent push blocked); canary rebases; trailer rewrite; integer expiresAt; lockTimeoutMs fix | done | 2026-09-14T08:56:28+07:00 | 2026-09-14T11:32:38+07:00 | 2h36m | 51 | 28,711,662 | 114 | 592,496 | 28,119,052 | 60,432 |
 | 93 | BL-MEMOS-047 | rkoi `afd6aa2` | 8 | Stage 2 implementation code review, round 1 (1 critical: recursive scanner stack crash) | done | 2026-09-14T10:11:44+07:00 | 2026-09-14T10:21:30+07:00 | 9m47s | 24 | 18,779,575 | 50 | 808,830 | 17,970,695 | 26,556 |
 | 94 | BL-MEMOS-040, BL-MEMOS-041, BL-MEMOS-042, BL-MEMOS-043, BL-MEMOS-044, BL-MEMOS-045, BL-MEMOS-046, BL-MEMOS-048, BL-MEMOS-112, BL-MEMOS-049 | kin `ab508b7` | 11 | Keyring parser V8 fix, transport escaped-key pre-scan, and stage 2 implementation (3a88991..f788e39) | done | 2026-09-14T10:22:05+07:00 | 2026-09-14T10:49:14+07:00 | 27m09s | 107 | 44,948,942 | 214 | 1,074,356 | 43,874,372 | 49,866 |
 | 95 | BL-MEMOS-080 | janus `a0d58fa` | 1 | Fix concurrent cold-start migration race (cbce394) | done | 2026-09-14T10:22:18+07:00 | 2026-09-14T10:50:23+07:00 | 28m04s | 135 | 23,754,668 | 270 | 269,248 | 23,485,150 | 111,041 |
@@ -157,6 +156,6 @@ A segment whose status is `open` was still running when the ledger was generated
 | 97 | BL-MEMOS-080 | rkoi `a46f6a8` | 1 | Review concurrent migration lock fix (0 critical; counts, crash wording, docs) | done | 2026-09-14T10:51:29+07:00 | 2026-09-14T11:03:36+07:00 | 12m07s | 35 | 2,570,199 | 70 | 98,218 | 2,471,911 | 37,972 |
 | 98 | BL-MEMOS-080 | janus `a547846` | 1 | Revise migration lock fix: derived counts, hung-holder wording, typed lock-open error (ea1b5f2) | done | 2026-09-14T11:09:34+07:00 | 2026-09-14T11:27:19+07:00 | 17m45s | 120 | 14,654,254 | 240 | 175,884 | 14,478,130 | 57,653 |
 | 99 | BL-MEMOS-080 | rkoi `a46f6a8` | 2 | Confirm migration fix revision (APPROVED conditional on Ubuntu CI, ea1b5f2) | done | 2026-09-14T11:27:42+07:00 | 2026-09-14T11:30:46+07:00 | 3m04s | 9 | 1,034,613 | 20 | 122,395 | 912,198 | 9,067 |
-| 100 | — | coordinator | 35 | รันสคริปต์แล้ว เปิด PR ครบ | done | 2026-09-14T11:40:03+07:00 | 2026-09-14T11:41:02+07:00 | 0m59s | 4 | 2,465,143 | 8 | 4,698 | 2,460,437 | 1,986 |
-| 101 | — | coordinator | 36 | ``` PS C:\Users\pc\workspace\Memory-and-Soul-Passport> bash "C:/Users/pc/AppData/Local/Tem | done | 2026-09-14T12:22:09+07:00 | 2026-09-14T12:22:34+07:00 | 0m25s | 2 | 1,238,183 | 4 | 1,497 | 1,236,682 | 806 |
-| 102 | — | coordinator | 37 | Windows PowerShell Copyright (C) Microsoft Corporation. All rights reserved. PS C:\Users\p | done | 2026-09-14T12:25:14+07:00 | 2026-09-14T12:25:41+07:00 | 0m27s | 2 | 1,248,166 | 4 | 5,195 | 1,242,967 | 535 |
+| 100 | OPS-MEMOS-003 | coordinator | 35 | Verify reported PR opening: none found on GitHub | done | 2026-09-14T11:40:03+07:00 | 2026-09-14T11:41:02+07:00 | 0m59s | 4 | 2,465,143 | 8 | 4,698 | 2,460,437 | 1,986 |
+| 101 | OPS-MEMOS-003 | coordinator | 36 | Diagnose WSL bash error; point to Git Bash | done | 2026-09-14T12:22:09+07:00 | 2026-09-14T12:22:34+07:00 | 0m25s | 2 | 1,238,183 | 4 | 1,497 | 1,236,682 | 806 |
+| 102 | OPS-MEMOS-003 | coordinator | 37 | PRs #20-#26 opened by owner; CI and mergeability check | open | 2026-09-14T12:25:14+07:00 | 2026-09-14T12:26:24+07:00 | 1m10s | 5 | 3,131,035 | 10 | 9,487 | 3,121,538 | 3,465 |

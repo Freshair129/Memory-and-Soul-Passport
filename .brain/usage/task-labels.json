@@ -727,7 +727,26 @@
       "task_ids": [
         "OPS-MEMOS-003"
       ],
-      "label": "Open all PRs: script prepared (push blocked for agent); owner ran it: PRs #20-#26; canary rebases; trailer rewrite; integer expiresAt; lockTimeoutMs fix"
+      "label": "Open all PRs: script prepared (agent push blocked); canary rebases; trailer rewrite; integer expiresAt; lockTimeoutMs fix"
+    },
+    "35": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "Verify reported PR opening: none found on GitHub"
+    },
+    "36": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "Diagnose WSL bash error; point to Git Bash"
+    },
+    "37": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "PRs #20-#26 opened by owner; CI and mergeability check",
+      "status": "open"
     }
   }
 }
