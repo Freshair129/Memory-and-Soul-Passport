@@ -563,6 +563,86 @@ test("case 2b: the same third-party rejoin is refused unconditionally on a DIREC
   }
 });
 
+// RKOI PH-MEMOS-4 review round 4, RECOMMENDED item 5: the fixed
+// "msp:thread-lifecycle" journal actor label (thread-memory.mjs, the
+// close_for_relink branch) is reachable through the REAL tool surface --
+// a DIRECT thread's very first tool call can be close_for_relink itself,
+// before any HUMAN ever joins (no HUMAN message was ever appended, so
+// thread_participants has zero rows for this thread, current OR
+// historical). This is the ONLY way the fallback is reached (a thread
+// with even one departed-then-current HUMAN history hits the
+// lastHuman-lookup branch instead, per the design comment).
+test("close_for_relink: a DIRECT thread that never had ANY HUMAN participant journals the fixed 'msp:thread-lifecycle' actor label, not a principal HMAC", async () => {
+  const { dbPath, cleanup } = tempDbPath("relink-never-human");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = directClaims({ externalRoomRef: "dm-relink-never-human" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-relink-never-human" }, claims),
+    );
+    assert.equal(await humanParticipantCount(dbPath, thread.threadId), 0, "precondition: resolve alone must create no participant row at all");
+
+    const closed = await call(
+      "msp_thread_participant_lifecycle",
+      signed("msp_thread_participant_lifecycle", { thread_id: thread.threadId, action: "close_for_relink" }, { ...claims, assertParticipants: true, assertRelink: true }),
+    );
+    assert.equal(closed.status, "CLOSED");
+
+    const { open } = await import("@freshair129/msp-storage/connection");
+    const db = open(dbPath);
+    try {
+      const journalRow = db
+        .prepare("SELECT actor FROM journal WHERE tool_name = 'msp_thread_participant_lifecycle' AND ref = ? ORDER BY journal_id DESC LIMIT 1")
+        .get(thread.threadId);
+      assert.equal(
+        journalRow.actor,
+        "msp:thread-lifecycle",
+        "a DIRECT thread with no HUMAN participant history at all must fall back to the fixed system label, never a principal HMAC of nothing",
+      );
+    } finally {
+      db.close();
+    }
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+// RKOI PH-MEMOS-4 review round 4, RECOMMENDED item 6a: design Sec.7.1
+// states close_for_relink takes no additional request fields --
+// `speaker_id` must be refused explicitly, never silently
+// accepted-and-ignored.
+test("close_for_relink: a caller-supplied speaker_id is refused validation_failed (design Sec.7.1: close_for_relink takes no additional request fields)", async () => {
+  const { dbPath, cleanup } = tempDbPath("relink-speaker-id-refused");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = directClaims({ externalRoomRef: "dm-relink-speaker-id-refused" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-relink-speaker-id-refused" }, claims),
+    );
+    await call(
+      "msp_thread_message_append",
+      signed("msp_thread_message_append", { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi" }, claims),
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_participant_lifecycle",
+        signed("msp_thread_participant_lifecycle", { thread_id: thread.threadId, action: "close_for_relink", speaker_id: "alice" }, { ...claims, assertParticipants: true, assertRelink: true }),
+      ),
+      /validation_failed/,
+      "a speaker_id on close_for_relink must be refused, never silently accepted-and-ignored",
+    );
+    // Refused before any write -- the thread stays open and the HUMAN
+    // participant's row is never closed by this refused attempt.
+    assert.equal(await humanParticipantCount(dbPath, thread.threadId), 1);
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------
 // BL-MEMOS-050/052: close_for_relink's status race.
 // ---------------------------------------------------------------------
