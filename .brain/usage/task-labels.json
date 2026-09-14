@@ -670,7 +670,18 @@
           "task_ids": [
             "BL-MEMOS-057"
           ],
-          "label": "PH-MEMOS-4: consume nonce on erasure replay, fix 4 doc warnings",
+          "label": "PH-MEMOS-4: consume nonce on erasure replay, fix 4 doc warnings (740e9d9)"
+        }
+      }
+    },
+    "a0a9aa4d9f36cc6f9": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-057"
+          ],
+          "label": "PH-MEMOS-4 confirm nonce fix (740e9d9)",
           "status": "open"
         }
       }
