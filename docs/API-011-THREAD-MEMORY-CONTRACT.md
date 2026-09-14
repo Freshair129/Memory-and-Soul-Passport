@@ -1,6 +1,6 @@
 ---
 doc_id: "API-011-THREAD-MEMORY-CONTRACT"
-version: "0.3.3b"
+version: "0.4.0b"
 status: "beta"
 created_at: "2026-09-08T00:25:00+07:00,RWANG"
 last_update: "2026-09-15T00:00:00+07:00,KIN"
@@ -246,6 +246,95 @@ hashing" above) — zuri-ai's real delivery grant never sent one, so requiring
 it made every delivery receipt unreachable (RKOI review, 2nd round,
 CRITICAL 1).
 
+### Multi-agent (stage 2, BL-MEMOS-040..048/112, DEC-MEMOS-17..21)
+
+**A hard cutover, no compatibility mode (DEC-MEMOS-17).** Every one of the
+ten tools above now requires two more grant claims: `agentId` and
+`workspaceId` (non-empty strings, ≤128 characters, unconstrained charset —
+opaque Tier-1-owned identifiers, exactly like `principalId`). Their
+absence is `grant_signature_invalid`, the same "missing required claim"
+bucket `tenantId`/`principalId`/`policyRevision` already occupy — not a
+new code. A caller still signing zuri-ai's pre-stage-2 grant shape is
+refused outright; there is no fallback and no feature flag.
+
+**`nonce`** (a caller-generated random string, ≥128 bits, ≤128 characters
+— `signThreadRequest` auto-generates a compliant one unless the caller
+supplies its own) is required on every mutating tool **except**
+`msp_thread_message_append` (its own `source_event_id` already gives it
+replay protection) and `msp_thread_context` (read-only). A tool in that
+set called with no `nonce` claim at all is `grant_nonce_required`; reusing
+a `(tenantId, nonce)` pair already recorded for that tenant is
+`grant_replayed`. Nonces are consumed inside the store method's own
+transaction, alongside its write, so a replay rolls back the whole
+mutation, never a partial apply.
+
+**Agent attachment (`thread_agents`, structurally identical to
+`thread_participants`'s `left_at IS NULL` shape).** An agent is "current"
+on a thread exactly when an open `thread_agents` row exists for
+`(thread_id, agentId, workspaceId)`. `msp_thread_resolve` decides
+attachment: minting a brand-new thread auto-attaches the minting agent
+unconditionally (no claim needed, mirroring the first-HUMAN-membership
+rule); resolving an existing thread requires the calling agent already be
+current, or the grant to carry `assertAgents: true` (self-assert attach);
+neither applies, the call is `agent_not_current`. A worker-only grant
+(`operator`, with none of `readPrivate`/`writePrivate`/`confirmMemory`/
+`deliveryWriter`) can never mint a room's first thread — such a resolve
+against a room with no `ACTIVE` thread is refused `not_found`, never
+`created: true`. `msp_thread_resolve`'s response gains
+`agentAttached: boolean` — true exactly when this call caused a new
+`thread_agents` row.
+
+**The agent gate.** Every other thread-bound tool
+(`msp_thread_message_append`, `msp_thread_context`,
+`msp_thread_memory_record`, `msp_thread_injection_record`,
+`msp_thread_delivery_record`'s resolved path, and
+`msp_session_compaction_claim`/`_commit`/`_retry` via their job's own
+thread) requires the calling agent be current on that thread, refused
+`agent_not_current` otherwise — independent of, and in addition to, every
+existing HUMAN-participant/capability check. An `AGENT`-kind
+`msp_thread_message_append` requires `speaker_id === grant.agentId`.
+`msp_session_sweep` is exempt from the currency check (it precedes any
+single thread's resolution) but still requires `agentId`/`workspaceId`
+present, and its per-job metadata gains `thread_kind`/`channel_type` so a
+worker can construct its own subsequent resolve for that job's room.
+
+**Delivery (`msp_thread_delivery_record`, CRITICAL 1).** Both its paths
+are agent-gated. The resolved path (an inbound message already exists)
+uses the same agent gate as every other thread-bound tool, through that
+message's own thread. The pending path (no thread to check yet) resolves
+the room's own `ACTIVE` thread directly and requires the calling agent be
+current on it — `not_found` if the room has no `ACTIVE` thread at all.
+`thread_pending_deliveries` now stores `agent_id`/`workspace_id`. At drain
+time, the **stored** pair is re-checked for currency on the **inbound
+message's own thread** (never a freshly re-derived room `ACTIVE` thread);
+a departed or legacy `NULL` stored agent leaves the row unreconciled
+(`reconcile_state` stays `pending`), recorded through the already-shipped
+`msp_thread_message_append.reconcile_skipped` journal entry with
+`error_code: 'agent_not_current'`. The resolved path's internal reply
+speaks as `grant.agentId`; a drained reply speaks as the row's own stored
+`agent_id` — neither path ever writes a fixed label.
+
+**Protected records (`msp_thread_memory_record`, DEC-MEMOS-19).** A new
+optional request field, `visibility` (`AGENT`|`THREAD`, default
+`THREAD`), and two new response fields, `agentId` and `visibility`.
+`THREAD` (the default) is shared among the thread's current agents,
+matching stage-1 behaviour for the common single-agent case; `AGENT`
+restricts a record to the agent that recorded it, filtered into
+`msp_thread_context`'s `protectedRecords` on top of the existing
+HUMAN-private-read filter, never in place of it. An absent
+`requesterAgentId` sees `THREAD` records only. `agentId`/`visibility` join
+`record_id`'s content hash, so two different agents asserting identical
+content get two distinct records, never one shared row. Superseding an
+unknown id, another agent's `AGENT`-visibility record, or a record failing
+the pre-existing stage-1 ownership/status check are now the **one
+identical** `validation_failed` answer ("supersedes_record_id does not
+name a record this caller can supersede") — not three distinguishable
+codes. `THREAD`-visibility and legacy (`agent_id IS NULL`) records stay
+supersedable by any agent under the stage-1 rules alone. Summaries need no
+equivalent filter: an agent that is current sees every summary the thread
+has, and a departed agent's very next `msp_thread_context` call is already
+refused `agent_not_current` before any summary is ever read.
+
 ### Errors
 
 Every thread tool answers one of a fixed, typed vocabulary, matching the
@@ -258,6 +347,14 @@ codes raised by `verifyThreadGrant` before any scope decision is even
 evaluated: `grant_unconfigured` (no key resolves for the grant's tenant),
 `grant_signature_invalid`, `grant_expired`, `grant_payload_mismatch`. No
 error message embeds a raw `external_room_ref` or person id.
+
+Stage 2 adds three more codes (see "Multi-agent" above):
+`agent_not_current` (the grant's `agentId` is not current on the resolved
+thread, or `assertAgents` was needed and absent), `grant_nonce_required`
+(a nonce-required tool's grant carries no `nonce` claim at all), and
+`grant_replayed` (that `(tenantId, nonce)` pair was already consumed).
+`thread_keyring_config_invalid` (BL-MEMOS-049, above) is a startup-time
+failure, never returned from a tool call.
 
 Beneath all of the above, every thread tool -- like every other tool in
 this runtime -- is also subject to the transport-level escaped-object-key
@@ -272,11 +369,19 @@ error with `id: null`, never the `grant_*`/`thread_*` vocabulary above.
 
 ### Journaling (W5)
 
-Every journal entry's `actor` field is the HMAC of the raw speaker id under
-`MSP_IDENTITY_HMAC_KEY` — never the raw id itself — until stage 2 introduces
-a first-class `agentId`/per-agent actor model. Worker-driven entries (sweep,
-compaction commit) use a fixed, non-identity system label
-(`msp:session-router`, `msp:compaction-worker`) instead.
+A HUMAN-attributable journal entry's `actor` field is the HMAC of the raw
+speaker id under `MSP_IDENTITY_HMAC_KEY` — never the raw id itself. Stage 2
+changes this for AGENT-attributable entries only (`msp_thread_message_append`
+when the message's own `speaker_kind` is `AGENT`, and
+`msp_session_compaction_commit`): `actor` becomes `grant.agentId` (for
+commit, the claiming/committing worker's own agent id) directly, in plain
+text — not a W5 regression, since `agentId`/`workspaceId` are Tier-1-owned
+workspace/process identifiers, not personal data, the same category of
+decision as already logging `toolName`/`ref`/`policyDecision` in plain
+text. `msp_session_sweep` and delivery-drain keep their fixed,
+non-identity system labels (`msp:session-router`, `msp:delivery-drain`) —
+sweep spans many threads/agents at once, and drain has no live caller at
+all.
 
 ### Test clock (W1)
 
@@ -416,6 +521,19 @@ Pending intake and leased job state are operational data, not confirmed
 memory.
 
 ## Version history
+
+### TASK-MEMOS-002 stage 2, BL-MEMOS-040..048/112, 2026-09-15
+
+Multi-agent, per docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md v0.4.3b
+(RKOI-approved spec) and DEC-MEMOS-17..21: `agentId`/`workspaceId`/`nonce`
+required grant claims, `thread_agents` attachment and the agent gate,
+delivery's own agent scoping (CRITICAL 1), per-agent protected-record
+visibility (CRITICAL 2), and replay-nonce bookkeeping. See "Multi-agent
+(stage 2)" above for the full shape. `tests/cross/zuri-thread-contract.test.mjs`
+now asserts zuri-ai's own unmodified grant is refused
+`grant_signature_invalid` (DEC-MEMOS-17's hard cutover), alongside a
+second, shape-only case wrapping zuri's port with the new stage-2 fields
+added.
 
 ### TASK-MEMOS-002 stage 2, BL-MEMOS-049, 2026-09-15
 
