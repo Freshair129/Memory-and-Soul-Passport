@@ -12,7 +12,7 @@ A segment whose status is `open` was still running when the ledger was generated
 
 | Segments | Requests | Input (total) | input_tokens | Cache write | Cache read | Output |
 |---:|---:|---:|---:|---:|---:|---:|
-| 99 | 4,674 | 2,063,542,123 | 10,608 | 44,020,022 | 2,019,511,493 | 4,701,107 |
+| 99 | 4,689 | 2,069,238,257 | 10,640 | 44,050,469 | 2,025,177,148 | 4,714,631 |
 
 ## Per task id
 
@@ -41,7 +41,7 @@ A segment whose status is `open` was still running when the ledger was generated
 | BL-MEMOS-047 | 4 | 2026-09-14T08:30:49+07:00 | 2026-09-14T10:59:38+07:00 | 134 | 34,450,868 | 92,346 |
 | BL-MEMOS-048 | 2 | 2026-09-14T03:55:34+07:00 | 2026-09-14T10:49:14+07:00 | 209 | 72,941,443 | 148,156 |
 | BL-MEMOS-049 | 11 | 2026-09-14T03:55:34+07:00 | 2026-09-14T10:49:14+07:00 | 1,331 | 609,796,897 | 934,703 |
-| BL-MEMOS-080 | 4 | 2026-09-14T10:22:18+07:00 | 2026-09-14T11:28:01+07:00 | 292 | 41,181,317 | 207,693 |
+| BL-MEMOS-080 | 4 | 2026-09-14T10:22:18+07:00 | 2026-09-14T11:30:46+07:00 | 299 | 42,013,734 | 215,733 |
 | BL-MEMOS-087 | 3 | 2026-09-14T03:58:32+07:00 | 2026-09-14T08:48:45+07:00 | 49 | 18,785,049 | 76,512 |
 | BL-MEMOS-102 | 2 | 2026-09-14T00:29:57+07:00 | 2026-09-14T02:22:25+07:00 | 437 | 252,069,710 | 295,076 |
 | BL-MEMOS-108 | 1 | 2026-09-14T00:29:57+07:00 | 2026-09-14T01:30:43+07:00 | 274 | 222,020,711 | 188,540 |
@@ -51,7 +51,7 @@ A segment whose status is `open` was still running when the ledger was generated
 | OPS-MEMOS-000 | 2 | 2026-09-13T14:53:06+07:00 | 2026-09-13T14:53:06+07:00 | 0 | 0 | 0 |
 | OPS-MEMOS-001 | 2 | 2026-09-13T18:28:15+07:00 | 2026-09-13T23:00:09+07:00 | 26 | 4,190,696 | 17,365 |
 | OPS-MEMOS-002 | 1 | 2026-09-13T23:46:44+07:00 | 2026-09-14T00:32:28+07:00 | 30 | 25,130,965 | 62,342 |
-| OPS-MEMOS-003 | 1 | 2026-09-14T08:56:28+07:00 | 2026-09-14T11:28:03+07:00 | 42 | 23,234,817 | 53,501 |
+| OPS-MEMOS-003 | 1 | 2026-09-14T08:56:28+07:00 | 2026-09-14T11:32:03+07:00 | 50 | 28,098,534 | 58,985 |
 
 ## Per segment
 
@@ -148,11 +148,11 @@ A segment whose status is `open` was still running when the ledger was generated
 | 89 | BL-MEMOS-049, BL-MEMOS-047 | janus `ae6c2c8` | 1 | CI engine canary for V8 JSON.parse bug (e0a3624) | done | 2026-09-14T08:30:49+07:00 | 2026-09-14T08:56:55+07:00 | 26m06s | 102 | 9,430,564 | 204 | 271,077 | 9,159,283 | 57,964 |
 | 90 | BL-MEMOS-040..049 | kin `ab508b7` | 10 | Transport escaped-key pre-scan (server + client), queued after keyring fix | done | 2026-09-14T08:48:03+07:00 | 2026-09-14T10:11:01+07:00 | 1h22m | 196 | 157,082,507 | 392 | 3,572,319 | 153,509,796 | 144,814 |
 | 91 | BL-MEMOS-047 | coordinator | 33 | Fix it all (2nd): confirm stage-2 review findings are all dispatched | done | 2026-09-14T08:49:37+07:00 | 2026-09-14T08:50:02+07:00 | 0m25s | 1 | 503,389 | 2 | 31 | 503,356 | 1,133 |
-| 92 | OPS-MEMOS-003 | coordinator | 34 | Open all PRs (script, push blocked); canary rebases; KIN trailer rewrite; integer expiresAt + NOTES fix (94cdb34) | open | 2026-09-14T08:56:28+07:00 | 2026-09-14T11:28:03+07:00 | 2h31m | 42 | 23,234,817 | 94 | 579,366 | 22,655,357 | 53,501 |
+| 92 | OPS-MEMOS-003 | coordinator | 34 | Open all PRs (script, push blocked); canary rebases; KIN trailer rewrite; integer expiresAt + NOTES fix (94cdb34); migrate PR added to script; lockTimeoutMs TypeError fix (5d7f7b5) | open | 2026-09-14T08:56:28+07:00 | 2026-09-14T11:32:03+07:00 | 2h35m | 50 | 28,098,534 | 112 | 591,534 | 27,506,888 | 58,985 |
 | 93 | BL-MEMOS-047 | rkoi `afd6aa2` | 8 | Stage 2 implementation code review, round 1 (1 critical: recursive scanner stack crash) | done | 2026-09-14T10:11:44+07:00 | 2026-09-14T10:21:30+07:00 | 9m47s | 24 | 18,779,575 | 50 | 808,830 | 17,970,695 | 26,556 |
 | 94 | BL-MEMOS-040, BL-MEMOS-041, BL-MEMOS-042, BL-MEMOS-043, BL-MEMOS-044, BL-MEMOS-045, BL-MEMOS-046, BL-MEMOS-048, BL-MEMOS-112, BL-MEMOS-049 | kin `ab508b7` | 11 | Keyring parser V8 fix, transport escaped-key pre-scan, and stage 2 implementation (3a88991..f788e39) | done | 2026-09-14T10:22:05+07:00 | 2026-09-14T10:49:14+07:00 | 27m09s | 107 | 44,948,942 | 214 | 1,074,356 | 43,874,372 | 49,866 |
 | 95 | BL-MEMOS-080 | janus `a0d58fa` | 1 | Fix concurrent cold-start migration race (cbce394) | done | 2026-09-14T10:22:18+07:00 | 2026-09-14T10:50:23+07:00 | 28m04s | 135 | 23,754,668 | 270 | 269,248 | 23,485,150 | 111,041 |
 | 96 | BL-MEMOS-047 | rkoi `afd6aa2` | 9 | Stage 2 implementation code review, round 2 (APPROVED, 4d0df3c) | done | 2026-09-14T10:50:30+07:00 | 2026-09-14T10:59:38+07:00 | 9m08s | 7 | 5,737,340 | 14 | 1,644,009 | 4,093,317 | 6,693 |
 | 97 | BL-MEMOS-080 | rkoi `a46f6a8` | 1 | Review concurrent migration lock fix (0 critical; counts, crash wording, docs) | done | 2026-09-14T10:51:29+07:00 | 2026-09-14T11:03:36+07:00 | 12m07s | 35 | 2,570,199 | 70 | 98,218 | 2,471,911 | 37,972 |
 | 98 | BL-MEMOS-080 | janus `a547846` | 1 | Revise migration lock fix: derived counts, hung-holder wording, typed lock-open error (ea1b5f2) | done | 2026-09-14T11:09:34+07:00 | 2026-09-14T11:27:19+07:00 | 17m45s | 120 | 14,654,254 | 240 | 175,884 | 14,478,130 | 57,653 |
-| 99 | BL-MEMOS-080 | rkoi `a46f6a8` | 2 | Confirm migration fix revision (ea1b5f2) | open | 2026-09-14T11:27:42+07:00 | 2026-09-14T11:28:01+07:00 | 0m19s | 2 | 202,196 | 6 | 104,116 | 98,074 | 1,027 |
+| 99 | BL-MEMOS-080 | rkoi `a46f6a8` | 2 | Confirm migration fix revision (APPROVED conditional on Ubuntu CI, ea1b5f2) | done | 2026-09-14T11:27:42+07:00 | 2026-09-14T11:30:46+07:00 | 3m04s | 9 | 1,034,613 | 20 | 122,395 | 912,198 | 9,067 |

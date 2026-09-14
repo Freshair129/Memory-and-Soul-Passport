@@ -503,8 +503,7 @@
           "task_ids": [
             "BL-MEMOS-080"
           ],
-          "label": "Confirm migration fix revision (ea1b5f2)",
-          "status": "open"
+          "label": "Confirm migration fix revision (APPROVED conditional on Ubuntu CI, ea1b5f2)"
         }
       }
     },
@@ -728,7 +727,7 @@
       "task_ids": [
         "OPS-MEMOS-003"
       ],
-      "label": "Open all PRs (script, push blocked); canary rebases; KIN trailer rewrite; integer expiresAt + NOTES fix (94cdb34)",
+      "label": "Open all PRs (script, push blocked); canary rebases; KIN trailer rewrite; integer expiresAt + NOTES fix (94cdb34); migrate PR added to script; lockTimeoutMs TypeError fix (5d7f7b5)",
       "status": "open"
     }
   }
