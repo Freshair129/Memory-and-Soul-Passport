@@ -370,12 +370,85 @@
 // foreign-key target" rather than claiming it does not exist. The refusal
 // itself, and its prefix, are unchanged -- only the reason given is now
 // accurate.
+// Concurrent cold start (RKOI review): two processes calling `runMigrations`
+// against the SAME fresh database file at (almost) the same time used to
+// both read `schema_migrations` as empty, both decide the same migrations
+// were "pending", and race to apply them -- the loser hit whatever SQLite
+// statement happened to run second: a raw, unprefixed `UNIQUE constraint
+// failed: schema_migrations.version` from the losing INSERT, a raw `table
+// "<t>" already exists` from a losing `CREATE TABLE`, or a raw
+// `SQLITE_BUSY`/"database is locked" if two writers overlapped inside the
+// same instant. None of those are the typed `SchemaVersionError` every other
+// guard in this file raises, and a "just add a busier busy_timeout" fix
+// would not help: `db.exec(file.sql)` for the SAME migration running twice
+// concurrently is wrong regardless of how long either side is willing to
+// wait, because the SECOND run must not re-execute a migration the first
+// one already committed.
+//
+// The fix serializes the ENTIRE read-pending-then-apply sequence below
+// (`applyPendingMigrations`) across processes with `withMigrationLock`,
+// which takes a real OS-visible SQLite write lock -- `BEGIN IMMEDIATE` on a
+// DEDICATED lock file, a SEPARATE SQLite database from the one migrations
+// run against (`<dbPath>.migrate-lock`, via `connection.mjs`'s `openLock`).
+// It has to be a separate file: SQLite allows only ONE writer across ALL
+// connections to a given database file at a time, even two connections in
+// the SAME process, so a second connection to the MAIN db file holding
+// `BEGIN IMMEDIATE` would block the main connection's OWN writes inside the
+// very critical section it's supposed to protect, not just other
+// processes'. A lock file the migration SQL never touches has no such
+// conflict with the main connection.
+//
+// A losing process's `BEGIN IMMEDIATE` does not fail fast: the lock
+// connection's OWN `busy_timeout` (independent of the main connection's,
+// and generous -- `DEFAULT_LOCK_TIMEOUT_MS`, below -- because a waiter may
+// need to sit through an arbitrary number of other processes' entire
+// migration runs, not just one write's worth of ordinary contention) makes
+// SQLite retry underneath, so the waiter blocks and then proceeds, never
+// surfacing a raw `SQLITE_BUSY` to its caller. Only if the timeout itself
+// elapses -- meaning waiting was not merely slow but effectively impossible,
+// e.g. a holder crashed mid-migration without ever releasing its OS file
+// lock, or some other process is simply never going to finish -- does this
+// module give up, and even then it never lets the raw `SqliteError` through:
+// it is rethrown as the typed `migration_concurrent_conflict:`-prefixed
+// `SchemaVersionError`, naming the database file and how long it waited.
+//
+// Whichever process acquires the lock re-reads `schema_migrations` from
+// scratch once inside the critical section (`applyPendingMigrations`'s own
+// `ensureMigrationsTable` + `SELECT`, unchanged from before this fix) --
+// this is what makes a process that loses the race and then acquires the
+// lock second correctly see every migration the FIRST process already
+// committed as already-applied, and compute a smaller (possibly empty)
+// pending set, rather than trying to re-apply what already ran. No
+// per-migration re-check inside the loop is needed on top of that: with the
+// whole loop serialized end-to-end, no two processes can ever simultaneously
+// believe the same migration is pending.
+//
+// The lock is orthogonal to, and does not change, anything about the
+// foreign-keys=off directive: the lock is held on a SEPARATE connection
+// (`lockDb`), so it has no effect on `db.inTransaction` for the MAIN
+// connection the directive path's `migration_in_transaction_refused` guard
+// and `PRAGMA foreign_keys` toggle both inspect and require, respectively.
+//
+// This lock is meaningless -- and skipped -- for a database that cannot be
+// shared across processes in the first place: an in-memory database
+// (`db.memory === true`) or an anonymous temporary one (`db.name === ""`,
+// SQLite's own convention for a database opened without a persistent file).
+// Only one thing in the whole process could ever be racing for such a
+// database, and better-sqlite3's API is synchronous, so `runMigrations`
+// already cannot run twice concurrently within a single process either way.
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
+import { openLock } from "./connection.mjs";
+
 const MIGRATION_FILE_PATTERN = /^(\d{4})_.*\.sql$/;
 const FOREIGN_KEYS_OFF_DIRECTIVE = "-- msp-migration: foreign-keys=off";
+const MIGRATION_LOCK_FILE_SUFFIX = ".migrate-lock";
+// Generous on purpose (see the module header comment): a waiter may need to
+// sit through an arbitrary number of other processes' entire migration runs
+// ahead of it, not just one write's worth of ordinary contention.
+const DEFAULT_LOCK_TIMEOUT_MS = 30000;
 
 function stripTrailingCr(line) {
   return line.replace(/\r$/, "");
@@ -959,12 +1032,86 @@ function ensureMigrationsTable(db) {
   `);
 }
 
+// Path of the dedicated lock file used to serialize concurrent cold starts
+// against the same application database (see the module header comment).
+// `null` for a database this lock is meaningless for -- in-memory
+// (`db.memory`) or anonymous/temporary (`db.name === ""`) -- neither of
+// which is ever shared across processes.
+function migrationLockPath(db) {
+  if (db.memory || !db.name) return null;
+  return `${db.name}${MIGRATION_LOCK_FILE_SUFFIX}`;
+}
+
+// Acquires the cross-process migration lock (a no-op passthrough when
+// `migrationLockPath` returns null; see the module header comment), runs
+// `fn` while holding it, and releases it in every case -- commit on success,
+// rollback then rethrow on failure, always closing the lock connection.
+// `BEGIN IMMEDIATE` eagerly takes SQLite's write lock on the dedicated lock
+// file rather than lazily upgrading on first write, which is what makes a
+// concurrent second caller block (inside the lock connection's own generous
+// `busy_timeout`) instead of racing `fn()` itself. If SQLite still reports
+// `SQLITE_BUSY` after that timeout -- waiting was not merely slow but
+// effectively impossible, e.g. a prior holder crashed without releasing its
+// OS-level file lock -- this throws the typed `migration_concurrent_conflict:`
+// `SchemaVersionError` naming the database and how long it waited, never a
+// raw `SqliteError`.
+function withMigrationLock(db, lockTimeoutMs, fn) {
+  const lockPath = migrationLockPath(db);
+  if (!lockPath) return fn();
+
+  const lockDb = openLock(lockPath, lockTimeoutMs);
+  try {
+    try {
+      lockDb.exec("BEGIN IMMEDIATE");
+    } catch (error) {
+      const isBusy = error instanceof Error && typeof error.code === "string" && error.code.startsWith("SQLITE_BUSY");
+      if (isBusy) {
+        throw new SchemaVersionError(
+          `migration_concurrent_conflict: another process appears to be applying migrations against "${db.name}" ` +
+            `and did not finish within ${lockTimeoutMs}ms. Refusing to start.`,
+        );
+      }
+      throw error;
+    }
+
+    try {
+      const result = fn();
+      lockDb.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try {
+        lockDb.exec("ROLLBACK");
+      } catch {
+        // The lock connection is closed in `finally` regardless; a failed
+        // ROLLBACK here must never mask the original error.
+      }
+      throw error;
+    }
+  } finally {
+    lockDb.close();
+  }
+}
+
 /**
  * @param {import("better-sqlite3").Database} db an already-open connection (see db/connection.mjs).
  * @param {string} migrationsDir absolute path to the directory of NNNN_*.sql files.
+ * @param {object} [options]
+ * @param {number} [options.lockTimeoutMs] how long a concurrent caller waits for another process's migration run to
+ *   finish before refusing with `migration_concurrent_conflict:` (default `DEFAULT_LOCK_TIMEOUT_MS`; see the module
+ *   header comment). Exposed for tests -- production callers should not need to override it.
  * @returns {{ appliedCount: number, currentVersion: number }}
  */
-export function runMigrations(db, migrationsDir) {
+export function runMigrations(db, migrationsDir, { lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS } = {}) {
+  return withMigrationLock(db, lockTimeoutMs, () => applyPendingMigrations(db, migrationsDir));
+}
+
+// The original body of `runMigrations`, unchanged except for its name: reads
+// `schema_migrations` fresh (this is what makes a process that acquires the
+// lock SECOND correctly see everything the FIRST process already committed
+// as already-applied) and applies whatever is still pending. Never called
+// except while `withMigrationLock` holds the cross-process lock (or on a
+// database the lock is meaningless for).
+function applyPendingMigrations(db, migrationsDir) {
   ensureMigrationsTable(db);
 
   const files = loadMigrationFiles(migrationsDir);

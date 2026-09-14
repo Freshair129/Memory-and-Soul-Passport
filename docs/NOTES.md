@@ -1,7 +1,7 @@
 ---
-version: "0.1.9b"
+version: "0.1.10b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-13T23:30:00+07:00,JANUS"
+last_update: "2026-09-14T11:00:00+07:00,JANUS"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -218,6 +218,7 @@ the final tree, green every time.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.10b | 2026-09-14 | beta | Fixed a pre-existing migration-runner race (RKOI review): two processes cold-starting `runMigrations` against the same fresh database file could have the loser throw a raw `SqliteError` instead of a typed one. `runMigrations` now serializes the whole read-pending-then-apply sequence behind a real cross-process lock (`BEGIN IMMEDIATE` on a dedicated `<dbPath>.migrate-lock` file); a losing process waits and re-reads fresh state, or refuses with the new `migration_concurrent_conflict:` prefix only if waiting is genuinely impossible. Also fixed a related `connection.mjs` race switching a brand-new file to WAL mode. See `docs/MIGRATION.md`'s "Concurrent cold start" section and `tests/integration/migrate-concurrent.test.mjs` (real multi-process coverage, 20-iteration non-flakiness loop). | working-tree | JANUS |
 | 0.1.9b | 2026-09-13 | beta | RKOI review revision: corrected the 0003/0005 claim -- foreign-key risk during a rebuild depends on child rows referencing the table, not rows within it; named exactly which of 0003's two rebuilds (`entities`, at risk from `entity_history`; `promotions`, at zero risk, guarded instead by its NOT NULL `vault_id` backfill) and 0005's rebuild (`entities` again, at risk from `entity_history` and `embeddings`) carried real risk, and confirmed both used the safe rebuild order. | working-tree | JANUS |
 | 0.1.8b | 2026-09-13 | beta | Recorded that root migrations 0003 and 0005 rebuilt child tables inside the transaction with foreign keys left on, which only worked because those tables were empty everywhere they ran, and that the design's 0008 (a `vaults` rebuild) is the first migration that needs the new `foreign-keys=off` runner mode (WP-E0, `docs/MIGRATION.md`). | working-tree | JANUS |
 | 0.1.7b | 2026-09-12 | beta | Recorded both Node 24.19 SQLite failure modes: the upstream `ObjectWrap` abort on `better-sqlite3` 11.x, and the `SQLITE_IOERR_TRUNCATE` WAL-index race that 12.x/13.x expose in tests that open a vault database while a killed runtime is still tearing down. Fixed by making `close()` await the child's real exit; storage pragmas unchanged. | working-tree | Claude Opus 5 |
