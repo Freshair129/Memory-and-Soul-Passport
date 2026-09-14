@@ -90,6 +90,11 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         supersedesRecordId: args.supersedes_record_id,
         status: args.status,
         verificationState: args.verification_state,
+        // PH-MEMOS-3 stage 2 (BL-MEMOS-043): agentId is guard-verified
+        // (grant.agentId), never trusted from the wire; visibility is a
+        // new, optional, additive request field (default THREAD).
+        agentId: args.grant_agent_id,
+        visibility: args.visibility,
         now: now(args),
       });
     },
@@ -102,6 +107,7 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         // Injected by thread-guard.mjs from the verified grant principal --
         // never trusted from the request body itself.
         requesterSpeakerId: args.requester_speaker_id,
+        requesterAgentId: args.requester_agent_id,
         now: now(args),
       });
     },

@@ -577,4 +577,48 @@ describe("unified thread, speaker and session memory", () => {
       expect(JSON.parse(entry.payload_json)).toMatchObject({ receipt_id: "crm-delivered-alice", reconciled: false, error_code: "conflict" });
     }
   });
+
+  // PH-MEMOS-3 stage 2 (BL-MEMOS-043, Sec.9.4, RKOI stage-2 review round 1,
+  // warning 5): a stage-2 msp_thread_context call with NO requesterAgentId
+  // at all must see THREAD-visibility records only, never fall through to
+  // showing every AGENT-visibility record -- the earlier draft's vacuous
+  // `OR (no requesterAgentId)` bug. Exercised at this layer (the unguarded
+  // handler map) because thread-guard.mjs's real grant always supplies
+  // requesterAgentId once agentId is a required claim -- there is no way
+  // to reach this condition through the guarded surface at all, which is
+  // itself part of what makes this the correct, restrictive default.
+  it("a msp_thread_context call with no requesterAgentId at all sees THREAD-visibility protected records only, never an AGENT-visibility one", async () => {
+    const server = makeServer();
+    const tools = server.threadHandlers;
+    const { thread } = await tools.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa-no-requester-agent", external_room_ref: "dm-no-requester-agent", tenant_id: "tenant-01",
+    });
+    const inbound = await tools.msp_thread_message_append({
+      thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi",
+    });
+    const threadRecord = await tools.msp_thread_memory_record({
+      thread_id: thread.threadId, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", body: { shared: true }, source_message_refs: [inbound.message.messageId],
+    });
+    // The AGENT-visibility record's own agent_id must have attached to
+    // this thread at some point (trg_protected_memory_records_agent_rules,
+    // migration 0009) -- a second resolve, self-asserting, attaches it.
+    await tools.msp_thread_resolve({
+      thread_kind: "DIRECT", audience_kind: "DIRECT", channel_type: "LINE", channel_account_id: "oa-no-requester-agent", external_room_ref: "dm-no-requester-agent", tenant_id: "tenant-01",
+      grant_agent_id: "agent-no-requester", grant_workspace_id: "workspace-no-requester", grant_assert_agents: true,
+    });
+    const agentRecord = await tools.msp_thread_memory_record({
+      thread_id: thread.threadId, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", body: { agentOnly: true }, source_message_refs: [inbound.message.messageId],
+      visibility: "AGENT", grant_agent_id: "agent-no-requester",
+    });
+    expect(threadRecord.visibility).toBe("THREAD");
+    expect(agentRecord.visibility).toBe("AGENT");
+
+    // Called with no requester_agent_id at all (the unguarded handler map
+    // never sets one unless a test explicitly passes it, unlike
+    // grant_agent_id above, which the shared wrapper always defaults).
+    const context = await tools.msp_thread_context({ thread_id: thread.threadId });
+    const ids = context.protectedRecords.map((record) => record.recordId);
+    expect(ids).toContain(threadRecord.recordId);
+    expect(ids).not.toContain(agentRecord.recordId);
+  });
 });

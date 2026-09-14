@@ -52,6 +52,14 @@ const MAX_BODY_JSON_LENGTH = 50_000;
 const MAX_SCOPE_JSON_LENGTH = 10_000;
 const MAX_SOURCE_REFS = 200;
 
+// PH-MEMOS-3 stage 2 (BL-MEMOS-043, RKOI stage-2 review round 2,
+// owner-direction ruling): the ONE identical answer for every reason a
+// supersedes_record_id might be unsupersedable -- unknown id, another
+// agent's AGENT-visibility record, or a record failing the pre-existing
+// stage-1 ownership/status check. A third, distinguishable code (the
+// round-1 fix's own thread_scope_denied) would itself have been an oracle.
+const SUPERSESSION_REFUSAL = "supersedes_record_id does not name a record this caller can supersede";
+
 export class ThreadMemoryValidationError extends ThreadValidationError {}
 export class ThreadMemoryConflictError extends ThreadConflictError {}
 export class ThreadMemoryNotFoundError extends ThreadNotFoundError {}
@@ -298,6 +306,11 @@ function rowProtected(row) {
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    // PH-MEMOS-3 stage 2 (BL-MEMOS-043, Sec.9.4): agentId is NULL on every
+    // legacy stage-1 row; visibility defaults to 'THREAD' at the schema
+    // level (migration 0009), so every legacy row reports it too.
+    agentId: row.agent_id ?? null,
+    visibility: row.visibility ?? "THREAD",
   };
 }
 
@@ -869,6 +882,8 @@ export class ThreadMemoryStore {
     supersedesRecordId = null,
     status = "ACTIVE",
     verificationState = "CANDIDATE",
+    agentId = null,
+    visibility = "THREAD",
     now,
   } = {}) {
     const thread = this.#requireThread(threadId);
@@ -877,6 +892,18 @@ export class ThreadMemoryStore {
     const verification = enumValue(verificationState, VERIFICATION_STATES, "verification_state");
     const speaker = requiredString(assertedBySpeakerId, "asserted_by_speaker_id");
     const person = optionalString(subjectPersonId, "subject_person_id");
+    // PH-MEMOS-3 stage 2 (BL-MEMOS-043, DEC-MEMOS-19): visibility defaults
+    // to THREAD (shared among the thread's current agents), matching the
+    // migration's own column default and every legacy row's backfill --
+    // an AGENT-visibility record requires a non-null agent_id, backstopped
+    // unconditionally by the migration's own
+    // trg_protected_memory_records_agent_rules trigger regardless of what
+    // this JS check does.
+    const recordVisibility = enumValue(visibility, new Set(["AGENT", "THREAD"]), "visibility");
+    const recordAgentId = optionalString(agentId, "agentId");
+    if (recordVisibility === "AGENT" && !recordAgentId) {
+      throw new ThreadMemoryValidationError("visibility=AGENT requires a non-null agentId.");
+    }
     const payload = objectValue(body, "body");
     boundedJsonString(payload, "body", MAX_BODY_JSON_LENGTH);
     const scopeValue = objectValue(scope, "scope");
@@ -913,13 +940,33 @@ export class ThreadMemoryStore {
       : [];
     if (sourceRows.length !== sourceRefs.length) throw new ThreadMemoryValidationError("Every source_message_ref must belong to thread_id.");
     if (sourceRows.some((row) => row.speaker_id !== speaker)) throw new ThreadMemoryValidationError('Source author must match asserted_by_speaker_id.');
-    const recordId = `memory-record_${sha256(JSON.stringify([thread.threadId, sessionId, memoryKind, speaker, person, scopeValue, payload, [...sourceRefs].sort(), supersedesRecordId, verification, memoryStatus]))}`;
+    // PH-MEMOS-3 stage 2 (BL-MEMOS-043, CRITICAL 2): agent_id/visibility
+    // join the hash's input list -- two different agents recording
+    // identical content now get two distinct records (one per agent)
+    // unless they also agree on visibility/agent_id, which two DIFFERENT
+    // agents structurally cannot (each supplies its own agentId). Without
+    // this, agent B's identical assertion would collide on agent A's
+    // existing record_id and hand B back A's AGENT-visibility row.
+    const recordId = `memory-record_${sha256(JSON.stringify([thread.threadId, sessionId, memoryKind, speaker, person, scopeValue, payload, [...sourceRefs].sort(), supersedesRecordId, verification, memoryStatus, recordAgentId, recordVisibility]))}`;
     const existingRecord = this.#db.prepare('SELECT * FROM protected_memory_records WHERE record_id=?').get(recordId);
     if (existingRecord) return rowProtected(existingRecord);
+    // PH-MEMOS-3 stage 2 (BL-MEMOS-043, RKOI stage-2 review round 2,
+    // owner-direction ruling): one identical validation_failed answer,
+    // same fixed message, for an unknown id, another agent's
+    // AGENT-visibility record, AND a record failing the pre-existing
+    // stage-1 ownership/status check (previously a distinguishable
+    // `conflict`) -- three distinguishable outcomes would themselves be an
+    // oracle. Existence and other-agent AGENT-visibility are checked
+    // FIRST; only if both pass does the stage-1 ownership/status check
+    // run, and it too now returns this identical answer. The cross-agent
+    // refusal applies to AGENT-visibility records only -- a THREAD-
+    // visibility or legacy (agent_id IS NULL) record stays supersedable by
+    // any agent under the stage-1 rules alone.
     if (supersedesRecordId) {
       const old = this.#db.prepare("SELECT * FROM protected_memory_records WHERE record_id = ? AND thread_id = ?").get(supersedesRecordId, thread.threadId);
-      if (!old) throw new ThreadMemoryValidationError("supersedes_record_id must reference a record in the same thread.");
-      if (old.asserted_by_speaker_id !== speaker || old.subject_person_id !== person || old.status !== 'ACTIVE') throw new ThreadMemoryConflictError('Supersession requires the same speaker and subject and an active record.');
+      if (!old) throw new ThreadMemoryValidationError(SUPERSESSION_REFUSAL);
+      if (old.visibility === "AGENT" && old.agent_id !== recordAgentId) throw new ThreadMemoryValidationError(SUPERSESSION_REFUSAL);
+      if (old.asserted_by_speaker_id !== speaker || old.subject_person_id !== person || old.status !== 'ACTIVE') throw new ThreadMemoryValidationError(SUPERSESSION_REFUSAL);
     }
     try {
       this.#db.transaction(() => {
@@ -928,10 +975,12 @@ export class ThreadMemoryStore {
           INSERT INTO protected_memory_records
             (record_id, tenant_id, thread_id, session_id, kind, status, asserted_by_speaker_id,
              subject_person_id, scope_json, body_json, source_message_refs_json,
-             supersedes_record_id, verification_state, version, created_at, updated_at)
+             supersedes_record_id, verification_state, version, created_at, updated_at,
+             agent_id, visibility)
           VALUES (@record_id, @tenant_id, @thread_id, @session_id, @kind, @status, @asserted_by_speaker_id,
              @subject_person_id, @scope_json, @body_json, @source_message_refs_json,
-             @supersedes_record_id, @verification_state, 1, @created_at, @updated_at)
+             @supersedes_record_id, @verification_state, 1, @created_at, @updated_at,
+             @agent_id, @visibility)
         `)
         .run({
           record_id: recordId,
@@ -949,10 +998,16 @@ export class ThreadMemoryStore {
           verification_state: verification,
           created_at: timestamp,
           updated_at: timestamp,
+          agent_id: recordAgentId,
+          visibility: recordVisibility,
         });
       if (supersedesRecordId) {
         const changed = this.#db.prepare("UPDATE protected_memory_records SET status = 'SUPERSEDED', updated_at = ?, version = version + 1 WHERE record_id = ? AND status='ACTIVE' AND asserted_by_speaker_id=?").run(timestamp, supersedesRecordId, speaker);
-        if (!changed.changes) throw new ThreadMemoryConflictError('Protected record changed during supersession.');
+        // PH-MEMOS-3 stage 2: the race-time variant of the same unified
+        // refusal (BL-MEMOS-043) -- this was ThreadMemoryConflictError
+        // ('conflict') in stage 1; folded into the identical
+        // validation_failed answer as every other unsupersedable case.
+        if (!changed.changes) throw new ThreadMemoryValidationError(SUPERSESSION_REFUSAL);
       }
       })();
     } catch (error) {
@@ -983,7 +1038,7 @@ export class ThreadMemoryStore {
   // requester's own assertions once a requesterSpeakerId is given, so a
   // record with a null subject is visible only to its own asserter, never
   // to "every participant" (C-1).
-  context({ threadId, recentExchangeCount = 6, currentExchangeId, requesterSpeakerId, now } = {}) {
+  context({ threadId, recentExchangeCount = 6, currentExchangeId, requesterSpeakerId, requesterAgentId, now } = {}) {
     const thread = this.#requireThread(threadId);
     const count = positiveInteger(recentExchangeCount, "recent_exchange_count");
     const exchangeIds = this.#db.prepare(`SELECT exchange_id FROM thread_messages WHERE thread_id=? GROUP BY exchange_id
@@ -1002,8 +1057,19 @@ export class ThreadMemoryStore {
       .reverse()
       .map((exchangeId) => ({ exchangeId, messages: selected.filter((row) => row.exchange_id === exchangeId).map(rowMessage) }));
     const summaries = this.#db.prepare("SELECT * FROM session_summaries s WHERE thread_id = ? AND NOT EXISTS (SELECT 1 FROM thread_summary_invalidations i WHERE i.summary_id=s.summary_id) ORDER BY covered_through_sequence DESC").all(thread.threadId).map(rowSummary);
+    // PH-MEMOS-3 stage 2 (BL-MEMOS-043, Sec.9.4): the agent-visibility
+    // filter is ANDed onto the existing HUMAN private-read filter, not a
+    // replacement for it -- a record must pass both. Corrected (RKOI
+    // stage-2 review round 1, warning 5): an ABSENT requesterAgentId must
+    // see THREAD records only, never fall through to showing every AGENT
+    // record -- the earlier draft's `OR (no requesterAgentId)` clause made
+    // the whole filter vacuously true whenever requesterAgentId happened
+    // to be absent. Every stage-1 row is a legacy agent_id IS NULL,
+    // visibility='THREAD' row by construction, so it always passes this
+    // filter regardless -- stage-1 behaviour is unchanged.
     const protectedRecords = this.#db.prepare("SELECT * FROM protected_memory_records WHERE thread_id = ? AND status = 'ACTIVE' ORDER BY created_at ASC").all(thread.threadId).map(rowProtected)
-      .filter((record) => !requesterSpeakerId || record.assertedBySpeakerId === requesterSpeakerId);
+      .filter((record) => !requesterSpeakerId || record.assertedBySpeakerId === requesterSpeakerId)
+      .filter((record) => record.visibility === "THREAD" || (record.visibility === "AGENT" && !!requesterAgentId && record.agentId === requesterAgentId));
     const participants = this.#db.prepare("SELECT * FROM thread_participants WHERE thread_id = ? AND left_at IS NULL ORDER BY joined_at ASC").all(thread.threadId).map(rowParticipant);
     const session = this.#getOpenSession(thread.threadId);
     const firstRecentSequence = selected.length ? Math.min(...selected.map((row) => row.sequence)) : null;

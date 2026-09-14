@@ -215,6 +215,9 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
           "thread_scope_denied: the grant principal is not this DIRECT thread's current verified human participant.",
         );
         input.requester_speaker_id = grant.principalId;
+        // PH-MEMOS-3 stage 2 (BL-MEMOS-043, Sec.9.4): threaded down the
+        // same way, for the AGENT/THREAD record-visibility filter.
+        input.requester_agent_id = grant.agentId;
       }
 
       if (name === "msp_thread_message_append" && input.speaker_kind === "HUMAN") {
