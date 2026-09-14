@@ -775,6 +775,12 @@
       ],
       "label": "Merge all 7 PRs to main; start PH-MEMOS-4 spec on new branches",
       "status": "open"
+    },
+    "40": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "Merge PRs 20-26 to main (retarget nested PRs, resolve migrate-branch doc conflicts)"
     }
   }
 }
