@@ -60,6 +60,12 @@ const MAX_SOURCE_REFS = 200;
 // round-1 fix's own thread_scope_denied) would itself have been an oracle.
 const SUPERSESSION_REFUSAL = "supersedes_record_id does not name a record this caller can supersede";
 
+// PH-MEMOS-3 stage 2 (BL-MEMOS-048, RKOI stage-2 review round 2, defense
+// in depth): the sanity bound #consumeNonce enforces on `grantExpiresAt`,
+// well outside verifyThreadGrant's own 65-second expiry window -- see
+// #consumeNonce's own comment for why this exists at all.
+const TEN_YEARS_MS = 10 * 365 * 24 * 60 * 60 * 1000;
+
 export class ThreadMemoryValidationError extends ThreadValidationError {}
 export class ThreadMemoryConflictError extends ThreadConflictError {}
 export class ThreadMemoryNotFoundError extends ThreadNotFoundError {}
@@ -505,8 +511,23 @@ export class ThreadMemoryStore {
     if (typeof nonce !== "string" || nonce.length < 1 || nonce.length > 128) {
       throw new ThreadMemoryValidationError("nonce must be a string of 1 to 128 characters.");
     }
-    if (!Number.isFinite(grantExpiresAt)) {
-      throw new ThreadMemoryValidationError("grantExpiresAt is required.");
+    // RKOI review (stage-2 revision round 2, defense in depth): a bare
+    // `Number.isFinite` check let `grantExpiresAt` reach `new
+    // Date(grantExpiresAt).toISOString()` below with any finite number at
+    // all -- including something like `1e20`, which is OUTSIDE the native
+    // `Date` object's own representable range and makes `toISOString()`
+    // throw a raw, untyped `RangeError: Invalid time value` instead of
+    // this module's own typed vocabulary. Refused here instead, before
+    // that call ever runs: `grantExpiresAt` must be a finite INTEGER
+    // (epoch milliseconds, matching how `verifyThreadGrant` itself
+    // produces `grant.expiresAt`) within TEN_YEARS_MS of the real server
+    // clock -- comfortably wider than `verifyThreadGrant`'s own 65-second
+    // expiry window, so this is a sanity bound against a malformed or
+    // hostile caller, not a second copy of that check. A negative value,
+    // or any value astronomically far from "now" in either direction, is
+    // always outside this window and refused by the same single check.
+    if (!Number.isInteger(grantExpiresAt) || Math.abs(grantExpiresAt - Date.now()) > TEN_YEARS_MS) {
+      throw new ThreadMemoryValidationError("grantExpiresAt must be a finite integer (epoch milliseconds) within 10 years of the server clock.");
     }
     this.#db.prepare("DELETE FROM grant_nonces WHERE rowid IN (SELECT rowid FROM grant_nonces WHERE expires_at < ? LIMIT 200)").run(new Date().toISOString());
     const expiresAt = new Date(grantExpiresAt).toISOString();
@@ -1497,10 +1518,16 @@ export class ThreadMemoryStore {
       // threaded in here as scope.agentId); a drained pending row speaks
       // as whichever agent queued it (the STORED agent_id, also threaded
       // in as scope.agentId by #drainDeliveries -- there is no live caller
-      // at drain time to ask for a fresh one).
+      // at drain time to ask for a fresh one). RKOI review (stage-2
+      // revision round 2, W6 leftover): workspace_id on this append's own
+      // journal entry is likewise scope.workspaceId -- the calling agent's
+      // real workspace on a live call, or the STORED pending row's own
+      // workspace_id on a drain -- never appendMessage's own tenant_id
+      // fallback (which only applies when no workspaceId is given at
+      // all).
       const appended = this.appendMessage({ threadId: inbound.thread_id, sessionId: inbound.session_id, exchangeId: inbound.exchange_id,
         replyToMessageId: inboundId, sourceEventId, speakerId: scope.agentId, speakerKind: 'AGENT', identityAssurance: 'VERIFIED',
-        direction: 'OUTBOUND', text: body, deliveryState: state, reconcileDelivery: true, agentId: scope.agentId, now });
+        direction: 'OUTBOUND', text: body, deliveryState: state, reconcileDelivery: true, agentId: scope.agentId, workspaceId: scope.workspaceId, now });
       message = this.#db.prepare('SELECT * FROM thread_messages WHERE message_id=?').get(appended.message.messageId);
     }
     const existing = this.#db.prepare('SELECT * FROM thread_delivery_receipts WHERE receipt_id=?').get(id);
@@ -1575,11 +1602,16 @@ export class ThreadMemoryStore {
         // fixed string too (e.g. "SQLITE_BUSY"). Anything without a
         // string `.code` at all falls back to the fixed "internal" label.
         const errorCode = typeof error?.code === "string" && error.code ? error.code : "internal";
+        // RKOI review (stage-2 revision round 2, W6 leftover): workspace_id
+        // is the STORED pending row's own workspace_id -- the agent that
+        // queued it, whether or not the reconcile itself succeeded --
+        // falling back to row.tenant_id only for a legacy row that
+        // predates workspace_id existing on this table at all (NULL).
         this.#journalAppend({
           actor: "msp:delivery-drain",
           toolName: "msp_thread_message_append.reconcile_skipped",
           ref: inboundId,
-          workspaceId: row.tenant_id,
+          workspaceId: row.workspace_id || row.tenant_id,
           payload: { receipt_id: row.receipt_id, reconciled: false, error_code: errorCode },
           policyDecision: "allow",
         });

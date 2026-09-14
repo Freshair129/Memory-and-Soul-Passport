@@ -455,6 +455,146 @@ test("Journal actor: an AGENT-kind message's actor is the plaintext agentId; a H
   }
 });
 
+// RKOI review (stage-2 revision round 2, W6 leftovers): three more journal
+// entries still recorded workspace_id = tenant_id instead of the real
+// agent workspace -- the resolved-path delivery's own OUTBOUND message,
+// the drain's own OUTBOUND message, and reconcile_skipped. Modeled on
+// RKOI's own scratchpad\r8\j6.mjs: two agents, every thread journal entry
+// kind in one run, every row's workspace_id checked against the expected
+// agent's own workspace (or the STORED one for drain/reconcile_skipped),
+// plus the pre-existing no-raw-principal/room check.
+test("Journal workspace_id: every thread journal entry kind records the real agent workspace, never the tenant_id placeholder", async () => {
+  const { dbPath, cleanup } = tempDbPath("journalworkspace");
+  const call = spawnRuntime(dbPath);
+  try {
+    const A = resolveClaims({ externalRoomRef: "dm-journalworkspace", agentId: "agent-journal-a", workspaceId: "workspace-journal-a", writePrivate: true, readPrivate: true, deliveryWriter: true });
+    const B = { ...A, agentId: "agent-journal-b", workspaceId: "workspace-journal-b" };
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-journalworkspace" }, A),
+    );
+    const tid = thread.threadId;
+    await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-journalworkspace" }, { ...B, assertAgents: true }),
+    );
+    const in1 = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: tid, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi" },
+        A,
+      ),
+    );
+
+    // Resolved-path delivery, as agent B -- its own OUTBOUND reply's
+    // journal entry must carry B's workspace, not the tenant.
+    const deliveryClaims = (cl) => ({ ...cl, audienceKind: undefined });
+    await call(
+      "msp_thread_delivery_record",
+      signed(
+        "msp_thread_delivery_record",
+        { inbound_message_id: in1.message.messageId, source_event_id: `${in1.message.messageId}:assistant`, receipt_id: "rc-jw-1", outcome: "ACCEPTED", text: "resolved reply" },
+        deliveryClaims(B),
+      ),
+    );
+    // Two pending deliveries, queued by A and B respectively, for inbound
+    // messages that have not arrived yet.
+    await call(
+      "msp_thread_delivery_record",
+      signed(
+        "msp_thread_delivery_record",
+        { inbound_message_id: "in-jw-2", source_event_id: "in-jw-2:assistant", receipt_id: "rc-jw-2", outcome: "ACCEPTED", text: "pending reply A" },
+        deliveryClaims(A),
+      ),
+    );
+    await call(
+      "msp_thread_delivery_record",
+      signed(
+        "msp_thread_delivery_record",
+        { inbound_message_id: "in-jw-3", source_event_id: "in-jw-3:assistant", receipt_id: "rc-jw-3", outcome: "ACCEPTED", text: "pending reply B" },
+        deliveryClaims(B),
+      ),
+    );
+
+    // B departs BEFORE either pending delivery drains.
+    await call.close();
+    const { open } = await import("@freshair129/msp-storage/connection");
+    const db1 = open(dbPath);
+    try {
+      const info = db1.prepare("UPDATE thread_agents SET left_at = ? WHERE thread_id = ? AND agent_id = ? AND left_at IS NULL").run(new Date().toISOString(), tid, B.agentId);
+      assert.equal(info.changes, 1);
+    } finally {
+      db1.close();
+    }
+
+    const callAfter = spawnRuntime(dbPath);
+    try {
+      // in-jw-2's queuing agent (A) is still current -> drains successfully.
+      await callAfter(
+        "msp_thread_message_append",
+        signed("msp_thread_message_append", { thread_id: tid, message_id: "in-jw-2", source_event_id: "e-jw-2", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "x" }, A),
+      );
+      // in-jw-3's queuing agent (B) has departed -> reconcile_skipped.
+      await callAfter(
+        "msp_thread_message_append",
+        signed("msp_thread_message_append", { thread_id: tid, message_id: "in-jw-3", source_event_id: "e-jw-3", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "x" }, A),
+      );
+      await callAfter(
+        "msp_thread_memory_record",
+        signed("msp_thread_memory_record", { thread_id: tid, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", scope: {}, body: { v: 1 }, source_message_refs: [in1.message.messageId] }, A),
+      );
+    } finally {
+      await callAfter.close();
+    }
+
+    const db2 = open(dbPath);
+    try {
+      const rows = db2.prepare("SELECT tool_name, actor, workspace_id, payload_json FROM journal WHERE tool_name LIKE 'msp_thread%' ORDER BY rowid").all();
+      const byTool = {};
+      for (const row of rows) (byTool[row.tool_name] ??= []).push(row);
+
+      // msp_thread_resolve: one row, the MINT, actor+workspace = A's.
+      assert.equal(byTool.msp_thread_resolve?.length, 1, "expected exactly one msp_thread_resolve journal row (the mint; self-assert attach mints nothing new)");
+      assert.equal(byTool.msp_thread_resolve[0].workspace_id, A.workspaceId, "FAIL-CLOSED VIOLATION: the mint's journal workspace_id is not the minting agent's own workspace");
+
+      // msp_thread_message_append: in-1 (A, HMAC), resolved-path reply (B),
+      // in-jw-2 (A, HMAC), drain reply for in-jw-2 (A), in-jw-3 (A, HMAC).
+      const appends = byTool.msp_thread_message_append ?? [];
+      assert.equal(appends.length, 5, `expected 5 msp_thread_message_append journal rows, got ${appends.length}`);
+      const resolvedReply = appends.find((r) => r.actor === B.agentId);
+      assert.ok(resolvedReply, "FAIL-CLOSED VIOLATION: the resolved-path delivery's own OUTBOUND reply has no agent-attributed journal row");
+      assert.equal(resolvedReply.workspace_id, B.workspaceId, "FAIL-CLOSED VIOLATION: the resolved-path delivery's OUTBOUND message recorded workspace_id = tenant, not the delivering agent's own workspace");
+      const drainReplies = appends.filter((r) => r.actor === A.agentId);
+      assert.equal(drainReplies.length, 1, "expected exactly one drain-produced OUTBOUND reply (for in-jw-2, queued by A)");
+      assert.equal(drainReplies[0].workspace_id, A.workspaceId, "FAIL-CLOSED VIOLATION: the drain's own OUTBOUND message recorded workspace_id = tenant, not the queuing agent's own workspace");
+      for (const row of appends.filter((r) => r.actor.length === 64)) {
+        assert.equal(row.workspace_id, A.workspaceId, "FAIL-CLOSED VIOLATION: a HUMAN-attributed append's workspace_id is not the calling agent's own workspace");
+      }
+
+      // reconcile_skipped: exactly one row (in-jw-3, queued by the now-
+      // departed B) -- its workspace_id is the STORED queuing agent's own
+      // workspace (B's), not the tenant, and not A's (the agent who
+      // happened to be current when the drain attempt ran).
+      const skipped = byTool["msp_thread_message_append.reconcile_skipped"] ?? [];
+      assert.equal(skipped.length, 1, `expected exactly one reconcile_skipped row, got ${skipped.length}`);
+      assert.equal(skipped[0].workspace_id, B.workspaceId, "FAIL-CLOSED VIOLATION: reconcile_skipped recorded workspace_id = tenant (or the wrong agent), not the STORED queuing agent's own workspace");
+
+      // msp_thread_memory_record: A's own record.
+      assert.equal(byTool.msp_thread_memory_record?.length, 1);
+      assert.equal(byTool.msp_thread_memory_record[0].workspace_id, A.workspaceId);
+
+      const allJournal = JSON.stringify(db2.prepare("SELECT * FROM journal").all());
+      assert.equal(allJournal.includes("alice"), false, "no raw principal id may appear anywhere in the journal");
+      assert.equal(allJournal.includes("dm-journalworkspace"), false, "no raw external_room_ref may appear anywhere in the journal");
+    } finally {
+      db2.close();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 test("Worker gate (DEC-MEMOS-18): a worker's own agentId must be current on the job's thread to claim it", async () => {
   const { dbPath, cleanup } = tempDbPath("workerclaim");
   const call = spawnRuntime(dbPath);

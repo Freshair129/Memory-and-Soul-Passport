@@ -439,6 +439,40 @@ describe("unified thread, speaker and session memory", () => {
     expect(relookup.created).toBe(false);
   });
 
+  // RKOI stage-2 revision round 2, defense in depth: `grant_expires_at`
+  // reaches ThreadMemoryStore#consumeNonce and used to be checked with a
+  // bare Number.isFinite -- any finite number was accepted, including
+  // something like 1e20, which is OUTSIDE the native Date object's own
+  // representable range and made `new Date(x).toISOString()` throw a raw,
+  // untyped RangeError instead of this module's own typed vocabulary. It
+  // must now be refused as a typed validation_failed, never a RangeError,
+  // whether negative, astronomically large, or merely outside a sane
+  // +/-10-year window around the real server clock.
+  it("refuses a grant_expires_at outside a sane +/-10-year window with a typed validation_failed, never a raw RangeError", async () => {
+    const server = makeServer();
+    const tools = server.threadHandlers;
+    const base = {
+      thread_kind: "DIRECT",
+      audience_kind: "DIRECT",
+      channel_type: "LINE_DM",
+      channel_account_id: "oa-grant-expires-bounds",
+      tenant_id: "tenant-01",
+    };
+    const cases = [
+      ["a negative epoch millisecond value", -1],
+      ["a value far outside Date's own representable range (1e20)", 1e20],
+      ["a value more than 10 years in the future", Date.now() + 11 * 365 * 24 * 60 * 60 * 1000],
+      ["a value more than 10 years in the past", Date.now() - 11 * 365 * 24 * 60 * 60 * 1000],
+      ["a non-integer", Date.now() + 0.5],
+    ];
+    for (const [label, badExpiresAt] of cases) {
+      await expect(
+        tools.msp_thread_resolve({ ...base, external_room_ref: `room-${label}`, grant_expires_at: badExpiresAt }),
+        label,
+      ).rejects.toThrow(/validation_failed.*grantExpiresAt/i);
+    }
+  });
+
   // RKOI code review round 2, WARNING 5: an inbound append naming an
   // explicit, no-longer-open session_id (with no exchange reference) used
   // to fall through to the auto-rotation branch, which silently created a
@@ -579,18 +613,21 @@ describe("unified thread, speaker and session memory", () => {
     const deliveredRow = server.db.prepare("SELECT tenant_id, message_id FROM thread_delivery_receipts WHERE receipt_id=?").get("crm-delivered-alice");
     expect(deliveredRow.tenant_id).toBe("tenant-drain-1");
 
-    // The skipped reconcile is journaled, scoped to tenant 2, with no raw
-    // ids beyond the usual application refs -- once for the original
-    // append and once more for the replay, since each independently
-    // retries (and again fails) the same reconcile. RKOI's confirmation
-    // pass: the payload also carries a STABLE error_code (never the
-    // free-text message), so an operator can tell a receipt_id collision
-    // (ThreadConflictError's own "conflict" code) apart from a real
-    // storage fault.
+    // The skipped reconcile is journaled, with no raw ids beyond the usual
+    // application refs -- once for the original append and once more for
+    // the replay, since each independently retries (and again fails) the
+    // same reconcile. RKOI's confirmation pass: the payload also carries a
+    // STABLE error_code (never the free-text message), so an operator can
+    // tell a receipt_id collision (ThreadConflictError's own "conflict"
+    // code) apart from a real storage fault. RKOI stage-2 revision round
+    // 2 (W6 leftover): `workspace_id` is the STORED pending row's own
+    // `workspace_id` ("workspace-test", the default `withDefaultGrantFields`
+    // gives `msp_thread_delivery_record`'s `delivery_scope`), never the
+    // `tenant_id` placeholder ("tenant-drain-2") this used to fall back to.
     const skipped = server.db.prepare("SELECT ref, workspace_id, payload_json FROM journal WHERE tool_name = 'msp_thread_message_append.reconcile_skipped'").all();
     expect(skipped).toHaveLength(2);
     for (const entry of skipped) {
-      expect(entry).toMatchObject({ ref: "zed-future", workspace_id: "tenant-drain-2" });
+      expect(entry).toMatchObject({ ref: "zed-future", workspace_id: "workspace-test" });
       expect(JSON.parse(entry.payload_json)).toMatchObject({ receipt_id: "crm-delivered-alice", reconciled: false, error_code: "conflict" });
     }
   });
