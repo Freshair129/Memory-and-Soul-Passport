@@ -605,7 +605,9 @@
       "actor": "coordinator",
       "segments": {
         "1": {
-          "task_ids": [],
+          "task_ids": [
+            "OPS-MEMOS-004"
+          ],
           "label": "Sync msp-client-js lockfile version drift (main, PR #27)"
         }
       }
