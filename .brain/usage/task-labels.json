@@ -669,9 +669,15 @@
     },
     "33": {
       "task_ids": [
+        "BL-MEMOS-047"
+      ],
+      "label": "Fix it all (2nd): confirm stage-2 review findings are all dispatched"
+    },
+    "34": {
+      "task_ids": [
         "OPS-MEMOS-003"
       ],
-      "label": "Open all PRs: bodies and script prepared; push blocked by auto-mode classifier",
+      "label": "Open all PRs: bodies and script prepared; push blocked by auto-mode classifier; canary rebased",
       "status": "open"
     }
   }

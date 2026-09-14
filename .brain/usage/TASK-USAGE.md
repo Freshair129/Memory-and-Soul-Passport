@@ -12,13 +12,12 @@ A segment whose status is `open` was still running when the ledger was generated
 
 | Segments | Requests | Input (total) | input_tokens | Cache write | Cache read | Output |
 |---:|---:|---:|---:|---:|---:|---:|
-| 93 | 4,220 | 1,939,539,842 | 9,690 | 40,528,840 | 1,899,001,312 | 4,382,089 |
+| 93 | 4,224 | 1,942,127,962 | 9,698 | 40,541,230 | 1,901,577,034 | 4,385,425 |
 
 ## Per task id
 
 | Task id | Segments | Start | End | Requests | Input (total) | Output |
 |---|---:|---|---|---:|---:|---:|
-| (unlabelled) | 1 | 2026-09-14T08:56:28+07:00 | 2026-09-14T10:12:34+07:00 | 16 | 8,394,981 | 24,050 |
 | BL-MEMOS-001 | 8 | 2026-09-13T09:50:21+07:00 | 2026-09-13T13:46:19+07:00 | 59 | 15,709,858 | 303,472 |
 | BL-MEMOS-002 | 8 | 2026-09-13T14:43:29+07:00 | 2026-09-13T15:20:00+07:00 | 149 | 29,710,329 | 176,078 |
 | BL-MEMOS-003 | 5 | 2026-09-13T15:24:31+07:00 | 2026-09-13T17:20:49+07:00 | 78 | 21,799,558 | 79,371 |
@@ -38,7 +37,7 @@ A segment whose status is `open` was still running when the ledger was generated
 | BL-MEMOS-043 | 1 | 2026-09-14T03:55:34+07:00 | 2026-09-14T04:14:46+07:00 | 102 | 27,992,501 | 98,290 |
 | BL-MEMOS-044 | 1 | 2026-09-14T03:55:34+07:00 | 2026-09-14T04:14:46+07:00 | 102 | 27,992,501 | 98,290 |
 | BL-MEMOS-046 | 1 | 2026-09-14T03:55:34+07:00 | 2026-09-14T04:14:46+07:00 | 102 | 27,992,501 | 98,290 |
-| BL-MEMOS-047 | 2 | 2026-09-14T08:30:49+07:00 | 2026-09-14T10:12:16+07:00 | 104 | 10,915,293 | 59,205 |
+| BL-MEMOS-047 | 3 | 2026-09-14T08:30:49+07:00 | 2026-09-14T10:12:48+07:00 | 107 | 12,918,338 | 62,244 |
 | BL-MEMOS-048 | 1 | 2026-09-14T03:55:34+07:00 | 2026-09-14T04:14:46+07:00 | 102 | 27,992,501 | 98,290 |
 | BL-MEMOS-049 | 10 | 2026-09-14T03:55:34+07:00 | 2026-09-14T08:56:55+07:00 | 1,224 | 564,847,955 | 884,837 |
 | BL-MEMOS-087 | 3 | 2026-09-14T03:58:32+07:00 | 2026-09-14T08:48:45+07:00 | 49 | 18,785,049 | 76,512 |
@@ -50,7 +49,7 @@ A segment whose status is `open` was still running when the ledger was generated
 | OPS-MEMOS-000 | 2 | 2026-09-13T14:53:06+07:00 | 2026-09-13T14:53:06+07:00 | 0 | 0 | 0 |
 | OPS-MEMOS-001 | 2 | 2026-09-13T18:28:15+07:00 | 2026-09-13T23:00:09+07:00 | 26 | 4,190,696 | 17,365 |
 | OPS-MEMOS-002 | 1 | 2026-09-13T23:46:44+07:00 | 2026-09-14T00:32:28+07:00 | 30 | 25,130,965 | 62,342 |
-| OPS-MEMOS-003 | 1 | 2026-09-14T08:49:37+07:00 | 2026-09-14T08:50:02+07:00 | 1 | 503,389 | 1,133 |
+| OPS-MEMOS-003 | 1 | 2026-09-14T08:56:28+07:00 | 2026-09-14T10:12:58+07:00 | 18 | 9,483,445 | 25,480 |
 
 ## Per segment
 
@@ -146,6 +145,6 @@ A segment whose status is `open` was still running when the ledger was generated
 | 88 | BL-MEMOS-049 | rkoi `afd6aa2` | 7 | Keyring re-review, round 2 (APPROVED, fd8095f) | done | 2026-09-14T08:30:27+07:00 | 2026-09-14T08:47:20+07:00 | 16m52s | 45 | 29,929,603 | 90 | 744,820 | 29,184,693 | 71,329 |
 | 89 | BL-MEMOS-049, BL-MEMOS-047 | janus `ae6c2c8` | 1 | CI engine canary for V8 JSON.parse bug (e0a3624) | done | 2026-09-14T08:30:49+07:00 | 2026-09-14T08:56:55+07:00 | 26m06s | 102 | 9,430,564 | 204 | 271,077 | 9,159,283 | 57,964 |
 | 90 | BL-MEMOS-040..049 | kin `ab508b7` | 10 | Transport escaped-key pre-scan (server + client), queued after keyring fix | done | 2026-09-14T08:48:03+07:00 | 2026-09-14T10:11:01+07:00 | 1h22m | 196 | 157,082,507 | 392 | 3,572,319 | 153,509,796 | 144,814 |
-| 91 | OPS-MEMOS-003 | coordinator | 33 | Open all PRs: bodies and script prepared; push blocked by auto-mode classifier | open | 2026-09-14T08:49:37+07:00 | 2026-09-14T08:50:02+07:00 | 0m25s | 1 | 503,389 | 2 | 31 | 503,356 | 1,133 |
-| 92 | — | coordinator | 34 | เปิด PR ทั้งหมด | done | 2026-09-14T08:56:28+07:00 | 2026-09-14T10:12:34+07:00 | 1h16m | 16 | 8,394,981 | 34 | 519,642 | 7,875,305 | 24,050 |
-| 93 | BL-MEMOS-047 | rkoi `afd6aa2` | 8 | Stage 2 implementation code review, round 1 (1 critical: recursive scanner stack crash) | done | 2026-09-14T10:11:44+07:00 | 2026-09-14T10:12:16+07:00 | 0m33s | 2 | 1,484,729 | 6 | 743,203 | 741,520 | 1,241 |
+| 91 | BL-MEMOS-047 | coordinator | 33 | Fix it all (2nd): confirm stage-2 review findings are all dispatched | done | 2026-09-14T08:49:37+07:00 | 2026-09-14T08:50:02+07:00 | 0m25s | 1 | 503,389 | 2 | 31 | 503,356 | 1,133 |
+| 92 | OPS-MEMOS-003 | coordinator | 34 | Open all PRs: bodies and script prepared; push blocked by auto-mode classifier; canary rebased | open | 2026-09-14T08:56:28+07:00 | 2026-09-14T10:12:58+07:00 | 1h16m | 18 | 9,483,445 | 38 | 524,009 | 8,959,398 | 25,480 |
+| 93 | BL-MEMOS-047 | rkoi `afd6aa2` | 8 | Stage 2 implementation code review, round 1 (1 critical: recursive scanner stack crash) | done | 2026-09-14T10:11:44+07:00 | 2026-09-14T10:12:48+07:00 | 1m04s | 4 | 2,984,385 | 10 | 751,226 | 2,233,149 | 3,147 |
