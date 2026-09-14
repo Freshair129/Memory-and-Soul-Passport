@@ -12,7 +12,7 @@ A segment whose status is `open` was still running when the ledger was generated
 
 | Segments | Requests | Input (total) | input_tokens | Cache write | Cache read | Output |
 |---:|---:|---:|---:|---:|---:|---:|
-| 87 | 3,307 | 1,463,957,351 | 7,856 | 29,753,885 | 1,434,195,610 | 3,731,693 |
+| 89 | 3,861 | 1,733,462,033 | 8,966 | 35,244,240 | 1,698,208,827 | 4,076,715 |
 
 ## Per task id
 
@@ -37,9 +37,10 @@ A segment whose status is `open` was still running when the ledger was generated
 | BL-MEMOS-043 | 1 | 2026-09-14T03:55:34+07:00 | 2026-09-14T04:14:46+07:00 | 102 | 27,992,501 | 98,290 |
 | BL-MEMOS-044 | 1 | 2026-09-14T03:55:34+07:00 | 2026-09-14T04:14:46+07:00 | 102 | 27,992,501 | 98,290 |
 | BL-MEMOS-046 | 1 | 2026-09-14T03:55:34+07:00 | 2026-09-14T04:14:46+07:00 | 102 | 27,992,501 | 98,290 |
+| BL-MEMOS-047 | 1 | 2026-09-14T08:30:49+07:00 | 2026-09-14T08:31:01+07:00 | 2 | 37,454 | 529 |
 | BL-MEMOS-048 | 1 | 2026-09-14T03:55:34+07:00 | 2026-09-14T04:14:46+07:00 | 102 | 27,992,501 | 98,290 |
-| BL-MEMOS-049 | 8 | 2026-09-14T03:55:34+07:00 | 2026-09-14T05:40:34+07:00 | 534 | 260,649,662 | 419,775 |
-| BL-MEMOS-087 | 3 | 2026-09-14T03:58:32+07:00 | 2026-09-14T05:40:34+07:00 | 41 | 14,866,457 | 62,416 |
+| BL-MEMOS-049 | 10 | 2026-09-14T03:55:34+07:00 | 2026-09-14T08:31:01+07:00 | 1,083 | 527,728,120 | 756,965 |
+| BL-MEMOS-087 | 3 | 2026-09-14T03:58:32+07:00 | 2026-09-14T08:31:00+07:00 | 46 | 17,292,681 | 70,248 |
 | BL-MEMOS-102 | 2 | 2026-09-14T00:29:57+07:00 | 2026-09-14T02:22:25+07:00 | 437 | 252,069,710 | 295,076 |
 | BL-MEMOS-108 | 1 | 2026-09-14T00:29:57+07:00 | 2026-09-14T01:30:43+07:00 | 274 | 222,020,711 | 188,540 |
 | BL-MEMOS-109 | 1 | 2026-09-14T00:29:57+07:00 | 2026-09-14T01:30:43+07:00 | 274 | 222,020,711 | 188,540 |
@@ -135,8 +136,10 @@ A segment whose status is `open` was still running when the ledger was generated
 | 80 | BL-MEMOS-049 | ghost `a9a5d8b` | 1 | Root-cause keyring fuzz anomaly: V8 JSON.parse non-first-key corruption | done | 2026-09-14T04:49:09+07:00 | 2026-09-14T04:59:38+07:00 | 10m30s | 31 | 1,964,949 | 62 | 96,493 | 1,868,394 | 51,069 |
 | 81 | BL-MEMOS-040..049 | rkoi `a7cf259` | 19 | Stage 2 spec review, round 2 (APPROVED with warnings, 72e593f) | done | 2026-09-14T04:51:53+07:00 | 2026-09-14T04:57:31+07:00 | 5m38s | 11 | 4,346,721 | 24 | 423,221 | 3,923,476 | 24,453 |
 | 82 | BL-MEMOS-040..049, BL-MEMOS-112 | ather `a2d9519` | 9 | Stage 2 spec: fold round-2 warnings (design v0.4.2b, 0f3f15a) | done | 2026-09-14T04:58:09+07:00 | 2026-09-14T05:12:40+07:00 | 14m31s | 118 | 76,528,854 | 236 | 702,011 | 75,826,607 | 50,692 |
-| 83 | BL-MEMOS-049 | kin `ab508b7` | 9 | Keyring parser: decode values in scanner, not via native JSON.parse keys (V8 bug) | open | 2026-09-14T05:01:04+07:00 | 2026-09-14T05:40:34+07:00 | 39m30s | 176 | 123,905,071 | 352 | 844,022 | 123,060,697 | 85,733 |
+| 83 | BL-MEMOS-049 | kin `ab508b7` | 9 | Keyring parser: decode values in scanner, not via native JSON.parse keys (V8 bug) | done | 2026-09-14T05:01:04+07:00 | 2026-09-14T08:29:02+07:00 | 3h27m | 719 | 388,743,197 | 1,438 | 5,309,979 | 383,431,780 | 421,502 |
 | 84 | BL-MEMOS-033, BL-MEMOS-040..049 | rkoi `a8d3c47` | 1 | V8 JSON.parse blast radius: 0 critical, transport pre-scan and CI assertion required | done | 2026-09-14T05:01:25+07:00 | 2026-09-14T05:15:10+07:00 | 13m45s | 32 | 2,268,659 | 64 | 180,493 | 2,088,102 | 51,009 |
 | 85 | BL-MEMOS-040..049 | rkoi `a7cf259` | 20 | Stage 2 spec closure check (APPROVED, ready for KIN, 0f3f15a) | done | 2026-09-14T05:13:09+07:00 | 2026-09-14T05:15:27+07:00 | 2m19s | 8 | 3,574,915 | 18 | 457,482 | 3,117,415 | 8,585 |
 | 86 | BL-MEMOS-014, BL-MEMOS-087 | coordinator | 31 | Record owner confirmation of DEC-MEMOS-17..21 (docs 8737285) | done | 2026-09-14T05:33:58+07:00 | 2026-09-14T05:36:21+07:00 | 2m23s | 7 | 3,209,263 | 14 | 23,487 | 3,185,762 | 10,169 |
-| 87 | BL-MEMOS-087 | coordinator | 32 | Record owner confirmation of RKOI rulings 1-4 (docs ace74fc) | done | 2026-09-14T05:39:23+07:00 | 2026-09-14T05:40:34+07:00 | 1m11s | 4 | 1,894,037 | 8 | 6,822 | 1,887,207 | 5,785 |
+| 87 | BL-MEMOS-087 | coordinator | 32 | Record owner confirmation of RKOI rulings 1-4 (docs ace74fc) | done | 2026-09-14T05:39:23+07:00 | 2026-09-14T08:31:00+07:00 | 2h51m | 9 | 4,320,261 | 20 | 455,262 | 3,864,979 | 13,617 |
+| 88 | BL-MEMOS-049 | rkoi `afd6aa2` | 7 | Keyring re-review, round 2 (APPROVED, fd8095f) | done | 2026-09-14T08:30:27+07:00 | 2026-09-14T08:31:00+07:00 | 0m32s | 4 | 2,202,878 | 8 | 558,357 | 1,644,513 | 892 |
+| 89 | BL-MEMOS-049, BL-MEMOS-047 | janus `ae6c2c8` | 1 | CI engine canary for V8 JSON.parse bug | open | 2026-09-14T08:30:49+07:00 | 2026-09-14T08:31:01+07:00 | 0m12s | 2 | 37,454 | 4 | 17,601 | 19,849 | 529 |

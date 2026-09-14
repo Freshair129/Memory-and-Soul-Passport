@@ -340,15 +340,13 @@
           "task_ids": [
             "BL-MEMOS-049"
           ],
-          "label": "Keyring parser: decode values in scanner, not via native JSON.parse keys (V8 bug)",
-          "status": "open"
+          "label": "Keyring parser: decode values in scanner, not via native JSON.parse keys (V8 bug)"
         },
         "10": {
           "task_ids": [
             "BL-MEMOS-040..049"
           ],
-          "label": "Transport escaped-key pre-scan (server + client), queued after keyring fix",
-          "status": "open"
+          "label": "Transport escaped-key pre-scan (server + client), queued after keyring fix"
         },
         "11": {
           "task_ids": [
@@ -360,10 +358,10 @@
             "BL-MEMOS-045",
             "BL-MEMOS-046",
             "BL-MEMOS-048",
-            "BL-MEMOS-112"
+            "BL-MEMOS-112",
+            "BL-MEMOS-049"
           ],
-          "label": "Implement stage 2 per spec b090a51 (queued third)",
-          "status": "open"
+          "label": "Keyring parser V8 fix, transport escaped-key pre-scan, and stage 2 implementation (3a88991..f788e39)"
         }
       }
     },
@@ -411,6 +409,13 @@
             "BL-MEMOS-049"
           ],
           "label": "Keyring re-review, round 2 (APPROVED, fd8095f)"
+        },
+        "8": {
+          "task_ids": [
+            "BL-MEMOS-047"
+          ],
+          "label": "Stage 2 implementation code review, round 1 (f788e39)",
+          "status": "open"
         }
       }
     },
@@ -434,6 +439,19 @@
             "BL-MEMOS-040..049"
           ],
           "label": "V8 JSON.parse blast radius: 0 critical, transport pre-scan and CI assertion required"
+        }
+      }
+    },
+    "ae6c2c88923bb2362": {
+      "actor": "janus",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-049",
+            "BL-MEMOS-047"
+          ],
+          "label": "CI engine canary for V8 JSON.parse bug",
+          "status": "open"
         }
       }
     }
