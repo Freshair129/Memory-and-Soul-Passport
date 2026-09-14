@@ -681,8 +681,7 @@
           "task_ids": [
             "BL-MEMOS-057"
           ],
-          "label": "PH-MEMOS-4 confirm nonce fix (740e9d9)",
-          "status": "open"
+          "label": "PH-MEMOS-4 confirm nonce fix (APPROVED, ready to merge, 740e9d9)"
         }
       }
     }
@@ -945,6 +944,12 @@
         "BL-MEMOS-050..057"
       ],
       "label": "Commit spec round 4; gitignore worktrees fix+PR (#28); fold RKOI carry-forwards; dispatch KIN implementation"
+    },
+    "43": {
+      "task_ids": [
+        "BL-MEMOS-050..059"
+      ],
+      "label": "PH-MEMOS-4 fully approved; PR body prepared, not yet opened"
     }
   }
 }
