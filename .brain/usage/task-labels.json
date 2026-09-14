@@ -529,7 +529,18 @@
             "BL-MEMOS-054",
             "BL-MEMOS-055"
           ],
-          "label": "PH-MEMOS-4 lifecycle + erasure spec (design v0.5.0b)",
+          "label": "PH-MEMOS-4 lifecycle + erasure spec (design v0.5.0b, e9e8534)"
+        }
+      }
+    },
+    "a2bbf673a11dfa932": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050..057"
+          ],
+          "label": "PH-MEMOS-4 spec review, round 1 (e9e8534)",
           "status": "open"
         }
       }
@@ -781,6 +792,12 @@
         "OPS-MEMOS-003"
       ],
       "label": "Merge PRs 20-26 to main (retarget nested PRs, resolve migrate-branch doc conflicts)"
+    },
+    "41": {
+      "task_ids": [
+        "BL-MEMOS-050..057"
+      ],
+      "label": "Commit PH-MEMOS-4 spec; dispatch RKOI review"
     }
   }
 }
