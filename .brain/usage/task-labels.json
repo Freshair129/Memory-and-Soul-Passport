@@ -637,7 +637,18 @@
           "task_ids": [
             "BL-MEMOS-057"
           ],
-          "label": "PH-MEMOS-4 code review, round 1 (fcd6af1)",
+          "label": "PH-MEMOS-4 code review, round 1 (0 critical, 3 required + 4 recommended)"
+        }
+      }
+    },
+    "a6476ed8f5a2b9cbb": {
+      "actor": "kin",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-057"
+          ],
+          "label": "PH-MEMOS-4 revision: journal replay, DEC-34 positive tests, retention 5-table assertions, plus 4 recommended",
           "status": "open"
         }
       }
