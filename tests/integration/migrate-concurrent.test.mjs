@@ -270,6 +270,24 @@ describe("db/migrate concurrent cold start (multi-process)", () => {
     15000,
   );
 
+  it("reports an invalid lockTimeoutMs as a TypeError, not as migration_lock_unavailable:", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_a.sql": "CREATE TABLE t1 (id INTEGER PRIMARY KEY);" });
+    const dbPath = path.join(tempRunDir(), "bad-timeout.sqlite3");
+    const db = open(dbPath);
+    cleanups.push(() => db.close());
+    for (const lockTimeoutMs of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      let thrown;
+      try {
+        runMigrations(db, migrationsDir, { lockTimeoutMs });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(TypeError);
+      expect(String(thrown.message)).not.toMatch(/migration_lock_unavailable/);
+    }
+    expect(runMigrations(db, migrationsDir).appliedCount).toBe(1);
+  });
+
   it("refuses with a typed migration_lock_unavailable: error, never a raw driver error, when the lock path is a directory", () => {
     // Portable across platforms (Windows and POSIX both refuse to open a
     // directory as a SQLite database file, `SQLITE_CANTOPEN_ISDIR` on

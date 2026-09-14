@@ -1076,6 +1076,12 @@ function migrationLockPath(db) {
 function withMigrationLock(db, lockTimeoutMs, fn) {
   const lockPath = migrationLockPath(db);
   if (!lockPath) return fn();
+  // Validate the caller's option before the lock-open try/catch below, so a bad
+  // `lockTimeoutMs` surfaces as its own TypeError instead of being reported
+  // as `migration_lock_unavailable:` with misleading directory advice.
+  if (!Number.isFinite(lockTimeoutMs) || lockTimeoutMs < 0) {
+    throw new TypeError("runMigrations({ lockTimeoutMs }) requires a non-negative finite number.");
+  }
 
   // RKOI review (revision): if the lock file itself cannot be opened --
   // the directory denies file creation (`SQLITE_CANTOPEN`), or `lockPath`
