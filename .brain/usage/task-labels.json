@@ -745,8 +745,7 @@
       "task_ids": [
         "OPS-MEMOS-003"
       ],
-      "label": "PRs #20-#26 opened by owner; CI and mergeability check",
-      "status": "open"
+      "label": "PRs #20-#26 opened by owner; CI and mergeability check"
     }
   }
 }
