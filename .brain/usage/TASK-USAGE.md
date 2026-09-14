@@ -12,7 +12,7 @@ A segment whose status is `open` was still running when the ledger was generated
 
 | Segments | Requests | Input (total) | input_tokens | Cache write | Cache read | Output |
 |---:|---:|---:|---:|---:|---:|---:|
-| 102 | 4,713 | 2,080,720,826 | 10,692 | 44,203,796 | 2,036,506,338 | 4,733,463 |
+| 103 | 4,721 | 2,085,837,790 | 10,708 | 44,214,216 | 2,041,612,866 | 4,741,219 |
 
 ## Per task id
 
@@ -51,7 +51,7 @@ A segment whose status is `open` was still running when the ledger was generated
 | OPS-MEMOS-000 | 2 | 2026-09-13T14:53:06+07:00 | 2026-09-13T14:53:06+07:00 | 0 | 0 | 0 |
 | OPS-MEMOS-001 | 2 | 2026-09-13T18:28:15+07:00 | 2026-09-13T23:00:09+07:00 | 26 | 4,190,696 | 17,365 |
 | OPS-MEMOS-002 | 1 | 2026-09-13T23:46:44+07:00 | 2026-09-14T00:32:28+07:00 | 30 | 25,130,965 | 62,342 |
-| OPS-MEMOS-003 | 4 | 2026-09-14T08:56:28+07:00 | 2026-09-14T12:33:11+07:00 | 67 | 38,709,399 | 69,099 |
+| OPS-MEMOS-003 | 5 | 2026-09-14T08:56:28+07:00 | 2026-09-14T12:39:47+07:00 | 75 | 43,826,363 | 76,855 |
 
 ## Per segment
 
@@ -158,4 +158,5 @@ A segment whose status is `open` was still running when the ledger was generated
 | 99 | BL-MEMOS-080 | rkoi `a46f6a8` | 2 | Confirm migration fix revision (APPROVED conditional on Ubuntu CI, ea1b5f2) | done | 2026-09-14T11:27:42+07:00 | 2026-09-14T11:30:46+07:00 | 3m04s | 9 | 1,034,613 | 20 | 122,395 | 912,198 | 9,067 |
 | 100 | OPS-MEMOS-003 | coordinator | 35 | Verify reported PR opening: none found on GitHub | done | 2026-09-14T11:40:03+07:00 | 2026-09-14T11:41:02+07:00 | 0m59s | 4 | 2,465,143 | 8 | 4,698 | 2,460,437 | 1,986 |
 | 101 | OPS-MEMOS-003 | coordinator | 36 | Diagnose WSL bash error; point to Git Bash | done | 2026-09-14T12:22:09+07:00 | 2026-09-14T12:22:34+07:00 | 0m25s | 2 | 1,238,183 | 4 | 1,497 | 1,236,682 | 806 |
-| 102 | OPS-MEMOS-003 | coordinator | 37 | PRs #20-#26 opened by owner; CI and mergeability check | done | 2026-09-14T12:25:14+07:00 | 2026-09-14T12:33:11+07:00 | 7m57s | 10 | 6,294,411 | 24 | 14,871 | 6,279,516 | 5,875 |
+| 102 | OPS-MEMOS-003 | coordinator | 37 | PRs #20-#26 opened by owner; CI and mergeability check | done | 2026-09-14T12:25:14+07:00 | 2026-09-14T12:33:34+07:00 | 8m21s | 11 | 6,929,309 | 26 | 15,575 | 6,913,708 | 6,746 |
+| 103 | OPS-MEMOS-003 | coordinator | 38 | Fix PRs: #23/#24 bodies and ready; #26 doc version renumber (9d18119); ledger push | done | 2026-09-14T12:37:48+07:00 | 2026-09-14T12:39:47+07:00 | 2m00s | 7 | 4,482,066 | 14 | 9,716 | 4,472,336 | 6,885 |

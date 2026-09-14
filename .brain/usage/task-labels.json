@@ -746,6 +746,12 @@
         "OPS-MEMOS-003"
       ],
       "label": "PRs #20-#26 opened by owner; CI and mergeability check"
+    },
+    "38": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "Fix PRs: #23/#24 bodies and ready; #26 doc version renumber (9d18119); ledger push"
     }
   }
 }
