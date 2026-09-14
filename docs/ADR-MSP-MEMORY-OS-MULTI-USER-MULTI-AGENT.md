@@ -1,7 +1,7 @@
 ---
-version: "0.1.12b"
+version: "0.1.13b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-15T18:00:00+07:00,ATHER"
+last_update: "2026-09-15T20:30:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -20,8 +20,9 @@ about each other, adopts RKOI's recommended default for each, and specifies
 the multi-user/multi-agent model neither piece of prior work fully covered.
 **The owner confirmed decisions 1–21 (DEC-MEMOS-01..21) on 2026-09-14** (see the
 checklist below). RKOI's four rulings on the judgement calls were confirmed by
-the owner on 2026-09-14 as well. **`DEC-MEMOS-22..33`, added in the PH-MEMOS-4
-(participant lifecycle, erasure, retention, export) revision, are new adopted
+the owner on 2026-09-14 as well. **`DEC-MEMOS-22..35`, added in the PH-MEMOS-4
+(participant lifecycle, erasure, retention, export) revision (`34`/`35` added
+in the RKOI-review-response round), are new adopted
 defaults pending owner confirmation** — not yet "ยืนยัน," exactly as `17..21`
 were before their own confirmation. This ADR authorizes design work, not a merge.
 
@@ -263,8 +264,12 @@ path; export is always principal-scoped regardless of `visibility`/agent,
 since `visibility` governs agent-to-agent confidentiality, not the data
 subject's own access right; erasure/export's per-table selection
 operationalizes design §11.1 exactly (own `speaker_id` for messages,
-asserter-or-subject for records, current-participant-at-call-time for
-summaries and both delivery tables); and naming a `principal_id` that has
+asserter-or-subject for records, and — corrected, `DEC-MEMOS-34`,
+CRITICAL 2/3 — sole-ever-`HUMAN`-participant-scoped, not merely
+"current-participant-at-call-time," for session summaries;
+`thread_delivery_receipts` follows the same `DEC-MEMOS-34` test, and
+`thread_pending_deliveries` is out of erasure's scope entirely,
+CRITICAL 4 item 2); and naming a `principal_id` that has
 never appeared in the tenant's data succeeds trivially with a zero-count
 receipt or empty export, never `not_found`, so as not to add a new
 cross-principal existence oracle alongside the already-accepted
@@ -284,6 +289,99 @@ already general enough to cover the two new flags), `RSK-MEMOS-06`
 mitigation, not a full close; its mitigation note is updated, not
 duplicated) and `RSK-MEMOS-09` (existence-oracle family — decision 33 is
 designed to avoid adding to it, not to create a new one).
+
+## Revision note — RKOI PH-MEMOS-4 review, NEEDS REVISION 4 critical
+(2026-09-15)
+
+RKOI reviewed the PH-MEMOS-4 spec above and returned **NEEDS REVISION,
+4 critical.** Full detail for each lives in the design's own
+correspondingly-updated sections (§7 rule 2, §11.1, §11.2, §12.3, §15,
+§19); this note records only the decision-level consequences, per this
+ADR's own "what this ADR does not decide" boundary.
+
+- **CRITICAL 1 — `leave` did not stick.** The shipped stage-1
+  `thread-guard.mjs` decides its claim-free "first membership" branch by
+  asking whether a *current* (`left_at IS NULL`) participant row exists,
+  which is also true immediately after `leave` closes one — so a
+  departed principal's very next `HUMAN` append silently re-created
+  membership through the same claim-free path `DEC-MEMOS-12` exists for,
+  no `assertParticipants` needed. **`DEC-MEMOS-12` is restated, not
+  replaced**: the claim-free path applies only to a genuine first-ever
+  join (no `thread_participants` row for this thread+speaker at all,
+  current or departed) — a rejoin is an ordinary participant change and
+  needs `assertParticipants` like any other. This is a fix to
+  already-shipped `main` code, tracked as new **`BL-MEMOS-058`**, not a
+  new decision requiring the owner's confirmation on its own — it
+  corrects the implementation to match what `DEC-MEMOS-12`'s own text
+  already said ("the first `HUMAN` membership").
+- **CRITICAL 2/3 — erasure and export leaked or destroyed other
+  principals' content on `GROUP`/`ROOM` threads.** Both bugs shared one
+  root cause: `session_summaries`/`thread_delivery_receipts`
+  disposition used a thread-level "current-or-departed participant of
+  the thread" test, not a principal-level one, so a shared group record
+  was scooped in or excluded based on one member's request regardless of
+  who actually authored it. **New `DEC-MEMOS-34`** (below) restricts both
+  tools' summary/delivery-table disposition to threads where the calling
+  principal is the thread's sole-ever `HUMAN` participant — a
+  conservative default that under-erases a group-shared summary rather
+  than risk destroying or leaking another principal's content.
+- **CRITICAL 4 — erasure both over-claimed and under-delivered, plus
+  unstated ordering.** (a) `protected_memory_records.scope_json` was
+  never blanked by `0009`'s shipped tombstone trigger, though it can
+  carry personal content same as `body_json` — fixed by a trigger
+  replacement in the new migration (below), not by editing `0009` (it is
+  merged and checksum-locked). (b) `thread_pending_deliveries` has no
+  `thread_id` column and holds `AGENT`-authored reply text, not the
+  principal's own, with no reliable attribution key at all — removed
+  from erasure's scope entirely, correcting design §11.1's disposition
+  table and plan `BL-MEMOS-053`'s row to match. (c) The departed-principal
+  disposition criterion is restated as "ever a `HUMAN` participant of a
+  `DEC-MEMOS-34`-qualifying thread," not "current at erasure time." (d)
+  The transaction order is now specified exactly: resolve every matching
+  row set first, then tombstone, then close `thread_participants` rows
+  last, all in one transaction — closing participants first would
+  silently zero out the summary/receipt disposition, since a
+  self-closed row is indistinguishable from "never a member" to the
+  `DEC-MEMOS-34` lookup.
+
+**New decisions this round — `DEC-MEMOS-34`/`35`, adopted defaults
+pending owner confirmation, same status as `22..33`:**
+
+- **`DEC-MEMOS-34`, new**: erasure/export summary and delivery-table
+  disposition is restricted to threads where the principal is, across
+  the thread's *entire* participant history, its only-ever `HUMAN`
+  participant — `DIRECT` threads, and the rare `GROUP`/`ROOM` thread that
+  has in fact never had a second `HUMAN`. A `GROUP`/`ROOM` thread with
+  more than one distinct `HUMAN` `person_id`/`speaker_id` ever is left
+  untouched by erasure and excluded entirely from export for those two
+  tables — not filtered, not redacted, just not touched or returned.
+  Stated plainly as a conservative default: it under-erases a
+  group-shared summary rather than risk destroying or leaking another
+  principal's content; scrubbing one person's contribution out of a
+  shared summary is out of scope for this phase — design §11.1, §11.2.
+- **`DEC-MEMOS-35`, new**: `msp_thread_retention_tick`'s `dry_run: true`
+  is fully read-only — it consumes no nonce and writes no journal entry,
+  the same exemption `msp_thread_context` already has; `dry_run: false`
+  is unchanged (consumes a nonce, journals normally) — design §11.2.
+
+**New backlog item, code fix — `BL-MEMOS-058`** (not a `DEC-MEMOS` id;
+this is an implementation correction, not an owner-facing decision):
+`thread-guard.mjs`'s first-membership query changes from "no current
+row" to "no row at all" for this thread+speaker — plan §5, PH-MEMOS-4.
+
+**New migration, not a `0009` edit — `migrations/0010_erasure_receipts.sql`
+(provisional name, `DEC-MEMOS-14`'s merge-order rule)**: since `0008`
+and `0009` are merged to `main` and checksum-locked, CRITICAL 4 item (a)'s
+fix (dropping and recreating `trg_protected_memory_records_update_guard`
+to also permit `scope_json → '{}'` on the tombstone branch) ships as a
+new, additive migration alongside the already-planned `erasure_receipts`
+table — an additive trigger replacement, not a table rebuild. KIN may
+need to renumber this file if another migration merges first — design
+§12.3.
+
+**Cross-repo change list, owner-confirmation checklist, and
+`GATE-MEMOS-4` are all updated to match** — see below and the plan's own
+revision.
 
 ## Context
 
@@ -361,7 +459,7 @@ and marks every one of them explicitly overturnable.
 
 ## Decision
 
-### The thirty-three decisions
+### The thirty-five decisions
 
 Each began as an adopted default. **The owner confirmed all sixteen on
 2026-09-14.**
@@ -669,11 +767,13 @@ Decisions 17–21 below were added during stage-2 scoping (v0.1.7b–v0.1.9b).
     right. — *adopted default, pending owner confirmation* (design §11.2).
 32. **DEC-MEMOS-32, erasure/export per-table selection operationalizes
     §11.1 exactly.** Messages: the principal's own `speaker_id`. Protected
-    records: asserter or subject. Session summaries and both delivery
-    tables: current-participant-at-call-time via the existing
-    `thread_participants` join — the same criterion §11.1 already states
-    for summaries, extended uniformly since neither delivery table carries
-    its own principal column. — *adopted default, pending owner
+    records: asserter or subject. Session summaries and `thread_delivery_receipts`:
+    **corrected by `DEC-MEMOS-34` below — sole-ever-`HUMAN`-participant of
+    the thread, not merely "current at call time"** — the criterion §11.1
+    was corrected to state in the RKOI PH-MEMOS-4 review response.
+    `thread_pending_deliveries` is out of erasure's scope entirely
+    (`DEC-MEMOS-34`'s own text, CRITICAL 4 item 2) — no longer part of
+    this decision's table list. — *adopted default, pending owner
     confirmation* (design §11.2).
 33. **DEC-MEMOS-33, an unknown principal is a trivial success, not
     `not_found`.** Naming a `principal_id` that has never appeared in the
@@ -681,6 +781,39 @@ Decisions 17–21 below were added during stage-2 scoping (v0.1.7b–v0.1.9b).
     export, never a refusal — avoiding a new cross-principal existence
     oracle alongside the already-accepted `RSK-MEMOS-09` family. —
     *adopted default, pending owner confirmation* (design §11.2).
+
+**Decisions 34 and 35 below are new (RKOI PH-MEMOS-4 review response,
+2026-09-15) — adopted defaults pending owner confirmation, same status as
+`22..33`.**
+
+34. **DEC-MEMOS-34, erasure/export summary and delivery-table disposition
+    is sole-ever-HUMAN-participant-scoped, not thread-scoped.** For
+    `session_summaries` and `thread_delivery_receipts`, both
+    `msp_thread_principal_erase` and `msp_thread_principal_export` act
+    only on threads where the calling/named principal is, across the
+    thread's *entire* `thread_participants` history (current or departed
+    rows alike), that thread's only-ever distinct `HUMAN`
+    `speaker_id`/`person_id` — i.e. `DIRECT` threads, and the rare
+    `GROUP`/`ROOM` thread that has in fact never had a second `HUMAN`. A
+    `GROUP`/`ROOM` thread with more than one distinct `HUMAN` ever is left
+    **untouched** by erasure and **excluded entirely** (not filtered, not
+    redacted) from export, for those two tables. This is a conservative
+    default, stated as such rather than left implicit: it under-erases a
+    group-shared summary rather than risk destroying or leaking another
+    principal's content — scrubbing one person's contribution out of a
+    shared summary is explicitly out of scope for this phase.
+    `thread_pending_deliveries` is removed from erasure's scope entirely
+    by the same review round (CRITICAL 4 item 2), for an unrelated reason
+    — it holds `AGENT`-authored reply text, not the principal's own, and
+    carries no reliable attribution column — not by this decision. —
+    *adopted default, pending owner confirmation* (design §11.1, §11.2).
+35. **DEC-MEMOS-35, `msp_thread_retention_tick`'s `dry_run: true` is fully
+    read-only.** A `dry_run: true` call consumes no nonce and writes no
+    journal entry — exempt from both, the same way the genuinely
+    low-stakes `msp_thread_context` is already exempt from the nonce
+    requirement. A `dry_run: false` call is unchanged: it consumes a
+    nonce and journals normally. — *adopted default, pending owner
+    confirmation* (design §11.2).
 
 ### The multi-user model
 
@@ -836,6 +969,20 @@ instruction that every cross-repo change be listed in both places:
   action with **both** `assertParticipants: true` and the new
   `assertRelink: true` claim (`DEC-MEMOS-23`) on the old thread; neither
   claim alone is sufficient, and `operator` never substitutes for either.
+  **Extended (RKOI PH-MEMOS-4 review, WARNING 3) — the full caller shape,
+  not just the two participant claims.** `close_for_relink` is
+  thread-bound (design §7.1), so it also receives the generic thread-bound
+  gate's complete, ordinary demands, every one of which `BL-MEMOS-092`'s
+  caller must also satisfy: `audienceKind === 'DIRECT'` on the grant; a
+  `channelAccountId`/`externalRoomRef` pair that re-hashes to the old
+  thread's own stored `external_room_ref_hmac`; `agentId`/`workspaceId`
+  present; a `nonce` (this tool is mutating and not exempt); and an open
+  `thread_agents` row for the calling agent on the old thread (stage 2) —
+  none of these are new requirements this decision invents; they are the
+  same generic gate every other thread-bound tool already enforces
+  (design §6.3/§8.2), listed here in full because zuri-ai's caller needs
+  the complete picture, not only the two claims this decision adds on
+  top of it.
 - **New (PH-MEMOS-4 scoping) — a caller for `msp_thread_principal_erase`
   on zuri-ai's own PDPA erasure flow** (`BL-MEMOS-093`, deferred to
   `PH-MEMOS-8` exactly like item 4): zuri-ai's backend erasure job is
@@ -907,7 +1054,7 @@ instruction that every cross-repo change be listed in both places:
 
 Items 1–16 were confirmed by the owner on 2026-09-14, and items 17–21 later the same day. Item 7's migration
 numbering is read as corrected by DEC-MEMOS-14: later migrations are
-numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-09-14 in a separate answer ("ยืนยัน RKOI rulings 1-4"). **Items 22–33 (PH-MEMOS-4 scoping, 2026-09-15) are new and await the owner's confirmation.**
+numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-09-14 in a separate answer ("ยืนยัน RKOI rulings 1-4"). **Items 22–35 (PH-MEMOS-4 scoping, 2026-09-15, `34`/`35` added in the RKOI-review-response round) are new and await the owner's confirmation — corrected (RKOI PH-MEMOS-4 review, WARNING 1): an earlier revision's changelog claimed this checklist had already been extended with items 22–33; it had not been. The rows below are the actual extension.**
 
 - [x] 1. API-010 = `msp_vault_resolve`; thread/session/memory surface = API-011.
 - [x] 2. The branch's six `msp_thread_*` tool shapes are canonical (business fields frozen).
@@ -934,14 +1081,28 @@ numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-
 - [x] RKOI ruling 2: per-tenant keyring, with the stated selection/fallback/rotation/defense-in-depth conditions.
 - [x] RKOI ruling 3: nonce required on every mutating tool except append, with the stated transaction/conflict/pruning conditions, and the named stage-1 gap.
 - [x] RKOI ruling 4: single persisted `thread_kind`, pinned by trigger, `ROOM` behaves as `GROUP`.
+- [ ] 22. `leave` always requires `assertParticipants`, self or third-party, and never itself closes the thread (DEC-MEMOS-22).
+- [ ] 23. `close_for_relink`'s distinct claim is `assertRelink`, additive to `assertParticipants`, `DIRECT`-only, never `operator` (DEC-MEMOS-23).
+- [ ] 24. `msp_thread_agent_detach` needs no new grant claim — the existing agent-currency gate already makes it self-only (DEC-MEMOS-24).
+- [ ] 25. Cross-principal erasure/export authority is the grant flag pair `dataSubjectAccess`/`dataSubjectAdmin`, not a Membership role (DEC-MEMOS-25).
+- [ ] 26. Tool names `msp_thread_principal_erase`/`msp_thread_principal_export`/`msp_thread_retention_tick`; retention reuses `operator` via an explicit name check (DEC-MEMOS-26).
+- [ ] 27. Erasure idempotency: a caller-supplied opaque key, 1–128 chars, scoped `(tenant_id, idempotency_key)`; same-principal replay is a no-op, different-principal replay is `conflict` (DEC-MEMOS-27).
+- [ ] 28. `erasure_receipts` stores the raw `principal_id`; W5 pseudonymization stays scoped to the journal entry only (DEC-MEMOS-28).
+- [ ] 29. Retention for this phase is one deployment-wide `MSP_THREAD_RETENTION_DAYS` horizon, no per-tenant policy table yet, bounded to 200 rows/table/call (DEC-MEMOS-29).
+- [ ] 30. Export excludes tombstoned content, including the exporting principal's own erased rows (DEC-MEMOS-30).
+- [ ] 31. Export ignores agent `visibility` entirely — principal-scoped, not agent-scoped (DEC-MEMOS-31).
+- [ ] 32. Erasure/export per-table selection operationalizes design §11.1 exactly (DEC-MEMOS-32).
+- [ ] 33. An unknown principal is a trivial success on both erase and export, never `not_found` (DEC-MEMOS-33).
+- [ ] 34. Erasure/export summary and delivery-table disposition is restricted to threads where the principal is the thread's sole-ever `HUMAN` participant; a `GROUP`/`ROOM` thread with a second `HUMAN` ever is left untouched (erasure) or excluded entirely (export), a conservative under-erasure default, stated as such (DEC-MEMOS-34).
+- [ ] 35. `msp_thread_retention_tick`'s `dry_run: true` consumes no nonce and writes no journal entry; `dry_run: false` is unchanged (DEC-MEMOS-35).
 
 Overturning any row above reopens the corresponding section of
-`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.4.2b named in its
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.5.1b named in its
 mapping table (§3.1).
 
 ## Evidence and implementation map
 
-- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.5.0b (superseded in relevant part by this ADR + the design's own §0.1 review response)
+- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.5.1b (superseded in relevant part by this ADR + the design's own §0.1 review response)
 - Stage-1 code, the new source of truth for wire/schema shapes: `feat/memos-002-thread-memory` (worktree `agent-ab508b7a790efd268`), especially `migrations/0008_thread_memory.sql`, `packages/msp-core/src/domain/thread-memory.mjs`, `packages/msp-contracts/src/contracts/thread-access.mjs`, `apps/msp-server/src/transport/handlers/thread-guard.mjs`, and `docs/API-011-THREAD-MEMORY-CONTRACT.md`
 - Unmerged branch (facts only, not read via git by this ADR's author): `origin/codex/msp-thread-memory`, commits `50859fb`, `e4303cb`
 - Existing guard pattern the design's C-2 fix follows: [`packages/msp-contracts/src/contracts/vault-scope-guard.mjs`](../packages/msp-contracts/src/contracts/vault-scope-guard.mjs) (the fix itself, `grant-scope-guard.mjs`, does not exist yet — see the corrected C-2 entry above)
@@ -953,6 +1114,7 @@ mapping table (§3.1).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.13b | 2026-09-15 | proposed | **Answers RKOI's PH-MEMOS-4 review, NEEDS REVISION 4 critical** — new "Revision note — RKOI PH-MEMOS-4 review" section records the decision-level consequences of all four criticals (full detail in the design's own updated §7 rule 2, §11.1, §11.2, §12.3, §15, §19). Added **`DEC-MEMOS-34`** (erasure/export summary and delivery-table disposition restricted to threads where the principal is the thread's sole-ever `HUMAN` participant, a conservative under-erasure default stated as such — CRITICAL 2/3) and **`DEC-MEMOS-35`** (`msp_thread_retention_tick`'s `dry_run: true` is fully read-only, no nonce, no journal entry — WARNING 6), renaming the decisions section "the thirty-five decisions." Recorded **`BL-MEMOS-058`** (not a `DEC-MEMOS` id, an implementation correction) for CRITICAL 1's `thread-guard.mjs` rejoin fix, and the new **`migrations/0010_erasure_receipts.sql`** (provisional name) for CRITICAL 4 item (a)'s `scope_json` trigger fix, since `0008`/`0009` are checksum-locked and can no longer be edited in place. **Extended `close_for_relink`'s cross-repo item (WARNING 3) with the full generic thread-bound gate's caller shape** (`audienceKind`, room-hash-matching claims, `agentId`/`workspaceId`, `nonce`, an open `thread_agents` row), not only the two participant claims. **Corrected the owner confirmation checklist (WARNING 1): the 0.1.12b changelog claimed items 22–33 had been added; they had not been — this revision adds the real, unchecked items 22–35.** No id renumbered or reused; no new `RSK-MEMOS` id. New `BL-MEMOS` id: `058`. | working-tree | ATHER |
 | 0.1.12b | 2026-09-15 | proposed | **PH-MEMOS-4 (participant lifecycle, erasure, retention, export) spec, fully scoped for the first time** — mirrors how PH-MEMOS-3 was scoped. Added **`DEC-MEMOS-22`** (`leave` always needs `assertParticipants`, self or other, never closes the thread), **`DEC-MEMOS-23`** (`close_for_relink`'s distinct claim is `assertRelink`, additive to `assertParticipants`, DIRECT-only), **`DEC-MEMOS-24`** (agent detach needs no new claim — the existing agent-currency gate already makes it self-only), **`DEC-MEMOS-25`** (resolves this ADR's own open "`data_subject_admin`: role or flag?" question — it is two new grant flags, `dataSubjectAccess`/`dataSubjectAdmin`, not a Membership role), **`DEC-MEMOS-26`** (tool names `msp_thread_principal_erase`/`msp_thread_principal_export`/`msp_thread_retention_tick`; retention reuses `operator` via an explicit name check), and **`DEC-MEMOS-27..33`** (erasure idempotency key shape and replay behavior; `erasure_receipts` stores the raw `principal_id`, not HMAC'd — W5 stays scoped to the journal; retention's deployment-wide `MSP_THREAD_RETENTION_DAYS` horizon, out-of-scope per-tenant policy carried against `RSK-MEMOS-06`; export excludes tombstoned content including the exporter's own erased rows; export ignores agent `visibility`; erasure/export's per-table selection operationalizes design §11.1 exactly; an unknown principal is a trivial success, never `not_found`, to avoid a new existence oracle). All twelve are adopted defaults pending owner confirmation. Updated the cross-repo change list's relink-caller item with `assertRelink`'s exact shape and added a new item for `BL-MEMOS-093`'s erasure caller (`dataSubjectAdmin`). Removed `data_subject_admin` from "What this ADR does not decide," since `DEC-MEMOS-25` now answers it. Extended the owner confirmation checklist with items 22–33. No id renumbered or reused; no new `RSK-MEMOS`/`BL-MEMOS` id (every risk is already tracked by `RSK-MEMOS-01`/`05`/`06`/`09`, and every backlog item this precision serves is already `BL-MEMOS-050..057`). | working-tree | ATHER |
 | 0.1.11b | 2026-09-14 | proposed | Records the owner's confirmation of RKOI rulings 1–4 (2026-09-14): status line, the rulings section intro, and checklist rows. Every decision and ruling in this ADR is now owner-confirmed; status stays proposed until the docs merge. | working-tree | COORD |
 | 0.1.10b | 2026-09-14 | proposed | Records the owner's confirmation of DEC-MEMOS-17..21 (2026-09-14): decision markers, the decisions heading and status line, and checklist items 17–21. RKOI rulings 1–4 stay pending. | working-tree | COORD |
