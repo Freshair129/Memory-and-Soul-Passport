@@ -727,8 +727,7 @@
       "task_ids": [
         "OPS-MEMOS-003"
       ],
-      "label": "Open all PRs (script, push blocked); canary rebases; KIN trailer rewrite; integer expiresAt + NOTES fix (94cdb34); migrate PR added to script; lockTimeoutMs TypeError fix (5d7f7b5)",
-      "status": "open"
+      "label": "Open all PRs: script prepared (push blocked for agent); owner ran it: PRs #20-#26; canary rebases; trailer rewrite; integer expiresAt; lockTimeoutMs fix"
     }
   }
 }
