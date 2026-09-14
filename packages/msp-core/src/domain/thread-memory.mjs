@@ -1815,6 +1815,15 @@ export class ThreadMemoryStore {
     }
 
     if (action === "close_for_relink") {
+      // RKOI PH-MEMOS-4 review round 4, RECOMMENDED item 6a: design §7.1
+      // states `close_for_relink` takes no additional request fields --
+      // `speaker_id` is refused explicitly here rather than silently
+      // accepted-and-ignored (it has no effect on this action at all; the
+      // participant closed, if any, is always the thread's own current
+      // HUMAN, never a caller-named one).
+      if (speakerId !== null && speakerId !== undefined) {
+        throw new ThreadMemoryValidationError("speaker_id must not be present for action 'close_for_relink'.");
+      }
       let closedHumanSpeakerId = null;
       try {
         closedHumanSpeakerId = this.#db.transaction(() => {
@@ -1966,11 +1975,32 @@ export class ThreadMemoryStore {
       if (existingReceipt.principal_id !== principal) {
         throw new ThreadMemoryConflictError("idempotency_key was already used for a different principal_id.");
       }
+      // RKOI PH-MEMOS-4 review round 4, REQUIRED item 1: this is the ONE
+      // tool where "who acted on whose data, and when" is the compliance
+      // record -- a replayed call must still journal, with `replay`
+      // genuinely `true` (design §11.2's payload shape), carrying the SAME
+      // tablesAffected snapshot the stored receipt already has, no raw
+      // principal id, same actor convention (principalHmac) as the
+      // non-replay arm below. This journal write is the ONLY effect of a
+      // replay -- no content table or erasure_receipts row is touched, and
+      // no nonce is consumed here (a replay of the idempotency key is a
+      // different HTTP call with its own fresh grant/nonce, consumed via
+      // the normal guard-level replay-protection path, unaffected by this
+      // arm).
+      const tablesAffected = parseJson(existingReceipt.tables_affected_json, {});
+      this.#journalAppend({
+        actor: this.#hmacPrincipal(principal),
+        toolName: "msp_thread_principal_erase",
+        ref: existingReceipt.erasure_receipt_id,
+        workspaceId: workspace,
+        payload: { idempotency_key: key, tables_affected: tablesAffected, replay: true },
+        policyDecision: "allow",
+      });
       return {
         erasureReceiptId: existingReceipt.erasure_receipt_id,
         principalId: principal,
         tenantId: tenant,
-        tablesAffected: parseJson(existingReceipt.tables_affected_json, {}),
+        tablesAffected,
         replay: true,
       };
     }

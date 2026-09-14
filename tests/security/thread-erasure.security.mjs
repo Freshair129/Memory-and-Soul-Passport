@@ -13,6 +13,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { createMspStdioCaller } from "@freshair129/msp-client-js";
+import { hmacRoomRef } from "../../packages/msp-core/src/domain/thread-memory.mjs";
 import { signThreadRequest } from "../../packages/msp-contracts/src/contracts/thread-access.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -76,25 +77,56 @@ async function withDb(dbPath, fn) {
 // thread-agent-scoping.security.mjs already uses for thread_agents
 // departure. chat_sessions/threads must already exist for the FK/
 // consistency triggers.
-async function seedSummary(dbPath, { summaryId, tenantId, sessionId, threadId, summaryVersion = 1 }) {
+async function seedSummary(dbPath, { summaryId, tenantId, sessionId, threadId, summaryVersion = 1, createdAt = new Date().toISOString() }) {
   await withDb(dbPath, async (db) => {
     db.prepare(
       `INSERT INTO session_summaries
         (summary_id, tenant_id, session_id, thread_id, summary_version, covered_from_sequence, covered_through_sequence,
          source_digest, summary_json, policy_revision, summarizer_version, created_at)
        VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, 'v1', 'test', ?)`,
-    ).run(summaryId, tenantId, sessionId, threadId, summaryVersion, "d".repeat(64), JSON.stringify({ topics: [{ text: "seeded summary content" }] }), new Date().toISOString());
+    ).run(summaryId, tenantId, sessionId, threadId, summaryVersion, "d".repeat(64), JSON.stringify({ topics: [{ text: "seeded summary content" }] }), createdAt);
   });
 }
 
-async function seedDeliveryReceipt(dbPath, { receiptId, tenantId, messageId }) {
+async function seedDeliveryReceipt(dbPath, { receiptId, tenantId, messageId, recordedAt = new Date().toISOString() }) {
   await withDb(dbPath, async (db) => {
     db.prepare(`INSERT INTO thread_delivery_receipts (receipt_id, tenant_id, message_id, outcome, text, recorded_at) VALUES (?, ?, ?, 'DELIVERED', 'seeded delivery text', ?)`).run(
       receiptId,
       tenantId,
       messageId,
-      new Date().toISOString(),
+      recordedAt,
     );
+  });
+}
+
+// RKOI PH-MEMOS-4 review round 4, REQUIRED item 3: a direct-DB seed for
+// protected_memory_records, following the SAME shape
+// trg_protected_memory_records_subject_rules requires of a real
+// msp_thread_memory_record call -- asserted_by_speaker_id must be a
+// CURRENT (left_at IS NULL) HUMAN participant, and a HUMAN asserter's
+// subject_person_id must equal its own speaker_id.
+async function seedProtectedMemoryRecord(dbPath, { recordId, tenantId, threadId, sessionId, assertedBySpeakerId, createdAt = new Date().toISOString() }) {
+  await withDb(dbPath, async (db) => {
+    db.prepare(
+      `INSERT INTO protected_memory_records
+        (record_id, tenant_id, thread_id, session_id, kind, status, asserted_by_speaker_id, subject_person_id,
+         scope_json, body_json, source_message_refs_json, verification_state, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'PREFERENCE', 'ACTIVE', ?, ?, '{}', ?, '[]', 'CANDIDATE', ?, ?)`,
+    ).run(recordId, tenantId, threadId, sessionId, assertedBySpeakerId, assertedBySpeakerId, JSON.stringify({ note: "seeded aged record" }), createdAt, createdAt);
+  });
+}
+
+// thread_pending_deliveries carries no thread_id FK at all -- its own
+// binding is the room triple (tenant_id, channel_account_id,
+// external_room_ref_hmac), matching how msp_thread_delivery_record's
+// PENDING path itself resolves a room, never a thread_id.
+async function seedPendingDelivery(dbPath, { receiptId, tenantId, channelAccountId, externalRoomRefHmac, inboundMessageId, recordedAt = new Date().toISOString() }) {
+  await withDb(dbPath, async (db) => {
+    db.prepare(
+      `INSERT INTO thread_pending_deliveries
+        (receipt_id, inbound_message_id, source_event_id, tenant_id, channel_account_id, external_room_ref_hmac, outcome, text, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'ACCEPTED', 'seeded pending text', ?)`,
+    ).run(receiptId, inboundMessageId, `${receiptId}-source`, tenantId, channelAccountId, externalRoomRefHmac, recordedAt);
   });
 }
 
@@ -233,6 +265,11 @@ test("erase: idempotent -- a second call with the SAME (tenant_id, idempotency_k
 
     const first = await call("msp_thread_principal_erase", signed("msp_thread_principal_erase", { idempotency_key: "k-idempotent" }, { ...claims, dataSubjectAccess: true }));
     const receiptCountAfterFirst = await row(dbPath, "SELECT COUNT(*) AS count FROM erasure_receipts");
+    const journalCountAfterFirst = await row(dbPath, "SELECT COUNT(*) AS count FROM journal WHERE tool_name = 'msp_thread_principal_erase'");
+    assert.equal(journalCountAfterFirst.count, 1, "the non-replay arm must journal exactly once");
+
+    const messageBeforeReplay = await row(dbPath, "SELECT redaction_state, text FROM thread_messages WHERE thread_id = ?", thread.threadId);
+    const erasureRow = await row(dbPath, "SELECT tables_affected_json FROM erasure_receipts WHERE erasure_receipt_id = ?", first.erasureReceiptId);
 
     const second = await call("msp_thread_principal_erase", signed("msp_thread_principal_erase", { idempotency_key: "k-idempotent" }, { ...claims, dataSubjectAccess: true }));
     const receiptCountAfterSecond = await row(dbPath, "SELECT COUNT(*) AS count FROM erasure_receipts");
@@ -240,7 +277,31 @@ test("erase: idempotent -- a second call with the SAME (tenant_id, idempotency_k
     assert.equal(first.replay, false);
     assert.equal(second.replay, true);
     assert.equal(second.erasureReceiptId, first.erasureReceiptId);
+    assert.deepEqual(second.tablesAffected, first.tablesAffected);
     assert.equal(receiptCountAfterSecond.count, receiptCountAfterFirst.count, "a replay must insert NO further erasure_receipts row");
+
+    // RKOI PH-MEMOS-4 review round 4, REQUIRED item 1: the replay arm must
+    // journal too, with `replay: true` genuinely set (not the hard-coded
+    // `false` the non-replay arm's payload always carries), the SAME
+    // tablesAffected snapshot the stored receipt already has, and no raw
+    // principal id in the payload -- the same actor (principalHmac)
+    // convention as every other erasure journal entry.
+    const journalRows = await rows(dbPath, "SELECT actor, payload_json FROM journal WHERE tool_name = 'msp_thread_principal_erase' ORDER BY journal_id ASC");
+    assert.equal(journalRows.length, 2, "a replayed idempotency_key call must add its OWN journal row, not skip journaling entirely");
+    const [firstEntry, replayEntry] = journalRows;
+    assert.equal(firstEntry.actor, replayEntry.actor, "the replay's actor must be the SAME pseudonym convention (principalHmac) as the non-replay arm");
+    const firstPayload = JSON.parse(firstEntry.payload_json);
+    const replayPayload = JSON.parse(replayEntry.payload_json);
+    assert.equal(firstPayload.replay, false);
+    assert.equal(replayPayload.replay, true);
+    assert.deepEqual(replayPayload.tables_affected, JSON.parse(erasureRow.tables_affected_json), "the replay's journaled tables_affected must match the stored receipt's own snapshot");
+    assert.ok(!JSON.stringify(replayPayload).includes("alice"), "the replay's journal payload must never carry the raw principal id");
+
+    // A true no-op on the data itself -- only the journal gets a new entry.
+    const messageAfterReplay = await row(dbPath, "SELECT redaction_state, text FROM thread_messages WHERE thread_id = ?", thread.threadId);
+    assert.deepEqual(messageAfterReplay, messageBeforeReplay, "a replay must never re-touch a content table");
+    const erasureRowAfterReplay = await row(dbPath, "SELECT tables_affected_json FROM erasure_receipts WHERE erasure_receipt_id = ?", first.erasureReceiptId);
+    assert.deepEqual(erasureRowAfterReplay, erasureRow, "a replay must never touch the stored erasure_receipts row");
   } finally {
     await call.close();
     cleanup();
@@ -550,6 +611,91 @@ test("ordering property (WARNING 1): the DEC-MEMOS-34 qualifying query (no left_
   }
 });
 
+// RKOI PH-MEMOS-4 review round 4, REQUIRED item 2: every existing
+// assertion above for summaries/delivery receipts is "length 0" or
+// "untouched" -- if #qualifyingThreadIds silently returned the empty set
+// UNCONDITIONALLY, every one of those cases would still pass, hiding a
+// real under-erasure regression. These two cases seed a thread that
+// GENUINELY qualifies (sole-ever HUMAN, no disqualifying message) and
+// prove the positive direction the store layer already gets right
+// (RKOI's own probes D1/D5) is also pinned by a repo-resident test.
+
+test("DEC-MEMOS-34 positive: a genuinely qualifying thread's summary is visible via export before erase, tombstoned (direct SELECT) and absent from export after", async () => {
+  const { dbPath, cleanup } = tempDbPath("erase-qualifying-summary");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = directClaims({ externalRoomRef: "dm-qualifying-summary" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-qualifying-summary" }, claims),
+    );
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed("msp_thread_message_append", { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi" }, claims),
+    );
+    // alice is the DIRECT thread's sole-ever HUMAN participant, and no
+    // UNKNOWN/OPERATOR message was ever posted -- this thread genuinely
+    // qualifies for both erasure's and export's session_summaries
+    // disposition.
+    await seedSummary(dbPath, { summaryId: "summary-qualifying-1", tenantId: "tenant-erasure", sessionId: inbound.session.sessionId, threadId: thread.threadId });
+
+    const beforeExport = await call("msp_thread_principal_export", signed("msp_thread_principal_export", {}, { ...claims, dataSubjectAccess: true }));
+    assert.equal(beforeExport.summaries.length, 1, "precondition: the seeded summary must genuinely qualify, or this test proves nothing");
+
+    const result = await call("msp_thread_principal_erase", signed("msp_thread_principal_erase", { idempotency_key: "k-qualifying-summary" }, { ...claims, dataSubjectAccess: true }));
+    assert.equal(result.tablesAffected.sessionSummaries, 1, "the erase call itself must count the tombstoned summary -- an unconditional empty-set regression would report 0 here");
+
+    const summaryRow = await row(dbPath, "SELECT redaction_state, summary_json FROM session_summaries WHERE summary_id = ?", "summary-qualifying-1");
+    assert.deepEqual(summaryRow, { redaction_state: "tombstoned", summary_json: "{}" }, "the qualifying summary must actually be tombstoned and blanked, proven by a direct SELECT, not merely the response's own count");
+
+    const afterExport = await call("msp_thread_principal_export", signed("msp_thread_principal_export", {}, { ...claims, dataSubjectAccess: true }));
+    assert.equal(afterExport.summaries.length, 0, "a tombstoned summary must be absent from export after erasure (DEC-MEMOS-30)");
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("DEC-MEMOS-34 positive: a genuinely qualifying thread's delivery receipt is tombstoned (content blanked) after erase", async () => {
+  const { dbPath, cleanup } = tempDbPath("erase-qualifying-receipt");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = directClaims({ externalRoomRef: "dm-qualifying-receipt" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-qualifying-receipt" }, claims),
+    );
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed("msp_thread_message_append", { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi" }, claims),
+    );
+    // A delivery receipt must reference an OUTBOUND message -- an AGENT
+    // reply to alice's own inbound exchange, the same shape the existing
+    // GROUP-thread reproduction test already uses.
+    const outbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        {
+          thread_id: thread.threadId, session_id: inbound.session.sessionId, exchange_id: inbound.message.exchangeId, reply_to_message_id: inbound.message.messageId,
+          source_event_id: "agent-out-1", speaker_id: claims.agentId, speaker_kind: "AGENT", identity_assurance: "VERIFIED", direction: "OUTBOUND", text: "agent reply", delivery_state: "QUEUED",
+        },
+        claims,
+      ),
+    );
+    await seedDeliveryReceipt(dbPath, { receiptId: "receipt-qualifying-1", tenantId: "tenant-erasure", messageId: outbound.message.messageId });
+
+    const result = await call("msp_thread_principal_erase", signed("msp_thread_principal_erase", { idempotency_key: "k-qualifying-receipt" }, { ...claims, dataSubjectAccess: true }));
+    assert.equal(result.tablesAffected.threadDeliveryReceipts, 1, "the erase call itself must count the tombstoned receipt -- an unconditional empty-set regression would report 0 here");
+
+    const receiptRow = await row(dbPath, "SELECT redaction_state, text FROM thread_delivery_receipts WHERE receipt_id = ?", "receipt-qualifying-1");
+    assert.deepEqual(receiptRow, { redaction_state: "tombstoned", text: "" }, "the qualifying receipt must actually be tombstoned and blanked, proven by a direct SELECT");
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------
 // BL-MEMOS-054: msp_thread_retention_tick.
 // ---------------------------------------------------------------------
@@ -666,6 +812,98 @@ test("retention: dry_run:true requires no nonce claim at all, and does not consu
     const noNonceClaims = { ...claims, operator: true, nonce: undefined };
     const result = await call("msp_thread_retention_tick", signed("msp_thread_retention_tick", { dry_run: true }, noNonceClaims));
     assert.ok(result, "dry_run:true must succeed with literally no nonce claim on the grant");
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+// RKOI PH-MEMOS-4 review round 4, REQUIRED item 3: RETENTION_TABLES names
+// five tables with THREE different age-column names
+// (thread_messages.occurred_at, {protected_memory_records,
+// session_summaries}.created_at, {thread_delivery_receipts,
+// thread_pending_deliveries}.recorded_at) -- a typo in any of the two
+// non-threadMessages column names would surface as a raw SqliteError to a
+// caller, and the existing dry-run/live test above never seeds the other
+// four tables, so it cannot catch that. This seeds aged content in all
+// five and asserts every one of the five tablesAffected counters, on
+// BOTH the dry-run (zero-mutation) and live (tombstone) pass.
+test("retention: dry-run and live pass report every one of the five RETENTION_TABLES counters correctly, not just threadMessages", async () => {
+  const { dbPath, cleanup } = tempDbPath("retention-all-tables");
+  const call = spawnRuntime(dbPath, { MSP_THREAD_RETENTION_DAYS: "1" });
+  try {
+    const claims = directClaims({ externalRoomRef: "dm-retention-all-tables" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-retention-all-tables" }, claims),
+    );
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "aged inbound", occurred_at: daysAgoIso(2) },
+        claims,
+      ),
+    );
+    const outbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        {
+          thread_id: thread.threadId, session_id: inbound.session.sessionId, exchange_id: inbound.message.exchangeId, reply_to_message_id: inbound.message.messageId,
+          source_event_id: "agent-out-1", speaker_id: claims.agentId, speaker_kind: "AGENT", identity_assurance: "VERIFIED", direction: "OUTBOUND", text: "aged outbound", delivery_state: "QUEUED",
+        },
+        claims,
+      ),
+    );
+
+    await seedProtectedMemoryRecord(dbPath, {
+      recordId: "record-aged-1",
+      tenantId: "tenant-erasure",
+      threadId: thread.threadId,
+      sessionId: inbound.session.sessionId,
+      assertedBySpeakerId: "alice",
+      createdAt: daysAgoIso(2),
+    });
+    await seedSummary(dbPath, { summaryId: "summary-aged-1", tenantId: "tenant-erasure", sessionId: inbound.session.sessionId, threadId: thread.threadId, createdAt: daysAgoIso(2) });
+    await seedDeliveryReceipt(dbPath, { receiptId: "receipt-aged-1", tenantId: "tenant-erasure", messageId: outbound.message.messageId, recordedAt: daysAgoIso(2) });
+    await seedPendingDelivery(dbPath, {
+      receiptId: "pending-aged-1",
+      tenantId: "tenant-erasure",
+      channelAccountId: "oa-erasure",
+      externalRoomRefHmac: hmacRoomRef(IDENTITY_KEY, { tenantId: "tenant-erasure", channelAccountId: "oa-erasure", externalRoomRef: "dm-retention-all-tables" }),
+      inboundMessageId: inbound.message.messageId,
+      recordedAt: daysAgoIso(2),
+    });
+
+    const expectedCounts = { threadMessages: 1, protectedMemoryRecords: 1, sessionSummaries: 1, threadDeliveryReceipts: 1, threadPendingDeliveries: 1 };
+
+    const dryRun = await call("msp_thread_retention_tick", signed("msp_thread_retention_tick", { dry_run: true }, { ...claims, operator: true }));
+    assert.deepEqual(dryRun.tablesAffected, expectedCounts, "a typo in any age-column name would surface as a raw SqliteError here, not merely a wrong count");
+
+    // dry_run:true must mutate NOTHING -- every seeded row's redaction_state
+    // stays 'none' across the dry-run pass. thread_messages is filtered by
+    // its own message_id (not merely thread_id): the thread carries TWO
+    // messages (the aged INBOUND one plus the fresh OUTBOUND reply), and
+    // only the aged one is a candidate at all.
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM thread_messages WHERE message_id = ?", inbound.message.messageId)).redaction_state, "none");
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM protected_memory_records WHERE record_id = ?", "record-aged-1")).redaction_state, "none");
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM session_summaries WHERE summary_id = ?", "summary-aged-1")).redaction_state, "none");
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM thread_delivery_receipts WHERE receipt_id = ?", "receipt-aged-1")).redaction_state, "none");
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM thread_pending_deliveries WHERE receipt_id = ?", "pending-aged-1")).redaction_state, "none");
+
+    const live = await call("msp_thread_retention_tick", signed("msp_thread_retention_tick", { dry_run: false }, { ...claims, operator: true }));
+    assert.deepEqual(live.tablesAffected, expectedCounts);
+
+    // dry_run:false must tombstone every one of the five rows -- and leave
+    // the thread's fresh OUTBOUND message (never a retention candidate)
+    // completely untouched, proving the UPDATE targeted the right row.
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM thread_messages WHERE message_id = ?", inbound.message.messageId)).redaction_state, "tombstoned");
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM thread_messages WHERE message_id = ?", outbound.message.messageId)).redaction_state, "none");
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM protected_memory_records WHERE record_id = ?", "record-aged-1")).redaction_state, "tombstoned");
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM session_summaries WHERE summary_id = ?", "summary-aged-1")).redaction_state, "tombstoned");
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM thread_delivery_receipts WHERE receipt_id = ?", "receipt-aged-1")).redaction_state, "tombstoned");
+    assert.equal((await row(dbPath, "SELECT redaction_state FROM thread_pending_deliveries WHERE receipt_id = ?", "pending-aged-1")).redaction_state, "tombstoned");
   } finally {
     await call.close();
     cleanup();
