@@ -915,6 +915,407 @@ test("CRITICAL 2: superseding an unknown id, another agent's AGENT-visibility re
   }
 });
 
+// RKOI review (stage-2 revision, WARNING 3, test gap #1): replay looped
+// over every one of the eight nonce-required tools/outcomes, not spot
+// checked on one. Each `replay()` call proves the SECOND, identical call
+// is refused grant_replayed; a handful also verify directly (via the
+// database) that the replay's own mutation never applied.
+test("BL-MEMOS-048: a replayed nonce is refused on every nonce-required tool/outcome, and the replay's own mutation never applies", async () => {
+  const { dbPath, cleanup } = tempDbPath("replayloop");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = resolveClaims({ externalRoomRef: "dm-replayloop", writePrivate: true, readPrivate: true, deliveryWriter: true });
+    const clone = (value) => JSON.parse(JSON.stringify(value));
+
+    async function replay(label, name, input, claimsForCall) {
+      const request = signed(name, input, claimsForCall);
+      const first = await call(name, clone(request));
+      await assert.rejects(
+        call(name, clone(request)),
+        /grant_replayed/,
+        `FAIL-CLOSED VIOLATION: ${label} accepted a replayed nonce`,
+      );
+      return first;
+    }
+
+    // --- resolve: mint outcome ---
+    const resolveInput = { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-replayloop" };
+    const minted = await replay("resolve (mint outcome)", "msp_thread_resolve", resolveInput, claims);
+    const tid = minted.thread.threadId;
+    assert.equal(minted.created, true);
+
+    // --- resolve: no-op outcome (already current, existing thread) ---
+    await replay("resolve (no-op outcome)", "msp_thread_resolve", resolveInput, claims);
+
+    // --- resolve: assertAgents attach outcome (a different, non-current agent) ---
+    const agentBClaims = { ...claims, agentId: "agent-replayloop-b", workspaceId: "workspace-replayloop-b", assertAgents: true };
+    const attached = await replay("resolve (assertAgents attach outcome)", "msp_thread_resolve", resolveInput, agentBClaims);
+    assert.equal(attached.agentAttached, true);
+
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: tid, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi" },
+        claims,
+      ),
+    );
+
+    // --- memory_record ---
+    await replay(
+      "memory_record",
+      "msp_thread_memory_record",
+      { thread_id: tid, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", scope: {}, body: { v: 1 }, source_message_refs: [inbound.message.messageId] },
+      claims,
+    );
+
+    // --- injection_record ---
+    await replay(
+      "injection_record",
+      "msp_thread_injection_record",
+      { thread_id: tid, exchange_id: inbound.message.exchangeId, injection_id: "inj-replayloop", packet_hash: "a".repeat(64), policy_revision: "v1", model_ref: "m", state: "RESOLVED" },
+      claims,
+    );
+    // Complete the injection's lifecycle (RESOLVED -> SUBMITTED ->
+    // COMPLETED) so this exchange is no longer "active" by the time
+    // compaction runs below -- claimCompaction refuses to claim a job
+    // whose source range still has a RESOLVED/SUBMITTED injection younger
+    // than 120s (unrelated to this test's own concern).
+    await call(
+      "msp_thread_injection_record",
+      signed(
+        "msp_thread_injection_record",
+        { thread_id: tid, exchange_id: inbound.message.exchangeId, injection_id: "inj-replayloop", packet_hash: "a".repeat(64), policy_revision: "v1", model_ref: "m", state: "SUBMITTED" },
+        claims,
+      ),
+    );
+    await call(
+      "msp_thread_injection_record",
+      signed(
+        "msp_thread_injection_record",
+        { thread_id: tid, exchange_id: inbound.message.exchangeId, injection_id: "inj-replayloop", packet_hash: "a".repeat(64), policy_revision: "v1", model_ref: "m", state: "COMPLETED" },
+        claims,
+      ),
+    );
+
+    // --- delivery_record: pending path ---
+    const deliveryClaims = { ...claims, audienceKind: undefined };
+    await replay(
+      "delivery_record (pending path)",
+      "msp_thread_delivery_record",
+      { inbound_message_id: "in-replayloop-future", source_event_id: "in-replayloop-future:assistant", receipt_id: "rc-replayloop-pending", outcome: "ACCEPTED", text: "t" },
+      deliveryClaims,
+    );
+
+    // --- delivery_record: resolved path ---
+    await replay(
+      "delivery_record (resolved path)",
+      "msp_thread_delivery_record",
+      { inbound_message_id: inbound.message.messageId, source_event_id: `${inbound.message.messageId}:assistant`, receipt_id: "rc-replayloop-resolved", outcome: "ACCEPTED", text: "t" },
+      deliveryClaims,
+    );
+
+    // --- worker tools: sweep, claim, commit, retry -- a real due session
+    // needs a real wall-clock wait (W1 / item 12: MSP_TEST_CLOCK never
+    // reaches a spawned child). A completed exchange (a delivered OUTBOUND
+    // reply, not QUEUED) is required, or claimCompaction's own "Reply
+    // receipt deadline has not elapsed" precondition (a SEPARATE 120s
+    // window, unrelated to the idle timeout below) refuses the claim.
+    const in2 = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: tid, source_event_id: "in-2", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi again", idle_timeout_minutes: 1 },
+        claims,
+      ),
+    );
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        {
+          thread_id: tid, session_id: in2.session.sessionId, exchange_id: in2.message.exchangeId, reply_to_message_id: in2.message.messageId,
+          source_event_id: "in-2:assistant", speaker_id: claims.agentId, speaker_kind: "AGENT", identity_assurance: "VERIFIED", direction: "OUTBOUND", text: "hello back", delivery_state: "DELIVERED",
+          idle_timeout_minutes: 1,
+        },
+        claims,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 65_000));
+    const workerClaims = { ...claims, operator: true };
+    const sweepResult = await replay("sweep", "msp_session_sweep", { limit: 10 }, workerClaims);
+    const jobId = sweepResult.jobs[0].jobId;
+
+    const claim1 = await replay("claim", "msp_session_compaction_claim", { job_id: jobId, worker_id: "worker-replayloop", lease_seconds: 60 }, workerClaims);
+    await replay("retry", "msp_session_compaction_retry", { job_id: jobId, error: "E", lease_token: claim1.leaseToken }, workerClaims);
+    const claim2 = await call(
+      "msp_session_compaction_claim",
+      signed("msp_session_compaction_claim", { job_id: jobId, worker_id: "worker-replayloop-2", lease_seconds: 60 }, workerClaims),
+    );
+    const summary = { topics: [], decisions: [], openQuestions: [], pendingActions: [], corrections: [], outcomes: [], participants: [] };
+    await replay(
+      "commit",
+      "msp_session_compaction_commit",
+      {
+        session_id: claim2.sessionId, job_id: jobId, source_start_sequence: claim2.sourceStartSequence, source_end_sequence: claim2.sourceEndSequence,
+        summary, source_digest: claim2.sourceDigest, policy_revision: "p", summarizer_version: "v", invocation_state: "TERMINAL", lease_token: claim2.leaseToken,
+      },
+      workerClaims,
+    );
+
+    // Direct-DB proof that a handful of the above replays truly did not
+    // apply a second time.
+    await call.close();
+    const { open } = await import("@freshair129/msp-storage/connection");
+    const db = open(dbPath);
+    try {
+      const records = db.prepare("SELECT COUNT(*) n FROM protected_memory_records WHERE thread_id = ?").get(tid);
+      assert.equal(records.n, 1, "FAIL-CLOSED VIOLATION: a replayed memory_record call created a second row");
+      const receipts = db.prepare("SELECT COUNT(*) n FROM thread_delivery_receipts WHERE receipt_id = ?").get("rc-replayloop-resolved");
+      assert.equal(receipts.n, 1, "FAIL-CLOSED VIOLATION: a replayed delivery_record call created a second receipt row");
+      const pending = db.prepare("SELECT COUNT(*) n FROM thread_pending_deliveries WHERE receipt_id = ?").get("rc-replayloop-pending");
+      assert.equal(pending.n, 1, "FAIL-CLOSED VIOLATION: a replayed pending delivery_record call created a second pending row");
+      const agents = db.prepare("SELECT COUNT(*) n FROM thread_agents WHERE thread_id = ? AND agent_id = ?").get(tid, "agent-replayloop-b");
+      assert.equal(agents.n, 1, "FAIL-CLOSED VIOLATION: a replayed assertAgents resolve attached a second thread_agents row");
+    } finally {
+      db.close();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+// RKOI review (stage-2 revision, WARNING 3, test gap #2): a departed agent
+// and an unattached (never-attached) agent BOTH get agent_not_current on
+// every thread-bound tool, not spot checked on a subset.
+test("BL-MEMOS-042: a departed agent and an unattached agent both get agent_not_current on every thread-bound tool", async () => {
+  const { dbPath, cleanup } = tempDbPath("bothdenied");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = resolveClaims({ externalRoomRef: "dm-bothdenied", writePrivate: true, readPrivate: true, deliveryWriter: true, agentId: "agent-bothdenied-current", workspaceId: "workspace-bothdenied-current" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-bothdenied" }, claims),
+    );
+    const tid = thread.threadId;
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: tid, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi" },
+        claims,
+      ),
+    );
+
+    // A second agent attaches (for the DEPARTED case), then leaves.
+    const departedClaims = { ...claims, agentId: "agent-bothdenied-departed", workspaceId: "workspace-bothdenied-departed" };
+    await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-bothdenied" }, { ...departedClaims, assertAgents: true }),
+    );
+    await call.close();
+    const { open } = await import("@freshair129/msp-storage/connection");
+    const db = open(dbPath);
+    try {
+      const info = db.prepare("UPDATE thread_agents SET left_at = ? WHERE thread_id = ? AND agent_id = ? AND left_at IS NULL").run(new Date().toISOString(), tid, "agent-bothdenied-departed");
+      assert.equal(info.changes, 1);
+    } finally {
+      db.close();
+    }
+
+    // A third agent that has NEVER resolved this thread at all.
+    const unattachedClaims = { ...claims, agentId: "agent-bothdenied-unattached", workspaceId: "workspace-bothdenied-unattached" };
+
+    const callAfter = spawnRuntime(dbPath);
+    try {
+      for (const [label, cl] of [["departed", departedClaims], ["unattached", unattachedClaims]]) {
+        await assert.rejects(
+          callAfter("msp_thread_resolve", signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-bothdenied" }, cl)),
+          /agent_not_current/,
+          `FAIL-CLOSED VIOLATION: ${label} agent resolved an existing thread without assertAgents`,
+        );
+        await assert.rejects(
+          callAfter(
+            "msp_thread_message_append",
+            signed(
+              "msp_thread_message_append",
+              { thread_id: tid, source_event_id: `g-human-${label}`, speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "x" },
+              cl,
+            ),
+          ),
+          /agent_not_current/,
+          `FAIL-CLOSED VIOLATION: ${label} agent appended a HUMAN-kind message`,
+        );
+        await assert.rejects(
+          callAfter(
+            "msp_thread_message_append",
+            signed(
+              "msp_thread_message_append",
+              { thread_id: tid, source_event_id: `g-agent-${label}`, speaker_id: cl.agentId, speaker_kind: "AGENT", identity_assurance: "VERIFIED", direction: "OUTBOUND", text: "x" },
+              cl,
+            ),
+          ),
+          /agent_not_current/,
+          `FAIL-CLOSED VIOLATION: ${label} agent appended an AGENT-kind message as itself`,
+        );
+        await assert.rejects(
+          callAfter("msp_thread_context", signed("msp_thread_context", { thread_id: tid }, cl)),
+          /agent_not_current/,
+          `FAIL-CLOSED VIOLATION: ${label} agent read context`,
+        );
+        await assert.rejects(
+          callAfter(
+            "msp_thread_memory_record",
+            signed(
+              "msp_thread_memory_record",
+              { thread_id: tid, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", scope: {}, body: { q: label }, source_message_refs: [inbound.message.messageId] },
+              cl,
+            ),
+          ),
+          /agent_not_current/,
+          `FAIL-CLOSED VIOLATION: ${label} agent recorded protected memory`,
+        );
+        await assert.rejects(
+          callAfter(
+            "msp_thread_injection_record",
+            signed(
+              "msp_thread_injection_record",
+              { thread_id: tid, exchange_id: inbound.message.exchangeId, injection_id: `inj-${label}`, packet_hash: "a".repeat(64), policy_revision: "v1", model_ref: "m", state: "RESOLVED" },
+              cl,
+            ),
+          ),
+          /agent_not_current/,
+          `FAIL-CLOSED VIOLATION: ${label} agent recorded an injection receipt`,
+        );
+        await assert.rejects(
+          callAfter(
+            "msp_thread_delivery_record",
+            signed(
+              "msp_thread_delivery_record",
+              { inbound_message_id: inbound.message.messageId, source_event_id: `${inbound.message.messageId}:assistant`, receipt_id: `rc-resolved-${label}`, outcome: "ACCEPTED", text: "t" },
+              { ...cl, audienceKind: undefined },
+            ),
+          ),
+          /agent_not_current/,
+          `FAIL-CLOSED VIOLATION: ${label} agent recorded a resolved-path delivery`,
+        );
+        await assert.rejects(
+          callAfter(
+            "msp_thread_delivery_record",
+            signed(
+              "msp_thread_delivery_record",
+              { inbound_message_id: `in-future-${label}`, source_event_id: `in-future-${label}:assistant`, receipt_id: `rc-pending-${label}`, outcome: "ACCEPTED", text: "t" },
+              { ...cl, audienceKind: undefined },
+            ),
+          ),
+          /agent_not_current/,
+          `FAIL-CLOSED VIOLATION: ${label} agent recorded a pending-path delivery`,
+        );
+      }
+
+      // claim/commit/retry: a real due job, then both a departed and an
+      // unattached WORKER agent are refused on each of the three tools.
+      // Every exchange needs a completed (non-QUEUED) OUTBOUND reply, or
+      // claimCompaction's own "Reply receipt deadline has not elapsed"
+      // precondition refuses the claim regardless of agent currency --
+      // "in-1" (from the setup above) never got one, since every attempt
+      // to deliver against it above was itself refused agent_not_current.
+      await callAfter(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          {
+            thread_id: tid, exchange_id: inbound.message.exchangeId, reply_to_message_id: inbound.message.messageId,
+            source_event_id: "in-1:assistant", speaker_id: claims.agentId, speaker_kind: "AGENT", identity_assurance: "VERIFIED", direction: "OUTBOUND", text: "reply", delivery_state: "DELIVERED",
+          },
+          claims,
+        ),
+      );
+      const setup = await callAfter(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          { thread_id: tid, source_event_id: "in-worker-setup", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi", idle_timeout_minutes: 1 },
+          claims,
+        ),
+      );
+      await callAfter(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          {
+            thread_id: tid, session_id: setup.session.sessionId, exchange_id: setup.message.exchangeId, reply_to_message_id: setup.message.messageId,
+            source_event_id: "in-worker-setup:assistant", speaker_id: claims.agentId, speaker_kind: "AGENT", identity_assurance: "VERIFIED", direction: "OUTBOUND", text: "reply", delivery_state: "DELIVERED",
+            idle_timeout_minutes: 1,
+          },
+          claims,
+        ),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 65_000));
+      const sweep = await callAfter("msp_session_sweep", signed("msp_session_sweep", { limit: 10 }, { ...claims, operator: true }));
+      const jobId = sweep.jobs[0].jobId;
+
+      const workerDepartedClaims = { ...claims, agentId: "agent-bothdenied-worker-departed", workspaceId: "workspace-bothdenied-worker-departed", operator: true };
+      const workerUnattachedClaims = { ...claims, agentId: "agent-bothdenied-worker-unattached", workspaceId: "workspace-bothdenied-worker-unattached", operator: true };
+      await callAfter(
+        "msp_thread_resolve",
+        signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-bothdenied" }, { ...workerDepartedClaims, assertAgents: true }),
+      );
+      await callAfter.close();
+      const db2 = open(dbPath);
+      try {
+        const info = db2.prepare("UPDATE thread_agents SET left_at = ? WHERE thread_id = ? AND agent_id = ? AND left_at IS NULL").run(new Date().toISOString(), tid, "agent-bothdenied-worker-departed");
+        assert.equal(info.changes, 1);
+      } finally {
+        db2.close();
+      }
+
+      const callAfter2 = spawnRuntime(dbPath);
+      try {
+        for (const [label, cl] of [["worker departed", workerDepartedClaims], ["worker unattached", workerUnattachedClaims]]) {
+          await assert.rejects(
+            callAfter2("msp_session_compaction_claim", signed("msp_session_compaction_claim", { job_id: jobId, worker_id: `w-${label}`, lease_seconds: 60 }, cl)),
+            /agent_not_current/,
+            `FAIL-CLOSED VIOLATION: ${label} claimed a compaction job`,
+          );
+        }
+        // commit/retry need a real lease -- claimed by the still-current
+        // minting agent, then handed (as if leaked) to each denied worker.
+        const realClaim = await callAfter2("msp_session_compaction_claim", signed("msp_session_compaction_claim", { job_id: jobId, worker_id: "worker-real", lease_seconds: 60 }, { ...claims, operator: true }));
+        const summary = { topics: [], decisions: [], openQuestions: [], pendingActions: [], corrections: [], outcomes: [], participants: [] };
+        for (const [label, cl] of [["worker departed", workerDepartedClaims], ["worker unattached", workerUnattachedClaims]]) {
+          await assert.rejects(
+            callAfter2(
+              "msp_session_compaction_commit",
+              signed(
+                "msp_session_compaction_commit",
+                {
+                  session_id: realClaim.sessionId, job_id: jobId, source_start_sequence: realClaim.sourceStartSequence, source_end_sequence: realClaim.sourceEndSequence,
+                  summary, source_digest: realClaim.sourceDigest, policy_revision: "p", summarizer_version: "v", invocation_state: "TERMINAL", lease_token: realClaim.leaseToken,
+                },
+                cl,
+              ),
+            ),
+            /agent_not_current/,
+            `FAIL-CLOSED VIOLATION: ${label} committed with another agent's lease`,
+          );
+          await assert.rejects(
+            callAfter2("msp_session_compaction_retry", signed("msp_session_compaction_retry", { job_id: jobId, error: "E", lease_token: realClaim.leaseToken }, cl)),
+            /agent_not_current/,
+            `FAIL-CLOSED VIOLATION: ${label} retried with another agent's lease`,
+          );
+        }
+      } finally {
+        await callAfter2.close();
+      }
+    } finally {
+      // callAfter already closed above before spawning callAfter2.
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 // BL-MEMOS-048 (Sec.6.1.1): nonce presence (grant_nonce_required) and
 // anti-replay (grant_replayed), on every nonce-required tool except
 // msp_thread_message_append (source_event_id already covers replay) and

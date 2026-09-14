@@ -12,7 +12,7 @@
 // how contracts/vault-scope-guard.mjs's assertVaultScope is orchestrated by
 // a transport/handlers/*.mjs module for the vault surface.
 import { hmacRoomRef, ThreadRegistry } from "@freshair129/msp-core/thread-memory";
-import { AgentNotCurrentError, GrantNonceRequiredError, ThreadAudienceMismatchError, ThreadNotFoundError } from "@freshair129/msp-core/errors";
+import { AgentNotCurrentError, GrantNonceRequiredError, ThreadAudienceMismatchError, ThreadNotFoundError, ThreadValidationError } from "@freshair129/msp-core/errors";
 import { assertThreadScope, verifyThreadGrant } from "@freshair129/msp-contracts/thread-access";
 import { validateThreadContract } from "@freshair129/msp-contracts/thread-schema";
 
@@ -89,9 +89,29 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
       // else -- a guard-level PRESENCE check, distinct from the
       // domain-level replay-CONSUMPTION logic (GrantReplayedError) each
       // relevant store method performs inside its own transaction.
+      //
+      // RKOI review (stage-2 revision, WARNING 2, DEC-MEMOS-20): presence
+      // (undefined/null -- "no nonce claim at all") is grant_nonce_required;
+      // anything else that is not a plain string of 1-128 characters is a
+      // MALFORMED claim, refused as a typed validation_failed naming the
+      // type problem, never silently coerced. The value is used EXACTLY as
+      // given -- never trimmed -- so `" padnonce "` and `"padnonce"` are
+      // two distinct nonces, not the same one collapsed by trimming.
       if (NONCE_REQUIRED_TOOLS.has(name)) {
-        if (!grant.nonce) throw new GrantNonceRequiredError();
+        if (grant.nonce === undefined || grant.nonce === null) throw new GrantNonceRequiredError();
+        if (typeof grant.nonce !== "string") {
+          throw new ThreadValidationError(`nonce must be a string, got ${typeof grant.nonce}.`);
+        }
+        if (grant.nonce.length < 1 || grant.nonce.length > 128) {
+          throw new ThreadValidationError(`nonce must be between 1 and 128 characters, got ${grant.nonce.length}.`);
+        }
         input.grant_nonce = grant.nonce;
+        // Sec.12.2: the nonce's own expiry is derived from the grant's OWN
+        // expiresAt claim (already bounds-checked by verifyThreadGrant
+        // against the real server clock above), never from any
+        // domain-layer business timestamp a caller can influence under
+        // MSP_TEST_CLOCK=1.
+        input.grant_expires_at = grant.expiresAt;
       }
 
       // RKOI review, item 11: these presence checks run BEFORE the thread

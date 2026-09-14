@@ -30,11 +30,11 @@ function withDefaultGrantFields(server) {
   const handlers = server.threadHandlers;
   const withNonce = (name) => {
     const original = handlers[name];
-    handlers[name] = (args = {}) => original({ grant_nonce: freshNonce(), ...args });
+    handlers[name] = (args = {}) => original({ grant_nonce: freshNonce(), grant_expires_at: Date.now() + 60_000, ...args });
   };
   const original = handlers.msp_thread_resolve;
   handlers.msp_thread_resolve = (args = {}) =>
-    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, grant_nonce: freshNonce(), ...args });
+    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, grant_nonce: freshNonce(), grant_expires_at: Date.now() + 60_000, ...args });
   withNonce("msp_thread_memory_record");
   withNonce("msp_thread_injection_record");
   withNonce("msp_session_sweep");

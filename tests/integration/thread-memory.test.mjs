@@ -50,11 +50,11 @@ function withDefaultGrantFields(server) {
   const handlers = server.threadHandlers;
   const withNonce = (name) => {
     const original = handlers[name];
-    handlers[name] = (args = {}) => original({ grant_nonce: freshNonce(), ...args });
+    handlers[name] = (args = {}) => original({ grant_nonce: freshNonce(), grant_expires_at: Date.now() + 60_000, ...args });
   };
   const original = handlers.msp_thread_resolve;
   handlers.msp_thread_resolve = (args = {}) =>
-    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, grant_nonce: freshNonce(), ...args });
+    original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, grant_nonce: freshNonce(), grant_expires_at: Date.now() + 60_000, ...args });
   // BL-MEMOS-112: recordDelivery's RESOLVED path re-verifies agent
   // currency using scope.agentId/workspaceId (thread-guard.mjs normally
   // supplies these from the verified grant) -- default them onto
@@ -62,7 +62,7 @@ function withDefaultGrantFields(server) {
   // change" treatment resolve already gets above.
   const originalDelivery = handlers.msp_thread_delivery_record;
   handlers.msp_thread_delivery_record = (args = {}) =>
-    originalDelivery({ grant_nonce: freshNonce(), ...args, delivery_scope: { agentId: "agent-test", workspaceId: "workspace-test", ...args.delivery_scope } });
+    originalDelivery({ grant_nonce: freshNonce(), grant_expires_at: Date.now() + 60_000, ...args, delivery_scope: { agentId: "agent-test", workspaceId: "workspace-test", ...args.delivery_scope } });
   withNonce("msp_thread_memory_record");
   withNonce("msp_thread_injection_record");
   withNonce("msp_session_sweep");

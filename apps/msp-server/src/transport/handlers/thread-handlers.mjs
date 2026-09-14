@@ -50,6 +50,7 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         // PH-MEMOS-3 stage 2 (BL-MEMOS-048): guard-verified nonce claim,
         // consumed inside resolveThread's own transaction on every outcome.
         nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
         now: now(args),
       });
     },
@@ -76,6 +77,8 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         // PH-MEMOS-3 stage 2 (§8.4): the journal actor for an
         // AGENT-attributable entry becomes this id directly, in plain text.
         agentId: args.grant_agent_id,
+        // RKOI review (stage-2 revision, WARNING 6): journal workspace_id.
+        workspaceId: args.grant_workspace_id,
         now: now(args),
       });
     },
@@ -97,8 +100,11 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         // (grant.agentId), never trusted from the wire; visibility is a
         // new, optional, additive request field (default THREAD).
         agentId: args.grant_agent_id,
+        // RKOI review (stage-2 revision, WARNING 6): journal workspace_id.
+        workspaceId: args.grant_workspace_id,
         visibility: args.visibility,
         nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
         now: now(args),
       });
     },
@@ -125,6 +131,9 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         channelAccountId: args.channel_account_id,
         externalRoomRef: args.external_room_ref,
         nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
+        // RKOI review (stage-2 revision, WARNING 6): journal workspace_id.
+        workspaceId: args.grant_workspace_id,
       });
     },
 
@@ -144,16 +153,21 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         // the journal actor, replacing the fixed "msp:compaction-worker"
         // label -- it is now a real, current, attributable agent.
         agentId: args.grant_agent_id,
+        // RKOI review (stage-2 revision, WARNING 6): journal workspace_id.
+        workspaceId: args.grant_workspace_id,
         nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
         now: now(args),
       });
     },
 
     async msp_session_compaction_retry(args = {}) {
-      return store.retryCompaction({ jobId: args.job_id, error: args.error, leaseToken: args.lease_token, nonce: args.grant_nonce, now: now(args) });
+      return store.retryCompaction({ jobId: args.job_id, error: args.error, leaseToken: args.lease_token, nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at, now: now(args) });
     },
     async msp_session_compaction_claim(args = {}) {
-      return store.claimCompaction({ jobId: args.job_id, workerId: args.worker_id, leaseSeconds: args.lease_seconds, nonce: args.grant_nonce, now: now(args) });
+      return store.claimCompaction({ jobId: args.job_id, workerId: args.worker_id, leaseSeconds: args.lease_seconds, nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at, now: now(args) });
     },
     async msp_thread_delivery_record(args = {}) {
       return store.recordDelivery({
@@ -165,6 +179,7 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         providerRef: args.provider_ref,
         scope: args.delivery_scope,
         nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
         now: now(args),
       });
     },
@@ -178,6 +193,7 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         modelRef: args.model_ref,
         state: args.state,
         nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
         now: now(args),
       });
     },
