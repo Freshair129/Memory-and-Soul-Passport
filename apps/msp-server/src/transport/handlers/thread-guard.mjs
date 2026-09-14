@@ -276,38 +276,66 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
           "thread_scope_denied: person_id must be absent or equal to the grant principal.",
         );
 
+        // BL-MEMOS-058 (design Sec.7 rule 2, PH-MEMOS-4 review round 2,
+        // CRITICAL 1): a THREE-WAY branch, not a modified two-branch
+        // condition -- "no CURRENT row" and "no row at all" are different
+        // questions, and conflating them let a departed principal's very
+        // next plain HUMAN append silently re-create membership through
+        // the claim-free first-membership path below.
+        const everParticipated = registry.hasEverParticipated(thread.threadId, input.speaker_id);
         const current = registry.findCurrentParticipant(thread.threadId, input.speaker_id);
-        if (!current) {
-          // The FIRST-EVER membership for this speaker_id is always bound
-          // to the grant principal -- never caller-asserted, even under
-          // assertParticipants. zuri-ai's frozen flow (resolve, then a
-          // HUMAN append, no separate "join" tool) depends on this
-          // succeeding with no extra claim.
+        if (!everParticipated) {
+          // Case 1: a genuine first-ever join -- unchanged fast path.
+          // Never reads `current` (also null here, but incidentally --
+          // the branch's condition is `everParticipated`, not `current`
+          // truthiness). zuri-ai's frozen flow (resolve, then a HUMAN
+          // append, no separate "join" tool) depends on this succeeding
+          // with no extra claim.
           assertThreadScope(
             input.speaker_id === grant.principalId,
             "thread_scope_denied: the first HUMAN membership on a thread must be created by the grant principal.",
           );
+        } else if (current === null) {
+          // Case 2: a REJOIN -- a row existed before (current or
+          // departed), but none is open now. Unconditional
+          // assertParticipants, no DEC-MEMOS-15 self-upgrade exception,
+          // and `current.personId` (or any other field of `current`) is
+          // NEVER read -- `current` is null by this branch's own
+          // definition, there is no stored row to compare against. Case
+          // 2b (intended, design Sec.7 rule 2 round 3): this condition is
+          // keyed on speakerId alone, not `speakerId ===
+          // grant.principalId`, so a Tier-1 caller with assertParticipants
+          // can also re-attach a DIFFERENT departed third party to a
+          // GROUP/ROOM thread -- refused unconditionally on DIRECT by the
+          // existing single-HUMAN schema trigger (Sec.6.3).
+          assertThreadScope(
+            grant.assertParticipants === true,
+            "thread_scope_denied: rejoining a thread after leaving requires assertParticipants.",
+          );
         } else if (input.speaker_id !== grant.principalId) {
-          // Never self -- ANY touch to someone else's participant row,
-          // changed or not, requires an explicit assertion.
+          // Case 3a: a current row exists, third-party change. Never
+          // self -- ANY touch to someone else's participant row, changed
+          // or not, requires an explicit assertion.
           assertThreadScope(
             grant.assertParticipants === true,
             "thread_scope_denied: creating, upgrading or reassigning a HUMAN participant requires assertParticipants.",
           );
         } else {
-          // input.speaker_id === grant.principalId, and the REQUESTED
-          // person_id is already constrained above to {null,
-          // grant.principalId}. RKOI review (docs round 4), item 3
-          // (tightening DEC-MEMOS-15): the STORED row's person_id must be
-          // checked too, not just the value this request sends -- a self
-          // upgrade is free only when the participant record was not
-          // already linked to some OTHER person (however that happened).
-          // If it was, this still needs an explicit assertion even though
-          // speaker_id and the REQUESTED person_id both look self-
-          // referential. A downgrade (VERIFIED -> PENDING) reaches this
-          // same branch and is likewise never gated on its own --
-          // ThreadMemoryStore#applyHumanParticipant already treats a
-          // downgrade as no change at all, so it is accepted here and
+          // Case 3b: a current row exists, self (input.speaker_id ===
+          // grant.principalId, and the REQUESTED person_id is already
+          // constrained above to {null, grant.principalId}). RKOI review
+          // (docs round 4), item 3 (tightening DEC-MEMOS-15): the STORED
+          // row's person_id must be checked too, not just the value this
+          // request sends -- a self upgrade is free only when the
+          // participant record was not already linked to some OTHER
+          // person (however that happened). If it was, this still needs
+          // an explicit assertion even though speaker_id and the
+          // REQUESTED person_id both look self-referential. Safe to read
+          // `current.personId` here: `current` is non-null by this
+          // branch's own construction. A downgrade (VERIFIED -> PENDING)
+          // reaches this same branch and is likewise never gated on its
+          // own -- ThreadMemoryStore#applyHumanParticipant already treats
+          // a downgrade as no change at all, so it is accepted here and
           // silently ignored there, never refused and never stored.
           const storedPerson = current.personId ?? null;
           if (storedPerson !== null && storedPerson !== grant.principalId) {

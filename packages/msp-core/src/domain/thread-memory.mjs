@@ -415,6 +415,20 @@ export class ThreadRegistry {
     return row ? rowParticipant(row) : null;
   }
 
+  // BL-MEMOS-058 (design Sec.7 rule 2, PH-MEMOS-4 review round 2, CRITICAL
+  // 1): an EXISTENCE check over EVERY row for this thread and speaker --
+  // current or departed, no left_at filter at all. Distinct from
+  // findCurrentParticipant (left_at IS NULL only): the guard needs to tell
+  // "this speaker_id has never had a row on this thread" apart from
+  // "a row exists, but none is open" to refuse a claim-free rejoin after
+  // `leave`, which findCurrentParticipant alone cannot distinguish from a
+  // genuine first-ever join.
+  hasEverParticipated(threadId, speakerId) {
+    if (!threadId || !speakerId) return false;
+    const row = this.#db.prepare("SELECT 1 FROM thread_participants WHERE thread_id = ? AND speaker_id = ? LIMIT 1").get(threadId, speakerId);
+    return !!row;
+  }
+
   // The DIRECT thread's sole current HUMAN participant, if any. This is the
   // C-1 private-read predicate's DB-backed half: DIRECT thread_kind, a
   // VERIFIED HUMAN participant who has not left, matching the grant
