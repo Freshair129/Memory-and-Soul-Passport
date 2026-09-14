@@ -586,7 +586,7 @@
           "task_ids": [
             "BL-MEMOS-050..057"
           ],
-          "label": "PH-MEMOS-4 spec review, round 3 (1 critical: ADR decision paragraphs stale)"
+          "label": "PH-MEMOS-4 spec review, round 3 (1 critical: ADR decision paragraphs stale, npm test 144/104/293 green)"
         }
       }
     },
@@ -597,8 +597,16 @@
           "task_ids": [
             "BL-MEMOS-050..059"
           ],
-          "label": "PH-MEMOS-4 spec revision round 4 (design v0.5.3b)",
-          "status": "open"
+          "label": "PH-MEMOS-4 spec revision round 4 (design v0.5.3b, 4d0d81d)"
+        }
+      }
+    },
+    "ac51e0649aa843727": {
+      "actor": "coordinator",
+      "segments": {
+        "1": {
+          "task_ids": [],
+          "label": "Sync msp-client-js lockfile version drift (main, PR #27)"
         }
       }
     }
@@ -855,6 +863,13 @@
         "BL-MEMOS-050..057"
       ],
       "label": "Commit PH-MEMOS-4 spec; dispatch RKOI review"
+    },
+    "42": {
+      "task_ids": [
+        "BL-MEMOS-050..057"
+      ],
+      "label": "Commit spec round 4; fix+PR lockfile drift on main; dispatch RKOI round 4",
+      "status": "open"
     }
   }
 }
