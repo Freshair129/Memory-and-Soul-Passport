@@ -458,8 +458,7 @@
             "BL-MEMOS-049",
             "BL-MEMOS-047"
           ],
-          "label": "CI engine canary for V8 JSON.parse bug",
-          "status": "open"
+          "label": "CI engine canary for V8 JSON.parse bug (e0a3624)"
         }
       }
     }
@@ -661,6 +660,13 @@
         "BL-MEMOS-087"
       ],
       "label": "Record owner confirmation of RKOI rulings 1-4 (docs ace74fc)"
+    },
+    "33": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "Open all PRs: bodies and script prepared; push blocked by auto-mode classifier",
+      "status": "open"
     }
   }
 }
