@@ -178,6 +178,50 @@ test("an escaped character inside a VALUE is still accepted and stored/returned 
   }
 });
 
+// RKOI review (stage-2 revision, CRITICAL): the scanner used to be
+// recursive (one JS function call per nesting level), and this server's
+// `rl.on("line", ...)` handler had no try/catch around the call at all. A
+// single ~40 KB line of ~20,000 nested arrays blew the call stack
+// (`RangeError: Maximum call stack size exceeded`), uncaught, inside a
+// synchronous readline event -- the whole server process crashed and never
+// answered another request. This is now fixed two independent ways (see
+// escaped-object-key-scan.mjs's own header): the scanner is iterative
+// (explicit stack, not the JS call stack), and it never throws at all
+// (any internal failure is treated as a refusal). RKOI's probe used
+// 100,000; this test uses the same depth.
+test("CRITICAL: a 100,000-depth nested line does not crash the server -- it is answered (accepted or refused), and the next request is still answered", async () => {
+  const { dbPath, cleanup } = tempDbPath("deep-nesting");
+  const { child, lines } = spawnRaw(dbPath);
+  try {
+    write(child, { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "t", version: "0" } } });
+    await waitForLines(lines, 1);
+
+    const depth = 100_000;
+    const deep = "[".repeat(depth) + "1" + "]".repeat(depth);
+    writeRaw(child, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"msp_memory_upsert","arguments":{"x":${deep}}}}`);
+    await waitForLines(lines, 2, 15_000);
+    // Whatever the answer -- accepted, or a typed refusal -- id 2 must be
+    // answered, and the SERVER PROCESS must still be alive to answer it.
+    const deepResponse = JSON.parse(lines[1]);
+    assert.equal(deepResponse.id, 2);
+    assert.equal(child.exitCode, null, "the server process must still be running after the deep line");
+
+    // The process must still be alive and serving: a completely unrelated,
+    // well-formed next request is still answered.
+    write(child, {
+      jsonrpc: "2.0", id: 3, method: "tools/call",
+      params: { name: "msp_workspace_register", arguments: { actor: "boss", workspace_id: "ws-after-deep", project_id: null, workspace_path: "/w/ws-after-deep", idempotency_key: "r-ad", run_id: "run-ad", source_hash: "a".repeat(64), schema_version: "govibe-workspace-register/v1" } },
+    });
+    await waitForLines(lines, 3, 10_000);
+    const nextResponse = JSON.parse(lines[2]);
+    assert.equal(nextResponse.id, 3);
+    assert.notEqual(nextResponse.result?.isError, true, "the next request after the deep line must succeed normally");
+  } finally {
+    await closeChild(child);
+    cleanup();
+  }
+});
+
 test("literal (unescaped) non-ASCII object keys -- Thai and emoji -- are accepted, not refused", async () => {
   const { dbPath, cleanup } = tempDbPath("non-ascii-key");
   const { child, lines } = spawnRaw(dbPath);

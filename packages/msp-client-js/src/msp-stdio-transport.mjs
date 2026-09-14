@@ -172,13 +172,25 @@ export function createMspStdioCaller({ command, args = [], cwd, env = process.en
   function request(method, params = {}) {
     if (closed) return Promise.reject(new Error("MSP process is closed."));
     const id = nextId++;
+    const text = JSON.stringify({ jsonrpc: "2.0", id, method, params });
+    // RKOI review (stage-2 revision, WARNING 5): the client used to scan
+    // only what the SERVER sent back, never its own outgoing requests. The
+    // server already refuses (id: null) any inbound line shaped like this,
+    // but that refusal can never be correlated back to THIS request (no id
+    // to match against `pending`) -- the caller previously just waited out
+    // the full `timeoutMs` before learning anything was wrong. Scanned and
+    // refused here instead, synchronously, before anything is written to
+    // the child's stdin, so the caller learns immediately.
+    if (containsEscapedObjectKey(text)) {
+      throw new Error(`${method} request contains object keys with escape sequences (refused before sending).`);
+    }
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         pending.delete(id);
         reject(new Error(`MSP request timed out after ${timeoutMs}ms: ${method}`));
       }, timeoutMs);
       pending.set(id, { resolve, reject, timeout });
-      child.stdin.write(encode({ jsonrpc: "2.0", id, method, params }));
+      child.stdin.write(Buffer.from(`${text}\n`, "utf8"));
     });
   }
 

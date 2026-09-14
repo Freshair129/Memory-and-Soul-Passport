@@ -1,6 +1,6 @@
 {
   "name": "@freshair129/msp-client-js",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "type": "module",
   "description": "Standalone Node.js client for the Mission State Protocol stdio runtime.",
   "exports": {

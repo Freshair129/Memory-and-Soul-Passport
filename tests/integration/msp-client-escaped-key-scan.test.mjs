@@ -81,4 +81,50 @@ describe("msp-client-js: escaped-object-key pre-scan on inbound responses", () =
       await call.close();
     }
   });
+
+  // RKOI review (stage-2 revision, CRITICAL): the scanner used to be
+  // recursive, and this client's own stdout `data` listener had no
+  // try/catch around it -- a sufficiently deep response line's
+  // `RangeError: Maximum call stack size exceeded` would propagate
+  // uncaught out of that listener and crash the CALLING application, not
+  // just this client's own child process.
+  it("a 100,000-depth response line does not crash the calling process -- it is answered (accepted or refused), and the next request is still answered", async () => {
+    const call = spawnFixture();
+    try {
+      const depth = 100_000;
+      const deep = "[".repeat(depth) + "1" + "]".repeat(depth);
+      const rawLine = `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{}"}],"structuredContent":{"x":${deep}}}}`;
+      // Whatever the outcome -- resolved with the deep value, or rejected
+      // by the scanner's own defensive try/catch treating an internal
+      // failure as a refusal -- this call must SETTLE, not hang, and must
+      // never throw a raw RangeError out of this process.
+      await Promise.race([
+        call("whatever", { raw_response_line: rawLine }).then(
+          () => "resolved",
+          (error) => {
+            if (error instanceof RangeError) throw error;
+            return "rejected:" + error.message;
+          },
+        ),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("deep-nesting call never settled")), 8000)),
+      ]);
+      // The transport must still be alive and serving afterward.
+      const result = await call("whatever", {});
+      expect(result).toEqual({ ok: true });
+    } finally {
+      await call.close();
+    }
+  });
+
+  // Deliberately NOT tested here: an OUTGOING call whose `params` is
+  // already a 100,000-deep-nested real JS object graph (as opposed to
+  // TEXT the scanner walks). Building that object at all via
+  // `JSON.parse("[".repeat(100000) + ... )` and then re-serializing it
+  // with the native `JSON.stringify` throws its own `RangeError` --
+  // independent of, and pre-existing before, this scanner's own outbound
+  // check (encode()/JSON.stringify(payload) already ran on the exact same
+  // object shape before WARNING 5's fix). That is a native JSON.stringify
+  // limit on deeply-nested REAL object graphs, not a defect in this
+  // scanner (which only ever walks already-serialized TEXT) -- out of
+  // scope for this CRITICAL finding.
 });

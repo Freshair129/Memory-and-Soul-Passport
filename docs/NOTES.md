@@ -1,5 +1,5 @@
 ---
-version: "0.2.5b"
+version: "0.2.6b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
 last_update: "2026-09-15T00:10:00+07:00,KIN"
 status: "beta"
@@ -314,10 +314,103 @@ and `tests/contract/thread-service-keyring.test.mjs`'s "PRIMED regression"
 case (which fails against the pre-fix implementation and passes against
 the current one) for the full detail and proof.
 
+### RKOI stage-2 revision: the scanner itself was recursive (CRITICAL, now fixed)
+
+The transport-level scanner (`escaped-object-key-scan.mjs`, both copies)
+that the rule above describes was originally implemented as a
+RECURSIVE-descent walk (one JS function call per nesting level), and
+`stdio-jsonrpc-server.mjs`'s `rl.on("line", ...)` handler called it with no
+try/catch. A single ~40 KB line of ~20,000 nested arrays overflowed the
+call stack (`RangeError: Maximum call stack size exceeded`), uncaught,
+inside a synchronous readline callback -- the whole server process
+crashed and never answered another request. The client's own stdout
+listener had the identical gap, which would have crashed the *calling*
+application on a sufficiently deep response line. Fixed two independent
+ways in both copies: the scanner is now ITERATIVE (an explicit
+array-based stack stands in for the JS call stack recursion used to
+consume), and the function's own body is wrapped in try/catch so it can
+only ever return a boolean, never throw -- any internal failure is
+treated as a refusal. Key/value classification is unchanged (RKOI's own
+20,000-case fuzz: 0 wrong classifications both before and after). See
+`tests/security/transport-json-parse-hardening.security.mjs`'s and
+`tests/integration/msp-client-escaped-key-scan.test.mjs`'s 100,000-depth
+cases.
+
+Two more fixes landed in the same revision, both about the boundary the
+scan protects, not the scan itself:
+
+- **GKS response frames** (`apps/msp-server/src/providers/
+  gks-stdio-provider.mjs`) call the native `JSON.parse` on GKS's own
+  response text in this same long-lived MSP process -- the identical risk
+  the parent transport already defends against. Scanned the same way,
+  refusing that one in-flight GKS request (`gks_provider_unavailable`,
+  the existing provider error vocabulary) without touching MSP's own
+  process; a fresh child is spawned per call, so this already fails
+  closed for "that request only."
+- **The client now also scans its own OUTGOING requests**
+  (`msp-stdio-transport.mjs`'s `request()`), not only what the server
+  sends back. Previously an escaped-key REQUEST built by the client's own
+  caller would sit in `pending` until the full `timeoutMs` elapsed, since
+  the server's `id: null` refusal can never be correlated back to a
+  specific pending request. Refused synchronously now, before anything is
+  written to the child's stdin.
+
+### Legacy stored data may already contain an escaped key
+
+A row written to `entities`/`journal`/`protected_memory_records`
+(`entity-store.mjs`, `journal.mjs`, `thread-memory.mjs`) or any other
+JSON-bearing column **before** this scan existed can still carry a key
+that needed an escape sequence -- the scan only ever protects requests
+and responses at the transport boundary going forward; it cannot rewrite
+data already on disk. Reading such a row back and echoing it in a
+response would hand a client the exact line shape this whole defense
+exists to refuse.
+
+**Fix, server-side (the simpler of the two options RKOI offered).**
+`stdio-jsonrpc-server.mjs`'s own `write(payload)` now scans every
+OUTGOING line the same way, before it is ever written: if a stored value
+would make a response's own object keys contain an escape sequence, the
+server emits a typed `invalid_response` error for that response's `id`
+instead of the real payload. This is simpler than a client-side "fail
+that request only" fix would have been, because the server already knows
+which `id` a response is for -- a client-side fix would first have to
+extract an `id` out of the very raw, untrusted text it cannot yet safely
+parse, which is the exact problem this whole scan exists to avoid. The
+client's own pre-existing "kill the child" behavior on an inbound
+escaped-key line (still present, as defense in depth for a non-MSP or
+future server) is consequently unreachable in ordinary operation against
+this server, since it now never emits such a line at all.
+
+**Audit query.** To find whether any already-stored JSON in this
+database might be affected, run (SQLite CLI or `better-sqlite3`):
+
+```sql
+SELECT 'entities.body_json' AS column, entity_id AS row_id FROM entities WHERE body_json LIKE '%\%'
+UNION ALL
+SELECT 'journal.payload_json', journal_id FROM journal WHERE payload_json LIKE '%\%'
+UNION ALL
+SELECT 'protected_memory_records.body_json', record_id FROM protected_memory_records WHERE body_json LIKE '%\%'
+UNION ALL
+SELECT 'protected_memory_records.scope_json', record_id FROM protected_memory_records WHERE scope_json LIKE '%\%';
+```
+
+A `LIKE '%\%'` hit only means the column contains a literal backslash
+byte somewhere in the text -- inside a JSON string VALUE, that is
+completely normal and expected (e.g. `\n`, `\"`, a Windows path). It is
+**not**, by itself, proof of an escaped object KEY (the actual risk this
+whole defense is about); confirming that requires running each hit's
+text through `containsEscapedObjectKey` (or the client's identical copy)
+directly. This query is a cheap first-pass filter to shrink the set of
+rows worth checking that way, not a final verdict on its own. No such row
+is currently known to exist in this project's own data; this audit is
+provided for whoever operates a deployment old enough to predate this
+fix and wants to check for themselves.
+
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.6b | 2026-09-15 | beta | RKOI stage-2 revision of the 0.2.5b/0.2.4b work (NEEDS REVISION, 1 critical): the transport-level escaped-object-key scanner was itself recursive and could crash the server (and, symmetrically, the calling app via the client) on a deeply nested line -- rewritten iterative with an explicit stack, wrapped so it can only ever refuse, never throw. Also: nonce `expires_at` now derives from `grant.expiresAt`, never a caller-suppliable business timestamp; the guard validates nonce type/length (1-128, untrimmed) with a typed `validation_failed`; the GKS provider and the client's own outgoing requests are scanned too; the server refuses to ever emit a response whose (possibly legacy) stored data would itself need an escaped key; journal `workspace_id` is `grant.workspaceId` and a mint's actor is `grant.agentId`, not the old placeholders; a resolve refused `agent_not_current` no longer bumps `threads.updated_at`; sweep consumes its nonce inside its own mutation's transaction. See "RKOI stage-2 revision" below and the task's own report for the full finding-to-test map. | working-tree | KIN |
 | 0.2.5b | 2026-09-15 | beta | TASK-MEMOS-002 stage 2 multi-agent complete on `feat/memos-002-stage2-multi-agent` (BL-MEMOS-040..048/112, per docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md v0.4.3b, RKOI-approved spec): migration 0009 (`thread_agents`, `grant_nonces`, per-agent record visibility columns) landed its writers/readers -- required `agentId`/`workspaceId`/`nonce` grant claims (DEC-MEMOS-17 hard cutover, no compatibility mode), the agent gate on every thread-bound tool, mint-race-safe attachment, delivery's own agent scoping (CRITICAL 1), per-agent protected-record visibility with unified supersession refusals (CRITICAL 2), and replay-nonce bookkeeping. `tests/cross/zuri-thread-contract.test.mjs` rewritten in full: zuri-ai's real, unmodified adapter is now refused `grant_signature_invalid` at its very first call, proven against the actual adapter source, plus a shape-only case proving MSP's responses still satisfy every shape check that adapter performs once the three new claims are added to the same wire requests. `packages/msp-client-js` needed no change (grant contents are opaque to it) and was not bumped. Full details and the GATE-MEMOS-3/§15 test mapping are in the task's own final report. | working-tree | KIN |
 | 0.2.4b | 2026-09-15 | beta | RKOI ruling (merge-blocking), fixed on `feat/memos-002-stage2-multi-agent`: bisected the V8 `JSON.parse` non-first-key corruption to a real engine regression (V8 12.4-12.9; Node <=22.23 clean, Node 23 through at least 26.8 affected) and proved it reaches real storage on the real server (one tenant's `msp_memory_upsert` body can corrupt a later, unrelated tenant's own upsert body, persisted and read back inside that tenant's own vault). Added a transport-level, engine-independent raw-text scanner refusing any inbound line whose object keys (any depth, every tool) contain an escape sequence, before the real `JSON.parse` runs -- `apps/msp-server/src/transport/stdio-jsonrpc-server.mjs` on the server and `packages/msp-client-js/src/msp-stdio-transport.mjs` on the client (duplicated scanner, client stays dependency-free). See "RKOI's bisection and the transport-level rule" above. | working-tree | KIN |
 | 0.2.3b | 2026-09-15 | beta | GHOST QA finding, fixed on `feat/memos-002-stage2-multi-agent`: V8's `JSON.parse` has a real engine bug on Node v24.19.0 (a later, differently-escaped object parsed in the same process can come back with a corrupted non-first key name; values are unaffected). `thread-service-keyring.mjs`'s `parseThreadServiceKeyring` used to read a value via `parsed[tenantId]` on the native `JSON.parse` result, which a corrupted key made miss silently, false-refusing an otherwise-valid keyring (149/20,000 in GHOST's fuzz) -- always fail-closed, never a wrong key. The keyring no longer depends on native `JSON.parse` key OR value content at all; see "V8 `JSON.parse` non-first-key corruption on Node v24.19.0" above. | working-tree | KIN |

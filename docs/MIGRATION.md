@@ -187,6 +187,21 @@ The fix puts the guarantee on the plain path itself: `runMigrations` now calls t
 
 **Warning 3 (included): a foreign key to one of SQLite's own internal `sqlite_*` catalog tables (e.g. `sqlite_sequence`) is correctly refused, but is now attributed accurately.** `mainSchemaEntries` deliberately excludes `sqlite_*` names from its lookups -- they are never legitimate migration targets -- so such a target used to fall through to the "missing" case and claim the table does not exist, when it is very much present (SQLite refuses to resolve a key against it with `foreign key mismatch`, confirmed against real SQLite, because it has no usable key for a foreign key to target). `findForeignKeyTargetTypeIssue` now checks an *unfiltered* `PRAGMA table_list` reading before concluding "missing", and reports a distinct kind, worded "which is an internal SQLite table, not a valid foreign-key target" rather than claiming it does not exist. The refusal itself, and its prefix, are unchanged on both paths and pre-existing -- only the reason given is now accurate.
 
+## Legacy stored data and the escaped-object-key transport scan
+
+TASK-MEMOS-002 stage 2 added an engine-independent scanner
+(`escaped-object-key-scan.mjs`) at every transport boundary, refusing an
+inbound or outbound line whose object keys contain an escape sequence
+(see `docs/NOTES.md`'s "V8 `JSON.parse` non-first-key corruption" section
+for the full finding). That scan only ever protects requests and
+responses going forward -- it cannot rewrite a row already written to
+`entities`/`journal`/`protected_memory_records` (or any other JSON-bearing
+column) **before** this fix existed. A deployment migrating from a
+pre-fix version should run the audit query in `docs/NOTES.md`'s "Legacy
+stored data may already contain an escaped key" section to check whether
+any already-stored JSON might be affected; no migration step here
+rewrites such data automatically.
+
 ## Rollback
 
 Revert the single dependency/re-export change and reinstall GoVibe dependencies. The original `packages/govibe-core/src/msp-client.mjs` and `msp-stdio-transport.mjs` remain available until the consumer cutover is independently accepted.

@@ -41,7 +41,24 @@ export function createStdioJsonRpcServer({
   }
 
   function write(payload) {
-    output.write(encodeLine(payload));
+    const line = encodeLine(payload);
+    // RKOI review (stage-2 revision, WARNING 4): a row stored BEFORE the
+    // inbound pre-scan existed (entity-store.mjs, journal.mjs,
+    // thread-memory.mjs) can still carry a key that needed an escape
+    // sequence -- reading it back and echoing it in a response would hand
+    // a client the exact line shape this whole defense exists to refuse.
+    // Refused here, server-side, before the line is ever written: the
+    // server already knows this response's own `id` (no untrusted-text
+    // extraction needed, unlike a client-side fix, which would have to
+    // pull an id out of the very raw text it cannot yet safely parse --
+    // the simpler option, and the one actually implemented). The
+    // fallback error never echoes the stored value or its key.
+    if (containsEscapedObjectKey(line)) {
+      const id = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload.id ?? null) : null;
+      output.write(encodeLine({ jsonrpc: "2.0", id, error: { code: -32000, message: "invalid_response: a stored value could not be safely serialized." } }));
+      return;
+    }
+    output.write(line);
   }
 
   function success(id, result) {

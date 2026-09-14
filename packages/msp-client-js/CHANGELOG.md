@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.5
+
+RKOI stage-2 revision (NEEDS REVISION, 1 critical) of the 0.2.4 defense:
+
+- **CRITICAL fix:** the escaped-object-key scanner (`src/escaped-object-key-scan.mjs`)
+  was recursive (one JS function call per nesting level). A sufficiently
+  deep response line (RKOI's probe used 100,000 levels of nesting) could
+  overflow the call stack inside this client's own stdout listener,
+  crashing the CALLING application, not just this client's child process.
+  The scanner is now iterative (an explicit stack, not the JS call
+  stack) and its own body is wrapped so it can only ever return a
+  boolean -- never throw -- regardless of what it encounters.
+- **New:** `request()` now also scans its own OUTGOING request before
+  writing it to the child's stdin, throwing a typed error immediately.
+  Previously an escaped-key request built by this client's own caller
+  would sit pending until the full `timeoutMs` elapsed, since the
+  server's `id: null` refusal of such a line can never be correlated
+  back to a specific pending request.
+- Key/value classification is unchanged (RKOI's own 20,000-case fuzz: 0
+  wrong classifications, before and after).
+
 ## 0.2.4
 
 - Refuses, before parsing, any inbound MSP response whose object keys (at
