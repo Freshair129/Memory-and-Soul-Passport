@@ -89,3 +89,18 @@ describe("verifyThreadGrant: agentId/workspaceId required claims (DEC-MEMOS-21)"
     expect(() => verifyThreadGrant("msp_thread_resolve", { a: 1 }, access, KEY)).toThrow(/grant_signature_invalid/);
   });
 });
+
+describe("verifyThreadGrant: expiresAt must be an integer epoch-millisecond value", () => {
+  it("refuses a validly signed grant whose expiresAt is not an integer, matching the store's own bound", () => {
+    const now = Date.now();
+    const request = signThreadRequest("msp_thread_resolve", { a: 1 }, baseClaims(), KEY, now + 0.5);
+    expect(Number.isInteger(request.access.grant.expiresAt)).toBe(false);
+    expect(() => verifyThreadGrant("msp_thread_resolve", { a: 1 }, request.access, KEY, now)).toThrow(/grant_expired/);
+  });
+
+  it("still accepts an integer expiresAt inside the window", () => {
+    const now = Date.now();
+    const request = signThreadRequest("msp_thread_resolve", { a: 1 }, baseClaims(), KEY, now);
+    expect(verifyThreadGrant("msp_thread_resolve", { a: 1 }, request.access, KEY, now).expiresAt).toBe(now + 60_000);
+  });
+});

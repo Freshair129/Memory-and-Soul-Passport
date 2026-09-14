@@ -102,7 +102,7 @@ export function verifyThreadGrant(name, input, access, keyFor, now = Date.now())
   if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
     throw new GrantSignatureInvalidError("The grant signature does not match.");
   }
-  if (!Number.isFinite(grant.expiresAt) || grant.expiresAt <= now || grant.expiresAt > now + 65_000) {
+  if (!Number.isInteger(grant.expiresAt) || grant.expiresAt <= now || grant.expiresAt > now + 65_000) {
     throw new GrantExpiredError();
   }
   if (grant.payloadHash !== createHash("sha256").update(JSON.stringify(input)).digest("hex")) {

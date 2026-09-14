@@ -441,8 +441,8 @@ finds nothing.** The `write()` refusal above only catches a response
 whose text, AS STORED, still needs an escape to round-trip through
 `JSON.parse`/`JSON.stringify` today. A legacy key that was ALREADY
 corrupted by the V8 bug at write time -- e.g. a key that should have been
-`aA` (escaped as `aA` or similar in some earlier, unrelated
-encoding) but was instead stored, by the same class of engine bug, as a
+`aA` (sent on the wire as `a\u0041`, an escape that decodes to
+a plain `A`) but was instead stored, by the same class of engine bug, as a
 key that needs no escaping at all -- would round-trip cleanly through
 `JSON.stringify` and never trip this scan; the response carrying it would
 be emitted as normal, silently wrong. The scan can only ever catch a key
