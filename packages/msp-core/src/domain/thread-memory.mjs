@@ -669,6 +669,7 @@ export class ThreadMemoryStore {
     idleTimeoutMinutes = 30,
     policyRevision = "default",
     reconcileDelivery = false,
+    agentId = null,
     now,
   } = {}) {
     const thread = this.#requireThread(threadId);
@@ -716,6 +717,14 @@ export class ThreadMemoryStore {
     // W5: the journal actor is the speaker's HMAC, never the raw id. Fails
     // closed BEFORE any write below if no identity key is configured.
     const principalHmac = this.#hmacPrincipal(speaker);
+    // PH-MEMOS-3 stage 2 (§8.4): an AGENT-attributable entry's actor
+    // becomes the calling agent's own id, in plain text -- not a W5
+    // regression (agentId is a Tier-1-owned workspace/process identifier,
+    // not personal data, unlike a HUMAN speaker's raw id). A HUMAN-
+    // attributable entry's actor is unchanged (principalHmac). Falls back
+    // to principalHmac when no agentId was supplied at all (the unguarded
+    // handler map's own business-logic tests never pass one).
+    const actor = speakerType === "HUMAN" || !agentId ? principalHmac : agentId;
 
     let result;
     try {
@@ -838,7 +847,7 @@ export class ThreadMemoryStore {
     if (messageDirection === 'INBOUND') this.#drainDeliveries(result.message.messageId);
 
     this.#journalAppend({
-      actor: principalHmac,
+      actor,
       toolName: "msp_thread_message_append",
       ref: result.message.messageId,
       workspaceId: thread.tenantId,
@@ -1042,7 +1051,14 @@ export class ThreadMemoryStore {
     for (const job of jobs) {
       this.#journalAppend({ actor: "msp:session-router", toolName: "msp_session_sweep", ref: job.job_id, workspaceId: job.tenant_id, payload: { session_id: job.session_id, source_end_sequence: job.source_end_sequence }, policyDecision: "allow" });
     }
-    const ready = this.#db.prepare(`SELECT j.* FROM session_compaction_jobs j JOIN threads t ON j.thread_id=t.thread_id
+    // PH-MEMOS-3 stage 2 (BL-MEMOS-042, RKOI stage-2 review round 2, finding
+    // 6): thread_kind/channel_type join the job's own columns here (not
+    // added to #jobResult itself, which claim/commit/retry also use and
+    // whose response shapes this design does not change) -- both are
+    // non-sensitive, room-scoped, and let the worker construct its own
+    // subsequent msp_thread_resolve call for this job's room, which
+    // requires both fields.
+    const ready = this.#db.prepare(`SELECT j.*, t.thread_kind AS thread_kind, t.channel_type AS channel_type FROM session_compaction_jobs j JOIN threads t ON j.thread_id=t.thread_id
       WHERE (j.status IN ('PENDING','RETRYABLE') OR (j.status='RUNNING' AND j.leased_until<=?))
       AND (? IS NULL OR t.tenant_id=?) AND (?=0 OR t.business_id IS ?)
       AND (? IS NULL OR t.channel_account_id=?)
@@ -1050,7 +1066,7 @@ export class ThreadMemoryStore {
       ORDER BY j.created_at LIMIT ?`).all(timestamp, tenantId ?? null, tenantId ?? null,
         businessId === undefined ? 0 : 1, businessId ?? null, channelAccountId ?? null, channelAccountId ?? null,
         roomHmac, roomHmac, max);
-    return { closed: jobs.length, jobs: ready.map((job) => this.#jobResult(job)) };
+    return { closed: jobs.length, jobs: ready.map((job) => ({ ...this.#jobResult(job), threadKind: job.thread_kind, channelType: job.channel_type })) };
   }
 
   commitCompaction({
@@ -1064,6 +1080,7 @@ export class ThreadMemoryStore {
     summarizerVersion,
     invocationState,
     leaseToken,
+    agentId = null,
     now,
   } = {}) {
     const sessionRef = requiredString(sessionId, "session_id");
@@ -1146,7 +1163,12 @@ export class ThreadMemoryStore {
       this.#db.prepare("UPDATE chat_sessions SET summary_watermark = MAX(summary_watermark, ?), version = version + 1 WHERE thread_id = ? AND status = 'OPEN'").run(end, session.thread_id);
       return { summaryId, summaryVersion: Number(versionRow.version) + 1 };
     })();
-    this.#journalAppend({ actor: "msp:compaction-worker", toolName: "msp_session_compaction_commit", ref: result.summaryId, workspaceId: thread.tenantId, payload: { session_id: sessionRef, job_id: job.job_id, through_sequence: end }, policyDecision: "allow" });
+    // PH-MEMOS-3 stage 2 (§8.3/§8.4): the worker's own agentId replaces the
+    // "msp:compaction-worker" fixed label -- the claiming/committing worker
+    // is now a real, current, attributable agent of the job's thread, not
+    // an anonymous system process. Falls back to the old fixed label when
+    // no agentId was supplied (unguarded business-logic tests).
+    this.#journalAppend({ actor: agentId || "msp:compaction-worker", toolName: "msp_session_compaction_commit", ref: result.summaryId, workspaceId: thread.tenantId, payload: { session_id: sessionRef, job_id: job.job_id, through_sequence: end }, policyDecision: "allow" });
     return { summary: rowSummary(this.#db.prepare("SELECT * FROM session_summaries WHERE summary_id = ?").get(result.summaryId)), jobId: job.job_id };
   }
 
@@ -1224,8 +1246,13 @@ export class ThreadMemoryStore {
       // RKOI review (docs round 4), item 2: ON CONFLICT(receipt_id), not OR
       // IGNORE, so this only ever suppresses the intended idempotent-retry
       // collision on receipt_id -- never a NOT NULL violation on tenant_id.
-      this.#db.prepare('INSERT INTO thread_pending_deliveries(receipt_id,inbound_message_id,source_event_id,tenant_id,business_id,channel_account_id,external_room_ref_hmac,outcome,text,provider_ref,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(receipt_id) DO NOTHING')
-        .run(id, inboundId, sourceEventId, scope.tenantId, scope.businessId ?? null, scope.channelAccountId, roomHmac, state, body, providerRef ?? null, iso(now));
+      // PH-MEMOS-3 stage 2 (BL-MEMOS-112): agent_id/workspace_id are
+      // stamped onto the pending row here -- nullable at the schema level
+      // (a pre-stage-2 legacy row has neither), but the guard's own
+      // currency check (thread-guard.mjs) already guarantees a real
+      // caller reaching this line always has both.
+      this.#db.prepare('INSERT INTO thread_pending_deliveries(receipt_id,inbound_message_id,source_event_id,tenant_id,business_id,channel_account_id,external_room_ref_hmac,outcome,text,provider_ref,recorded_at,agent_id,workspace_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(receipt_id) DO NOTHING')
+        .run(id, inboundId, sourceEventId, scope.tenantId, scope.businessId ?? null, scope.channelAccountId, roomHmac, state, body, providerRef ?? null, iso(now), scope.agentId ?? null, scope.workspaceId ?? null);
       return { receiptId: id, status: 'PENDING_INBOUND' };
     }
     const thread = this.#requireThread(inbound.thread_id);
@@ -1235,13 +1262,36 @@ export class ThreadMemoryStore {
         throw new ThreadMemoryConflictError('Delivery scope differs.');
       }
     }
+    // PH-MEMOS-3 stage 2 (BL-MEMOS-112, CRITICAL 1): re-verified here for
+    // BOTH callers of this RESOLVED path -- the live guarded call (already
+    // checked once by thread-guard.mjs's general currency gate, so this is
+    // harmless defense in depth) and #drainDeliveries' internal call
+    // (which has no guard at all, so this is the ONLY enforcement point).
+    // scope.agentId is grant.agentId on a live call, or the STORED pending
+    // row's own agent_id on a drain re-check (#drainDeliveries threads it
+    // through as such) -- a missing agentId (a legacy NULL-agent pending
+    // row) fails this identically to a departed one: neither ever
+    // satisfies "is this agent current," by construction, not a special
+    // case.
+    const deliveryAgentCurrent =
+      scope?.agentId &&
+      this.#db.prepare("SELECT 1 FROM thread_agents WHERE thread_id = ? AND agent_id = ? AND workspace_id = ? AND left_at IS NULL").get(thread.threadId, scope.agentId, scope.workspaceId);
+    if (!deliveryAgentCurrent) {
+      throw new AgentNotCurrentError();
+    }
     try {
     return this.#db.transaction(() => {
     let message = this.#db.prepare("SELECT * FROM thread_messages WHERE thread_id=? AND source_event_id=? AND direction='OUTBOUND'").get(thread.threadId, sourceEventId);
     if (!message) {
+      // PH-MEMOS-3 stage 2 (§8.2, finding 3): never a fixed label -- the
+      // resolved (live) path speaks as the calling agent (grant.agentId,
+      // threaded in here as scope.agentId); a drained pending row speaks
+      // as whichever agent queued it (the STORED agent_id, also threaded
+      // in as scope.agentId by #drainDeliveries -- there is no live caller
+      // at drain time to ask for a fresh one).
       const appended = this.appendMessage({ threadId: inbound.thread_id, sessionId: inbound.session_id, exchangeId: inbound.exchange_id,
-        replyToMessageId: inboundId, sourceEventId, speakerId: 'zuri-line-agent', speakerKind: 'AGENT', identityAssurance: 'VERIFIED',
-        direction: 'OUTBOUND', text: body, deliveryState: state, reconcileDelivery: true, now });
+        replyToMessageId: inboundId, sourceEventId, speakerId: scope.agentId, speakerKind: 'AGENT', identityAssurance: 'VERIFIED',
+        direction: 'OUTBOUND', text: body, deliveryState: state, reconcileDelivery: true, agentId: scope.agentId, now });
       message = this.#db.prepare('SELECT * FROM thread_messages WHERE message_id=?').get(appended.message.messageId);
     }
     const existing = this.#db.prepare('SELECT * FROM thread_delivery_receipts WHERE receipt_id=?').get(id);
@@ -1273,9 +1323,19 @@ export class ThreadMemoryStore {
       WHERE p.inbound_message_id=? AND p.reconcile_state='pending' AND p.tenant_id=t.tenant_id AND p.business_id IS t.business_id
       AND p.channel_account_id=t.channel_account_id AND p.external_room_ref_hmac=t.external_room_ref_hmac`).all(inboundId)) {
       try {
+        // PH-MEMOS-3 stage 2 (§8.2 CRITICAL 1, RKOI stage-2 review round 2,
+        // finding 4): the STORED (agent_id, workspace_id) pair -- never a
+        // freshly re-derived one -- is threaded through as scope.agentId/
+        // workspaceId, so recordDelivery's own currency re-check runs
+        // against the INBOUND MESSAGE's own thread (thread.threadId,
+        // resolved from inboundId inside recordDelivery itself) using the
+        // agent that queued this row, not whichever agent (if any) happens
+        // to be current right now. A NULL stored agent_id (a legacy,
+        // pre-stage-2 pending row) flows through unchanged and fails the
+        // same currency check identically to a departed agent.
         this.recordDelivery({ inboundMessageId: inboundId, sourceEventId: row.source_event_id, receiptId: row.receipt_id, outcome: row.outcome,
           text: row.text, providerRef: row.provider_ref, now: row.recorded_at,
-          scope: { tenantId: row.tenant_id, businessId: row.business_id, channelAccountId: row.channel_account_id, externalRoomRef: null, __precomputedHmac: row.external_room_ref_hmac } });
+          scope: { tenantId: row.tenant_id, businessId: row.business_id, channelAccountId: row.channel_account_id, externalRoomRef: null, __precomputedHmac: row.external_room_ref_hmac, agentId: row.agent_id, workspaceId: row.workspace_id } });
       } catch (error) {
         // RKOI code review round 3: reconciliation is best-effort from the
         // append's point of view. RKOI's r3/q1.mjs showed a pending

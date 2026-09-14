@@ -37,9 +37,13 @@ async function fixture(run) {
       channel_account_id: 'oa', external_room_ref: 'dm', thread_kind: 'DIRECT', audience_kind: 'DIRECT', channel_type: 'LINE' });
     const inbound = await call('msp_thread_message_append', { thread_id: thread.threadId, speaker_id: 'alice', speaker_kind: 'HUMAN',
       person_id: 'alice', identity_assurance: 'VERIFIED', direction: 'INBOUND', text: 'Do not share my costs', source_event_id: 'in' });
+    // PH-MEMOS-3 stage 2 (BL-MEMOS-042, Sec.8.2): an AGENT-kind message's
+    // speaker_id must equal the grant's agentId -- this fixture's serving
+    // agent is claims.agentId ('agent-worker'), so its own outbound replies
+    // are authored under that same id, never an arbitrary 'agent' string.
     const out = () => call('msp_thread_message_append', { thread_id: thread.threadId, session_id: inbound.session.sessionId,
       exchange_id: inbound.message.exchangeId, reply_to_message_id: inbound.message.messageId, source_event_id: `${inbound.message.messageId}:assistant`,
-      speaker_id: 'agent', speaker_kind: 'AGENT', identity_assurance: 'VERIFIED', direction: 'OUTBOUND', text: 'generated only', delivery_state: 'QUEUED' });
+      speaker_id: claims.agentId, speaker_kind: 'AGENT', identity_assurance: 'VERIFIED', direction: 'OUTBOUND', text: 'generated only', delivery_state: 'QUEUED' });
     const summary = () => ({ topics: [{ text: 'User requests privacy', speakerId: 'alice', sourceMessageRefs: [inbound.message.messageId] }],
       decisions: [], openQuestions: [], pendingActions: [], corrections: [], outcomes: [], participants: [] });
     await run({ server, call, claims, thread, inbound, out, summary, setTime: (value) => { time = value; } });

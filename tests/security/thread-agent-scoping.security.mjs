@@ -34,7 +34,29 @@ const IDENTITY_KEY = "thread-agent-scoping-security-test-hmac-key";
 function tempDbPath(label) {
   const dir = mkdtempSync(path.join(tmpdir(), `msp-thread-agent-${label}-`));
   const dbPath = path.join(dir, "msp.sqlite3");
-  return { dbPath, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  // A few cases in this file open a SECOND, direct better-sqlite3 handle
+  // (via @freshair129/msp-storage/connection) after the spawned runtime's
+  // own close() to inspect rows no tool surfaces -- on Windows, SQLite's
+  // WAL/-shm memory mapping can transiently outlive that handle's own
+  // close() by a beat, which turns an immediate rmSync into a spurious
+  // EPERM. maxRetries/retryDelay (Node's own documented mitigation for
+  // exactly this class of transient Windows file-lock race) absorbs it.
+  return {
+    dbPath,
+    cleanup: () => {
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+      } catch (error) {
+        // Best-effort teardown only -- by this point every assertion this
+        // test cares about has already run and either passed or thrown;
+        // a residual Windows file-lock race on the temp directory itself
+        // (observed even after both close() calls and the retry budget
+        // above) must never retroactively mask that real outcome. The OS
+        // reclaims its own temp directory eventually regardless.
+        if (error?.code !== "EPERM" && error?.code !== "EBUSY" && error?.code !== "ENOTEMPTY") throw error;
+      }
+    },
+  };
 }
 
 function spawnRuntime(dbPath, extraEnv = {}) {
@@ -245,8 +267,414 @@ test("Mint-race: two concurrent resolves for the same fresh room, from two diffe
   }
 });
 
-// "No agent can act on a thread it has never attached to" for every OTHER
-// tool (context, append, memory_record, injection_record, delivery,
-// claim/commit/retry) lands with BL-MEMOS-042's agent gate -- deliberately
-// not tested here yet, since none of those tools enforce agent currency
-// until that item ships.
+// BL-MEMOS-042 (§8.2): the agent gate applied to every thread-bound tool
+// OTHER than msp_thread_resolve. Delivery's own agent scoping (both paths)
+// is BL-MEMOS-112's own set of cases, added alongside that item.
+
+test("No agent can act on a thread it has never attached to -- context, append, memory_record and injection_record are all refused agent_not_current", async () => {
+  const { dbPath, cleanup } = tempDbPath("neverattached");
+  const call = spawnRuntime(dbPath);
+  try {
+    const minterClaims = resolveClaims({ externalRoomRef: "dm-neverattached", agentId: "agent-minter", workspaceId: "workspace-minter" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-neverattached" }, minterClaims),
+    );
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi" },
+        minterClaims,
+      ),
+    );
+
+    // A different agent, never resolved against this thread at all.
+    const strangerClaims = { ...minterClaims, agentId: "agent-stranger", workspaceId: "workspace-stranger", readPrivate: true, writePrivate: true };
+    await assert.rejects(
+      call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, strangerClaims)),
+      /agent_not_current/,
+      "FAIL-CLOSED VIOLATION: an agent that never resolved this thread must never read its context",
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          { thread_id: thread.threadId, source_event_id: "in-2", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "again" },
+          strangerClaims,
+        ),
+      ),
+      /agent_not_current/,
+      "FAIL-CLOSED VIOLATION: an agent that never resolved this thread must never append to it",
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_memory_record",
+        signed(
+          "msp_thread_memory_record",
+          { thread_id: thread.threadId, kind: "PREFERENCE", asserted_by_speaker_id: "alice", subject_person_id: "alice", body: { drink: "tea" }, source_message_refs: [inbound.message.messageId] },
+          strangerClaims,
+        ),
+      ),
+      /agent_not_current/,
+      "FAIL-CLOSED VIOLATION: an agent that never resolved this thread must never record protected memory on it",
+    );
+    await assert.rejects(
+      call(
+        "msp_thread_injection_record",
+        signed(
+          "msp_thread_injection_record",
+          { thread_id: thread.threadId, exchange_id: inbound.message.exchangeId, injection_id: "inj-1", packet_hash: "a".repeat(64), policy_revision: "v1", model_ref: "test-model", state: "RESOLVED" },
+          strangerClaims,
+        ),
+      ),
+      /agent_not_current/,
+      "FAIL-CLOSED VIOLATION: an agent that never resolved this thread must never record an injection receipt on it",
+    );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("A departed agent (left_at set) is denied on its very next call, on every thread-bound tool", async () => {
+  const { dbPath, cleanup } = tempDbPath("departed");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = resolveClaims({ externalRoomRef: "dm-departed" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-departed" }, claims),
+    );
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi" },
+        claims,
+      ),
+    );
+    await call.close();
+
+    // No detach tool exists yet (msp_thread_agent_detach is phase 003,
+    // unbuilt) -- departure is simulated the same way this suite already
+    // does direct-DB setup for preconditions no tool can produce yet,
+    // exactly the shape thread_agents' own append-only trigger permits
+    // (left_at NULL -> NOT NULL, nothing else changed).
+    const { open } = await import("@freshair129/msp-storage/connection");
+    const db = open(dbPath);
+    try {
+      const info = db.prepare("UPDATE thread_agents SET left_at = ? WHERE thread_id = ? AND agent_id = ? AND workspace_id = ? AND left_at IS NULL").run(
+        new Date().toISOString(),
+        thread.threadId,
+        claims.agentId,
+        claims.workspaceId,
+      );
+      assert.equal(info.changes, 1, "expected exactly one open thread_agents row to depart");
+    } finally {
+      db.close();
+    }
+
+    const callAfter = spawnRuntime(dbPath);
+    try {
+      await assert.rejects(
+        callAfter("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, { ...claims, readPrivate: true })),
+        /agent_not_current/,
+        "FAIL-CLOSED VIOLATION: a departed agent's context read must be refused",
+      );
+      await assert.rejects(
+        callAfter(
+          "msp_thread_message_append",
+          signed(
+            "msp_thread_message_append",
+            { thread_id: thread.threadId, source_event_id: "in-2", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "still here?" },
+            claims,
+          ),
+        ),
+        /agent_not_current/,
+        "FAIL-CLOSED VIOLATION: a departed agent's append must be refused",
+      );
+    } finally {
+      await callAfter.close();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("Journal actor: an AGENT-kind message's actor is the plaintext agentId; a HUMAN-kind message's actor stays the speaker's HMAC", async () => {
+  const { dbPath, cleanup } = tempDbPath("journalactor");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = resolveClaims({ externalRoomRef: "dm-journalactor", agentId: "agent-journal-plaintext", principalId: "line-user-raw-id" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-journalactor" }, claims),
+    );
+    // speaker_id/person_id both equal the grant principal, matching the
+    // first-HUMAN-membership rule -- the point here is only that this raw
+    // id never appears in the journal, not any participant-gate behavior.
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "line-user-raw-id", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "line-user-raw-id", direction: "INBOUND", text: "hi" },
+        claims,
+      ),
+    );
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        {
+          thread_id: thread.threadId, session_id: inbound.session.sessionId, exchange_id: inbound.message.exchangeId, reply_to_message_id: inbound.message.messageId,
+          source_event_id: "out-1", speaker_id: claims.agentId, speaker_kind: "AGENT", identity_assurance: "VERIFIED", direction: "OUTBOUND", text: "reply", delivery_state: "QUEUED",
+        },
+        claims,
+      ),
+    );
+    await call.close();
+
+    const { open } = await import("@freshair129/msp-storage/connection");
+    const db = open(dbPath);
+    try {
+      const rows = db.prepare("SELECT actor, payload_json FROM journal WHERE tool_name = 'msp_thread_message_append' ORDER BY rowid").all();
+      assert.equal(rows.length, 2);
+      const [humanEntry, agentEntry] = rows;
+      assert.notEqual(humanEntry.actor, "line-user-raw-id", "W5: a HUMAN speaker's raw id must never appear as the journal actor");
+      assert.equal(agentEntry.actor, claims.agentId, "an AGENT-attributable entry's actor must be the plain agentId, not an HMAC");
+      for (const row of rows) {
+        assert.doesNotMatch(row.payload_json, /line-user-raw-id/, "no raw speaker/person id may appear in the journal payload either");
+      }
+    } finally {
+      db.close();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("Worker gate (DEC-MEMOS-18): a worker's own agentId must be current on the job's thread to claim it", async () => {
+  const { dbPath, cleanup } = tempDbPath("workerclaim");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = resolveClaims({ externalRoomRef: "dm-workerclaim", readPrivate: true, operator: true });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-workerclaim" }, claims),
+    );
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi", idle_timeout_minutes: 1 },
+        claims,
+      ),
+    );
+    // A completed exchange (a delivered OUTBOUND reply, not QUEUED) is
+    // required or claimCompaction's own "Reply receipt deadline has not
+    // elapsed" precondition (a SEPARATE 120s window, unrelated to the idle
+    // timeout below) refuses the claim regardless of agent currency.
+    await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        {
+          thread_id: thread.threadId, session_id: inbound.session.sessionId, exchange_id: inbound.message.exchangeId, reply_to_message_id: inbound.message.messageId,
+          source_event_id: "out-1", speaker_id: claims.agentId, speaker_kind: "AGENT", identity_assurance: "VERIFIED", direction: "OUTBOUND", text: "hello back", delivery_state: "DELIVERED",
+          // Keep the same 1-minute idle timeout the inbound append set --
+          // otherwise this OUTBOUND append's own default (30 minutes)
+          // pushes the session's idle_deadline back out, and the 65s wait
+          // below never actually produces a due sweep job.
+          idle_timeout_minutes: 1,
+        },
+        claims,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 65_000));
+    const sweep = await call("msp_session_sweep", signed("msp_session_sweep", {}, claims));
+    assert.equal(sweep.jobs.length, 1);
+    const jobId = sweep.jobs[0].jobId;
+
+    // A DIFFERENT worker agent, never attached to this thread, tries to
+    // claim the same job.
+    const strangerWorkerClaims = { ...claims, agentId: "agent-worker-stranger", workspaceId: "workspace-worker-stranger" };
+    await assert.rejects(
+      call("msp_session_compaction_claim", signed("msp_session_compaction_claim", { job_id: jobId, worker_id: "worker-stranger" }, strangerWorkerClaims)),
+      /agent_not_current/,
+      "FAIL-CLOSED VIOLATION: a worker agent never attached to this thread claimed its compaction job",
+    );
+
+    // The thread's own current agent can claim it fine.
+    const claim = await call("msp_session_compaction_claim", signed("msp_session_compaction_claim", { job_id: jobId, worker_id: "worker-real" }, claims));
+    assert.equal(claim.jobId, jobId);
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+// BL-MEMOS-112 (CRITICAL 1, corrected across two RKOI stage-2 review
+// rounds): the delivery pending path is agent-gated on both ends, and the
+// drain-time re-check runs against the right thread.
+
+test("BL-MEMOS-112: a non-current agent cannot queue a pending delivery for a room that already has an ACTIVE thread", async () => {
+  const { dbPath, cleanup } = tempDbPath("pendingnoncurrent");
+  const call = spawnRuntime(dbPath);
+  try {
+    const minterClaims = resolveClaims({ externalRoomRef: "dm-pendingnoncurrent", deliveryWriter: true, agentId: "agent-minter", workspaceId: "workspace-minter" });
+    await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-pendingnoncurrent" }, minterClaims),
+    );
+
+    const strangerClaims = { ...minterClaims, agentId: "agent-stranger", workspaceId: "workspace-stranger" };
+    await assert.rejects(
+      call(
+        "msp_thread_delivery_record",
+        signed(
+          "msp_thread_delivery_record",
+          { inbound_message_id: "not-arrived-yet", source_event_id: "not-arrived-yet:assistant", receipt_id: "receipt-pendingnoncurrent", outcome: "ACCEPTED", text: "t" },
+          strangerClaims,
+        ),
+      ),
+      /agent_not_current/,
+      "FAIL-CLOSED VIOLATION: a non-current agent queued a pending delivery for a room it is not attached to",
+    );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("BL-MEMOS-112: a pending delivery for a room with no ACTIVE thread at all is refused not_found", async () => {
+  const { dbPath, cleanup } = tempDbPath("pendingnothread");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = resolveClaims({ externalRoomRef: "dm-pendingnothread", deliveryWriter: true });
+    await assert.rejects(
+      call(
+        "msp_thread_delivery_record",
+        signed(
+          "msp_thread_delivery_record",
+          { inbound_message_id: "not-arrived-yet", source_event_id: "not-arrived-yet:assistant", receipt_id: "receipt-pendingnothread", outcome: "ACCEPTED", text: "t" },
+          claims,
+        ),
+      ),
+      /not_found/,
+      "FAIL-CLOSED VIOLATION: a pending delivery was accepted for a room with no ACTIVE thread at all",
+    );
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("BL-MEMOS-112: a stored agent that departs before the matching inbound arrives leaves the pending delivery unreconciled, never drained", async () => {
+  const { dbPath, cleanup } = tempDbPath("draindeparted");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = resolveClaims({ externalRoomRef: "dm-draindeparted", deliveryWriter: true, agentId: "agent-drain-departs" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-draindeparted" }, claims),
+    );
+    const pending = await call(
+      "msp_thread_delivery_record",
+      signed(
+        "msp_thread_delivery_record",
+        { inbound_message_id: "future-msg", source_event_id: "future-msg:assistant", receipt_id: "receipt-draindeparted", outcome: "ACCEPTED", text: "reply" },
+        claims,
+      ),
+    );
+    assert.equal(pending.status, "PENDING_INBOUND");
+    await call.close();
+
+    // Depart the queuing agent BEFORE the matching inbound ever arrives --
+    // no detach tool exists yet (phase 003), so this is simulated the same
+    // way the earlier "departed agent" test does.
+    const { open } = await import("@freshair129/msp-storage/connection");
+    const db = open(dbPath);
+    try {
+      const info = db.prepare("UPDATE thread_agents SET left_at = ? WHERE thread_id = ? AND agent_id = ? AND left_at IS NULL").run(new Date().toISOString(), thread.threadId, claims.agentId);
+      assert.equal(info.changes, 1);
+    } finally {
+      db.close();
+    }
+
+    const callAfter = spawnRuntime(dbPath);
+    try {
+      // A DIFFERENT, now-current agent brings in the matching inbound
+      // message with the id/receipt the pending row above was queued
+      // against -- this is exactly what triggers #drainDeliveries.
+      const laterClaims = { ...claims, agentId: "agent-drain-successor", assertAgents: true };
+      await callAfter(
+        "msp_thread_resolve",
+        signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-draindeparted" }, laterClaims),
+      );
+      await callAfter(
+        "msp_thread_message_append",
+        signed(
+          "msp_thread_message_append",
+          { thread_id: thread.threadId, message_id: "future-msg", source_event_id: "future-arrives", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "here I am" },
+          laterClaims,
+        ),
+      );
+    } finally {
+      await callAfter.close();
+    }
+
+    const { open: openAgain } = await import("@freshair129/msp-storage/connection");
+    const finalDb = openAgain(dbPath);
+    try {
+      const row = finalDb.prepare("SELECT reconcile_state FROM thread_pending_deliveries WHERE receipt_id = ?").get("receipt-draindeparted");
+      assert.equal(row.reconcile_state, "pending", "FAIL-CLOSED VIOLATION: a departed agent's pending delivery was drained anyway");
+      const outbound = finalDb.prepare("SELECT * FROM thread_messages WHERE thread_id = ? AND direction = 'OUTBOUND'").all(thread.threadId);
+      assert.equal(outbound.length, 0, "no OUTBOUND reply should ever have been minted for a departed agent's undrained delivery");
+      const skipped = finalDb.prepare("SELECT payload_json FROM journal WHERE tool_name = 'msp_thread_message_append.reconcile_skipped'").all();
+      assert.ok(skipped.length >= 1);
+      assert.match(skipped[skipped.length - 1].payload_json, /"error_code":"agent_not_current"/);
+    } finally {
+      finalDb.close();
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test("BL-MEMOS-112: the resolved delivery path's internal reply speaks as the calling agent, never a hard-coded label", async () => {
+  const { dbPath, cleanup } = tempDbPath("deliveryspeaker");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = resolveClaims({ externalRoomRef: "dm-deliveryspeaker", deliveryWriter: true, readPrivate: true, agentId: "agent-delivery-speaker" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-deliveryspeaker" }, claims),
+    );
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", person_id: "alice", direction: "INBOUND", text: "hi" },
+        claims,
+      ),
+    );
+    await call(
+      "msp_thread_delivery_record",
+      signed(
+        "msp_thread_delivery_record",
+        { inbound_message_id: inbound.message.messageId, source_event_id: `${inbound.message.messageId}:assistant`, receipt_id: "receipt-deliveryspeaker", outcome: "ACCEPTED", text: "auto reply" },
+        claims,
+      ),
+    );
+    const context = await call("msp_thread_context", signed("msp_thread_context", { thread_id: thread.threadId }, { ...claims, readPrivate: true }));
+    const outboundMessages = context.recentExchanges.flatMap((exchange) => exchange.messages).filter((message) => message.direction === "OUTBOUND");
+    assert.equal(outboundMessages.length, 1);
+    assert.equal(outboundMessages[0].speakerId, claims.agentId, "FAIL-CLOSED VIOLATION: the resolved delivery path did not speak as the calling agent");
+    assert.notEqual(outboundMessages[0].speakerId, "zuri-line-agent", "the removed hard-coded label must never appear");
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});

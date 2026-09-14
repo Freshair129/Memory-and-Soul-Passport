@@ -70,6 +70,9 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         deliveryState: args.delivery_state,
         idleTimeoutMinutes: bounded(args.idle_timeout_minutes, idleTimeoutMinutes, "idle_timeout_minutes"),
         policyRevision: args.policy_revision,
+        // PH-MEMOS-3 stage 2 (§8.4): the journal actor for an
+        // AGENT-attributable entry becomes this id directly, in plain text.
+        agentId: args.grant_agent_id,
         now: now(args),
       });
     },
@@ -126,6 +129,10 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         summarizerVersion: args.summarizer_version,
         invocationState: args.invocation_state,
         leaseToken: args.lease_token,
+        // PH-MEMOS-3 stage 2 (§8.3/§8.4): the worker's own agentId becomes
+        // the journal actor, replacing the fixed "msp:compaction-worker"
+        // label -- it is now a real, current, attributable agent.
+        agentId: args.grant_agent_id,
         now: now(args),
       });
     },

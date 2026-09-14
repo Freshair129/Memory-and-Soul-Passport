@@ -47,6 +47,14 @@ function withDefaultGrantFields(server) {
   const original = server.threadHandlers.msp_thread_resolve;
   server.threadHandlers.msp_thread_resolve = (args = {}) =>
     original({ grant_agent_id: "agent-test", grant_workspace_id: "workspace-test", grant_may_mint: true, ...args });
+  // BL-MEMOS-112: recordDelivery's RESOLVED path re-verifies agent
+  // currency using scope.agentId/workspaceId (thread-guard.mjs normally
+  // supplies these from the verified grant) -- default them onto
+  // delivery_scope here too, the same "no individual call site needs to
+  // change" treatment resolve already gets above.
+  const originalDelivery = server.threadHandlers.msp_thread_delivery_record;
+  server.threadHandlers.msp_thread_delivery_record = (args = {}) =>
+    originalDelivery({ ...args, delivery_scope: { agentId: "agent-test", workspaceId: "workspace-test", ...args.delivery_scope } });
   return server;
 }
 

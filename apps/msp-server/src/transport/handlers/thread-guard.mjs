@@ -12,7 +12,7 @@
 // how contracts/vault-scope-guard.mjs's assertVaultScope is orchestrated by
 // a transport/handlers/*.mjs module for the vault surface.
 import { hmacRoomRef, ThreadRegistry } from "@freshair129/msp-core/thread-memory";
-import { ThreadAudienceMismatchError } from "@freshair129/msp-core/errors";
+import { AgentNotCurrentError, ThreadAudienceMismatchError, ThreadNotFoundError } from "@freshair129/msp-core/errors";
 import { assertThreadScope, verifyThreadGrant } from "@freshair129/msp-contracts/thread-access";
 import { validateThreadContract } from "@freshair129/msp-contracts/thread-schema";
 
@@ -56,6 +56,18 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
       const now = clock();
       const grant = verifyThreadGrant(name, input, access, key, now);
       validateThreadContract(name, args);
+
+      // PH-MEMOS-3 stage 2 (§8.4): agentId/workspaceId are required on
+      // every one of the ten tools (verifyThreadGrant, BL-MEMOS-040) and
+      // several domain-layer methods need the calling agent's own id for
+      // reasons beyond currency (the journal actor on an agent-attributable
+      // entry, the speaker id on a resolved-path delivery, the agent_id
+      // stamped onto a protected-memory record) -- injected once here,
+      // universally, the same guard-verified-pass-through convention as
+      // input.requester_speaker_id/input.delivery_scope below, rather than
+      // duplicated per tool.
+      input.grant_agent_id = grant.agentId;
+      input.grant_workspace_id = grant.workspaceId;
 
       // RKOI review, item 11: these presence checks run BEFORE the thread
       // lookup below, so a request missing its lease entirely is refused
@@ -107,8 +119,6 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
           grant.writePrivate !== true &&
           grant.confirmMemory !== true &&
           grant.deliveryWriter !== true;
-        input.grant_agent_id = grant.agentId;
-        input.grant_workspace_id = grant.workspaceId;
         input.grant_assert_agents = grant.assertAgents === true;
         input.grant_may_mint = !workerOnlyGrant;
       } else if (thread) {
@@ -167,6 +177,25 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
           throw new ThreadAudienceMismatchError(
             `the grant's audienceKind ("${grant.audienceKind}") does not match this thread's own kind ("${thread.audienceKind}").`,
           );
+        }
+        // PH-MEMOS-3 stage 2 (BL-MEMOS-042, §8.2): every thread-bound tool
+        // OTHER than msp_thread_resolve (whose own attach-or-currency logic
+        // lives inside ThreadMemoryStore#resolveThread's own transaction,
+        // §8.1) requires the calling agent be CURRENT (an open thread_agents
+        // row) on this exact thread. Reached uniformly here for append,
+        // context, memory_record, injection_record,
+        // msp_thread_delivery_record's RESOLVED path (thread resolved via
+        // inbound_message_id), and claim/commit/retry (thread resolved via
+        // the job's own thread) -- no per-tool special-casing needed. This
+        // is a DEDICATED code (agent_not_current), not thread_scope_denied
+        // -- a caller must be able to tell "you're not authorized for this
+        // thread at all" apart from "you're not this thread's current
+        // agent," since the fix differs (attach via assertAgents on
+        // msp_thread_resolve, vs. a scope problem entirely). Delivery's
+        // PENDING path (no thread resolvable at all yet) gets its own
+        // separate room-based check, BL-MEMOS-112.
+        if (!registry.findCurrentAgent(thread.threadId, grant.agentId, grant.workspaceId)) {
+          throw new AgentNotCurrentError();
         }
       } else if (!["msp_session_sweep", "msp_thread_delivery_record"].includes(name)) {
         assertThreadScope(false, SCOPE_MESSAGE);
@@ -242,6 +271,18 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
         }
       }
 
+      // PH-MEMOS-3 stage 2 (BL-MEMOS-042, §8.2): for an AGENT-kind message,
+      // speaker_id must equal grant.agentId -- the direct analogue of the
+      // HUMAN rule above requiring speaker_id === grant.principalId on the
+      // first membership. An agent can never author a message as a
+      // different agent's speaker_id.
+      if (name === "msp_thread_message_append" && input.speaker_kind === "AGENT") {
+        assertThreadScope(
+          input.speaker_id === grant.agentId,
+          "thread_scope_denied: an AGENT-kind message's speaker_id must equal the grant's agentId.",
+        );
+      }
+
       if (name === "msp_thread_memory_record") {
         assertThreadScope(
           grant.writePrivate === true && thread.audienceKind === "DIRECT",
@@ -279,11 +320,49 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
           !!grant.channelAccountId && !!grant.externalRoomRef,
           "thread_scope_denied: the delivery grant is missing its channel scope.",
         );
+        // PH-MEMOS-3 stage 2 (BL-MEMOS-112, §8.2 CRITICAL 1): the PENDING
+        // path (no thread resolved above -- inbound_message_id does not
+        // name an existing message yet) has no thread_id to check agent
+        // currency against. Resolve the room's own ACTIVE thread directly
+        // (the exact triple idx_threads_active_binding uniques on) and
+        // require the calling agent be current on THAT thread before the
+        // pending row is ever written. The RESOLVED path (thread truthy)
+        // already got its currency check from the general "else if
+        // (thread)" branch above -- this is deliberately the one place
+        // that branch could not reach.
+        if (!thread) {
+          const pendingRoomHmac = hmacRoomRef(identityHmacKey, {
+            tenantId: grant.tenantId,
+            channelAccountId: grant.channelAccountId,
+            externalRoomRef: grant.externalRoomRef,
+          });
+          const pendingThread = registry.findThreadByRoom({
+            tenantId: grant.tenantId,
+            channelAccountId: grant.channelAccountId,
+            externalRoomRefHmac: pendingRoomHmac,
+          });
+          if (!pendingThread) {
+            // Reusing ThreadNotFoundError/not_found's existing definition
+            // ("no matching thread") -- never a new thread_not_found
+            // string. It is never possible to queue a pending delivery for
+            // a room MSP has never seen an ACTIVE thread for.
+            throw new ThreadNotFoundError("No ACTIVE thread exists for this room yet.");
+          }
+          if (!registry.findCurrentAgent(pendingThread.threadId, grant.agentId, grant.workspaceId)) {
+            throw new AgentNotCurrentError();
+          }
+        }
         input.delivery_scope = {
           tenantId: grant.tenantId,
           businessId: grant.businessId ?? null,
           channelAccountId: grant.channelAccountId,
           externalRoomRef: grant.externalRoomRef,
+          // PH-MEMOS-3 stage 2 (§8.2): stamped onto the pending row
+          // (required going forward) and used by the RESOLVED path's own
+          // internal append as speakerId -- never the removed hard-coded
+          // 'zuri-line-agent' label.
+          agentId: grant.agentId,
+          workspaceId: grant.workspaceId,
         };
       }
 
