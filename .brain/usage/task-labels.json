@@ -498,6 +498,13 @@
             "BL-MEMOS-080"
           ],
           "label": "Review concurrent migration lock fix (0 critical; counts, crash wording, docs)"
+        },
+        "2": {
+          "task_ids": [
+            "BL-MEMOS-080"
+          ],
+          "label": "Confirm migration fix revision (ea1b5f2)",
+          "status": "open"
         }
       }
     },
@@ -508,8 +515,7 @@
           "task_ids": [
             "BL-MEMOS-080"
           ],
-          "label": "Revise migration lock fix: derived counts, hung-holder wording, typed lock-open error",
-          "status": "open"
+          "label": "Revise migration lock fix: derived counts, hung-holder wording, typed lock-open error (ea1b5f2)"
         }
       }
     }
