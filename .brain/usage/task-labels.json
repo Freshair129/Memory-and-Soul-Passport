@@ -369,8 +369,7 @@
             "BL-MEMOS-045",
             "BL-MEMOS-048"
           ],
-          "label": "Stage 2 revision: iterative scanner, nonce expiry/bounds, replay+departed tests, GKS/legacy JSON, journal",
-          "status": "open"
+          "label": "Stage 2 revision: iterative scanner, nonce expiry/bounds, replay+departed tests, GKS/legacy JSON, journal (efa395e, 4d0df3c)"
         }
       }
     },
@@ -424,6 +423,13 @@
             "BL-MEMOS-047"
           ],
           "label": "Stage 2 implementation code review, round 1 (1 critical: recursive scanner stack crash)"
+        },
+        "9": {
+          "task_ids": [
+            "BL-MEMOS-047"
+          ],
+          "label": "Stage 2 implementation code review, round 2 (4d0df3c)",
+          "status": "open"
         }
       }
     },
