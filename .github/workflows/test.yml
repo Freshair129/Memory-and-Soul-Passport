@@ -28,7 +28,29 @@ jobs:
           cache: npm
       - run: npm ci
       # Contract + integration, then the vault-isolation security proofs.
+      # tests/contract/engine-json-parse-canary.test.mjs runs in here too --
+      # it never fails this step just because the running engine has V8's
+      # JSON.parse non-first-key corruption (docs/NOTES.md); it only fails if
+      # a shipped mitigation regresses while affected.
       - run: npm test
+      # Surface THIS leg's engine-canary result (clean/affected, node/V8
+      # version) in the job summary, so Node 22 vs Node 24 divergence is
+      # visible without opening the raw test log. Re-runs only the one
+      # canary file (already exercised above by `npm test`) so its console
+      # line can be captured on its own; never fails the job by itself --
+      # a real mitigation regression already failed the `npm test` step
+      # above. No network access.
+      - name: Record engine JSON.parse canary result (node ${{ matrix.node }})
+        if: always()
+        run: |
+          npx vitest run tests/contract/engine-json-parse-canary.test.mjs --reporter=verbose > canary-output.txt 2>&1 || true
+          cat canary-output.txt
+          {
+            echo "### Engine JSON.parse canary — Node ${{ matrix.node }}"
+            echo '```'
+            grep '^\[engine-json-parse-canary\]' canary-output.txt || echo "canary line not found; see job log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       # The publishable client must stay packable; it is the one artifact that
       # leaves this repo.
       - run: npm run pack:client

@@ -1,5 +1,5 @@
 ---
-version: "0.2.7b"
+version: "0.2.8b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
 last_update: "2026-09-15T00:20:00+07:00,KIN"
 status: "beta"
@@ -453,10 +453,45 @@ this fix existed. Running the audit query above and manually inspecting
 data written before this fix shipped -- the transport-level scan is a
 going-forward defense, not a retroactive one.
 
+### CI engine canary
+
+`tests/contract/engine-json-parse-canary.test.mjs` (JANUS) makes the V8
+regression above's engine-version divergence visible in ordinary CI output
+instead of relying on someone remembering the bisection table. On module
+load it runs the exact repro from this section (a priming `JSON.parse` call
+followed by a target one sharing the same leading key) and reports
+`node=<version> v8=<version> affected=true|false` on a `console.log` line
+every matrix leg prints, clean or affected; `.github/workflows/test.yml`
+also captures that line into `$GITHUB_STEP_SUMMARY` per Node version so the
+Node 22 vs Node 24 divergence shows up in the job summary, not just a raw
+log grep.
+
+It never fails CI on an affected engine (Node 23+, including this
+workspace's Node 24.19.0) — MSP is mitigated, not broken, on those engines,
+and a canary that turns red on every affected leg forever would just get
+ignored. Instead, when the detector reports `affected: true`, the same test
+imports `containsEscapedObjectKey` (the transport pre-scan) and
+`parseThreadServiceKeyring` (the keyring parser) directly and asserts both
+mitigations are actually doing their job against the exact trigger shape —
+it fails if either regresses, or if detection itself throws. On a clean
+engine that assertion is `skipIf`-marked (reported as skipped, not silently
+absent) since no mitigation proof applies there.
+
+This is also why `package.json`'s `engines.node` stays `>=22` unchanged
+rather than pinning below the affected range: the bug has no isolation or
+auth bypass (every scope decision reads values, never a key; a corrupted
+key can never become a clean identifier; grant corruption fails closed as a
+signature mismatch), and the two mitigations above already close the real
+damage path end to end — pinning to Node 22 would trade a real, verified
+fix for a version constraint that only postpones the same regression to
+whichever future Node line this workspace eventually has to move to
+anyway.
+
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.8b | 2026-09-15 | beta | JANUS CI canary for the V8 `JSON.parse` non-first-key corruption bisected in 0.2.4b/0.2.3b above: `tests/contract/engine-json-parse-canary.test.mjs` runs the exact repro on module load, always logs `node=<version> v8=<version> affected=true|false` (picked up automatically by `test:vitest`/`test:contract`, no `package.json` script change needed since the file already lives under `tests/contract/`), and, only when the running engine is affected, asserts `containsEscapedObjectKey` and `parseThreadServiceKeyring` are both still refusing/decoding correctly against the exact trigger shape -- never fails CI just for running on an affected engine (verified: passes with `affected: true` on this workspace's Node 24.19.0, passes with `affected: false` on Node 22.23.2 via `npx -y node@22`, and fails when either mitigation is deliberately broken in a scratch copy, reverting cleanly). `.github/workflows/test.yml` keeps the `["22", "24"]` matrix unchanged and adds a step that captures the canary's console line into `$GITHUB_STEP_SUMMARY` per leg, `if: always()`, with no network dependency; YAML validated locally with PyYAML. See "CI engine canary" above for why `engines.node` stays `>=22`. | working-tree | JANUS |
 | 0.2.7b | 2026-09-15 | beta | RKOI stage-2 revision round 2 (APPROVED at `4d0df3c`, 0 critical; these are the owner-requested non-blocking follow-ups): `recordDelivery`'s internal `appendMessage` call now passes `scope.workspaceId`/the stored pending row's `workspace_id`, closing the last three journal entries (a resolved-path OUTBOUND message, a drain's OUTBOUND message, `reconcile_skipped`) that still recorded `workspace_id = tenant`; the legacy-data audit query gained `entity_history.body_json` (returned by `msp_memory_history`) and `state.value_json`, and this file and `docs/MIGRATION.md` now say plainly that the server's `write()` refusal is not a complete guarantee for legacy rows already corrupted into a key needing no escape; `ThreadMemoryStore#consumeNonce` now validates `grantExpiresAt` is a finite integer within +/-10 years of the server clock, refusing a raw, untyped `RangeError` from `1e20` or a negative value with the same typed `validation_failed` instead; added a NOTES line documenting the scanner's ~13x-line-size memory cost and `readline`'s lack of a line cap as an accepted, undocumented-no-longer resource bound. See "Accepted resource bound, not fixed" and the legacy-data audit section below, and the task's own final report for the finding-to-test map. | working-tree | KIN |
 | 0.2.6b | 2026-09-15 | beta | RKOI stage-2 revision of the 0.2.5b/0.2.4b work (NEEDS REVISION, 1 critical): the transport-level escaped-object-key scanner was itself recursive and could crash the server (and, symmetrically, the calling app via the client) on a deeply nested line -- rewritten iterative with an explicit stack, wrapped so it can only ever refuse, never throw. Also: nonce `expires_at` now derives from `grant.expiresAt`, never a caller-suppliable business timestamp; the guard validates nonce type/length (1-128, untrimmed) with a typed `validation_failed`; the GKS provider and the client's own outgoing requests are scanned too; the server refuses to ever emit a response whose (possibly legacy) stored data would itself need an escaped key; journal `workspace_id` is `grant.workspaceId` and a mint's actor is `grant.agentId`, not the old placeholders; a resolve refused `agent_not_current` no longer bumps `threads.updated_at`; sweep consumes its nonce inside its own mutation's transaction. See "RKOI stage-2 revision" below and the task's own report for the full finding-to-test map. | working-tree | KIN |
 | 0.2.5b | 2026-09-15 | beta | TASK-MEMOS-002 stage 2 multi-agent complete on `feat/memos-002-stage2-multi-agent` (BL-MEMOS-040..048/112, per docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md v0.4.3b, RKOI-approved spec): migration 0009 (`thread_agents`, `grant_nonces`, per-agent record visibility columns) landed its writers/readers -- required `agentId`/`workspaceId`/`nonce` grant claims (DEC-MEMOS-17 hard cutover, no compatibility mode), the agent gate on every thread-bound tool, mint-race-safe attachment, delivery's own agent scoping (CRITICAL 1), per-agent protected-record visibility with unified supersession refusals (CRITICAL 2), and replay-nonce bookkeeping. `tests/cross/zuri-thread-contract.test.mjs` rewritten in full: zuri-ai's real, unmodified adapter is now refused `grant_signature_invalid` at its very first call, proven against the actual adapter source, plus a shape-only case proving MSP's responses still satisfy every shape check that adapter performs once the three new claims are added to the same wire requests. `packages/msp-client-js` needed no change (grant contents are opaque to it) and was not bumped. Full details and the GATE-MEMOS-3/§15 test mapping are in the task's own final report. | working-tree | KIN |
