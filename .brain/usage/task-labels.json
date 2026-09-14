@@ -440,8 +440,7 @@
           "task_ids": [
             "BL-MEMOS-047"
           ],
-          "label": "Confirm stage 2 non-blocking fold (40843b2)",
-          "status": "open"
+          "label": "Confirm stage 2 non-blocking fold (APPROVED, 40843b2)"
         }
       }
     },
@@ -488,6 +487,29 @@
             "BL-MEMOS-080"
           ],
           "label": "Fix concurrent cold-start migration race (cbce394)"
+        }
+      }
+    },
+    "a46f6a88198a982ce": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-080"
+          ],
+          "label": "Review concurrent migration lock fix (0 critical; counts, crash wording, docs)"
+        }
+      }
+    },
+    "a547846223eeff25d": {
+      "actor": "janus",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-080"
+          ],
+          "label": "Revise migration lock fix: derived counts, hung-holder wording, typed lock-open error",
+          "status": "open"
         }
       }
     }
@@ -700,7 +722,7 @@
       "task_ids": [
         "OPS-MEMOS-003"
       ],
-      "label": "Open all PRs: bodies and script prepared; push blocked by auto-mode classifier; canary rebased",
+      "label": "Open all PRs (script, push blocked); canary rebases; KIN trailer rewrite; integer expiresAt + NOTES fix (94cdb34)",
       "status": "open"
     }
   }

@@ -12,13 +12,12 @@ A segment whose status is `open` was still running when the ledger was generated
 
 | Segments | Requests | Input (total) | input_tokens | Cache write | Cache read | Output |
 |---:|---:|---:|---:|---:|---:|---:|
-| 97 | 4,502 | 2,036,060,346 | 10,258 | 42,796,660 | 1,993,253,428 | 4,586,315 |
+| 98 | 4,552 | 2,046,958,387 | 10,360 | 43,754,568 | 2,003,193,459 | 4,638,517 |
 
 ## Per task id
 
 | Task id | Segments | Start | End | Requests | Input (total) | Output |
 |---|---:|---|---|---:|---:|---:|
-| (unlabelled) | 1 | 2026-09-14T10:51:29+07:00 | 2026-09-14T10:51:34+07:00 | 1 | 16,175 | 255 |
 | BL-MEMOS-001 | 8 | 2026-09-13T09:50:21+07:00 | 2026-09-13T13:46:19+07:00 | 59 | 15,709,858 | 303,472 |
 | BL-MEMOS-002 | 8 | 2026-09-13T14:43:29+07:00 | 2026-09-13T15:20:00+07:00 | 149 | 29,710,329 | 176,078 |
 | BL-MEMOS-003 | 5 | 2026-09-13T15:24:31+07:00 | 2026-09-13T17:20:49+07:00 | 78 | 21,799,558 | 79,371 |
@@ -39,10 +38,10 @@ A segment whose status is `open` was still running when the ledger was generated
 | BL-MEMOS-044 | 2 | 2026-09-14T03:55:34+07:00 | 2026-09-14T10:49:14+07:00 | 209 | 72,941,443 | 148,156 |
 | BL-MEMOS-045 | 1 | 2026-09-14T10:22:05+07:00 | 2026-09-14T10:49:14+07:00 | 107 | 44,948,942 | 49,866 |
 | BL-MEMOS-046 | 2 | 2026-09-14T03:55:34+07:00 | 2026-09-14T10:49:14+07:00 | 209 | 72,941,443 | 148,156 |
-| BL-MEMOS-047 | 4 | 2026-09-14T08:30:49+07:00 | 2026-09-14T10:51:32+07:00 | 131 | 31,978,574 | 87,810 |
+| BL-MEMOS-047 | 4 | 2026-09-14T08:30:49+07:00 | 2026-09-14T10:59:38+07:00 | 134 | 34,450,868 | 92,346 |
 | BL-MEMOS-048 | 2 | 2026-09-14T03:55:34+07:00 | 2026-09-14T10:49:14+07:00 | 209 | 72,941,443 | 148,156 |
 | BL-MEMOS-049 | 11 | 2026-09-14T03:55:34+07:00 | 2026-09-14T10:49:14+07:00 | 1,331 | 609,796,897 | 934,703 |
-| BL-MEMOS-080 | 1 | 2026-09-14T10:22:18+07:00 | 2026-09-14T10:50:23+07:00 | 135 | 23,754,668 | 111,041 |
+| BL-MEMOS-080 | 3 | 2026-09-14T10:22:18+07:00 | 2026-09-14T11:09:51+07:00 | 173 | 26,387,380 | 150,033 |
 | BL-MEMOS-087 | 3 | 2026-09-14T03:58:32+07:00 | 2026-09-14T08:48:45+07:00 | 49 | 18,785,049 | 76,512 |
 | BL-MEMOS-102 | 2 | 2026-09-14T00:29:57+07:00 | 2026-09-14T02:22:25+07:00 | 437 | 252,069,710 | 295,076 |
 | BL-MEMOS-108 | 1 | 2026-09-14T00:29:57+07:00 | 2026-09-14T01:30:43+07:00 | 274 | 222,020,711 | 188,540 |
@@ -52,7 +51,7 @@ A segment whose status is `open` was still running when the ledger was generated
 | OPS-MEMOS-000 | 2 | 2026-09-13T14:53:06+07:00 | 2026-09-13T14:53:06+07:00 | 0 | 0 | 0 |
 | OPS-MEMOS-001 | 2 | 2026-09-13T18:28:15+07:00 | 2026-09-13T23:00:09+07:00 | 26 | 4,190,696 | 17,365 |
 | OPS-MEMOS-002 | 1 | 2026-09-13T23:46:44+07:00 | 2026-09-14T00:32:28+07:00 | 30 | 25,130,965 | 62,342 |
-| OPS-MEMOS-003 | 1 | 2026-09-14T08:56:28+07:00 | 2026-09-14T10:51:33+07:00 | 29 | 15,635,808 | 39,642 |
+| OPS-MEMOS-003 | 1 | 2026-09-14T08:56:28+07:00 | 2026-09-14T11:09:49+07:00 | 39 | 21,445,018 | 48,571 |
 
 ## Per segment
 
@@ -149,9 +148,10 @@ A segment whose status is `open` was still running when the ledger was generated
 | 89 | BL-MEMOS-049, BL-MEMOS-047 | janus `ae6c2c8` | 1 | CI engine canary for V8 JSON.parse bug (e0a3624) | done | 2026-09-14T08:30:49+07:00 | 2026-09-14T08:56:55+07:00 | 26m06s | 102 | 9,430,564 | 204 | 271,077 | 9,159,283 | 57,964 |
 | 90 | BL-MEMOS-040..049 | kin `ab508b7` | 10 | Transport escaped-key pre-scan (server + client), queued after keyring fix | done | 2026-09-14T08:48:03+07:00 | 2026-09-14T10:11:01+07:00 | 1h22m | 196 | 157,082,507 | 392 | 3,572,319 | 153,509,796 | 144,814 |
 | 91 | BL-MEMOS-047 | coordinator | 33 | Fix it all (2nd): confirm stage-2 review findings are all dispatched | done | 2026-09-14T08:49:37+07:00 | 2026-09-14T08:50:02+07:00 | 0m25s | 1 | 503,389 | 2 | 31 | 503,356 | 1,133 |
-| 92 | OPS-MEMOS-003 | coordinator | 34 | Open all PRs: bodies and script prepared; push blocked by auto-mode classifier; canary rebased | open | 2026-09-14T08:56:28+07:00 | 2026-09-14T10:51:33+07:00 | 1h55m | 29 | 15,635,808 | 64 | 548,885 | 15,086,859 | 39,642 |
+| 92 | OPS-MEMOS-003 | coordinator | 34 | Open all PRs (script, push blocked); canary rebases; KIN trailer rewrite; integer expiresAt + NOTES fix (94cdb34) | open | 2026-09-14T08:56:28+07:00 | 2026-09-14T11:09:49+07:00 | 2h13m | 39 | 21,445,018 | 86 | 570,096 | 20,874,836 | 48,571 |
 | 93 | BL-MEMOS-047 | rkoi `afd6aa2` | 8 | Stage 2 implementation code review, round 1 (1 critical: recursive scanner stack crash) | done | 2026-09-14T10:11:44+07:00 | 2026-09-14T10:21:30+07:00 | 9m47s | 24 | 18,779,575 | 50 | 808,830 | 17,970,695 | 26,556 |
 | 94 | BL-MEMOS-040, BL-MEMOS-041, BL-MEMOS-042, BL-MEMOS-043, BL-MEMOS-044, BL-MEMOS-045, BL-MEMOS-046, BL-MEMOS-048, BL-MEMOS-112, BL-MEMOS-049 | kin `ab508b7` | 11 | Keyring parser V8 fix, transport escaped-key pre-scan, and stage 2 implementation (3a88991..f788e39) | done | 2026-09-14T10:22:05+07:00 | 2026-09-14T10:49:14+07:00 | 27m09s | 107 | 44,948,942 | 214 | 1,074,356 | 43,874,372 | 49,866 |
 | 95 | BL-MEMOS-080 | janus `a0d58fa` | 1 | Fix concurrent cold-start migration race (cbce394) | done | 2026-09-14T10:22:18+07:00 | 2026-09-14T10:50:23+07:00 | 28m04s | 135 | 23,754,668 | 270 | 269,248 | 23,485,150 | 111,041 |
-| 96 | BL-MEMOS-047 | rkoi `afd6aa2` | 9 | Stage 2 implementation code review, round 2 (APPROVED, 4d0df3c) | done | 2026-09-14T10:50:30+07:00 | 2026-09-14T10:51:32+07:00 | 1m02s | 4 | 3,265,046 | 8 | 819,216 | 2,445,822 | 2,157 |
-| 97 | — | rkoi `a46f6a8` | 1 | You are RKOI, MSP tech lead. Review JANUS's migration-runner concurrency fix before merge. | done | 2026-09-14T10:51:29+07:00 | 2026-09-14T10:51:34+07:00 | 0m05s | 1 | 16,175 | 2 | 10,130 | 6,043 | 255 |
+| 96 | BL-MEMOS-047 | rkoi `afd6aa2` | 9 | Stage 2 implementation code review, round 2 (APPROVED, 4d0df3c) | done | 2026-09-14T10:50:30+07:00 | 2026-09-14T10:59:38+07:00 | 9m08s | 7 | 5,737,340 | 14 | 1,644,009 | 4,093,317 | 6,693 |
+| 97 | BL-MEMOS-080 | rkoi `a46f6a8` | 1 | Review concurrent migration lock fix (0 critical; counts, crash wording, docs) | done | 2026-09-14T10:51:29+07:00 | 2026-09-14T11:03:36+07:00 | 12m07s | 35 | 2,570,199 | 70 | 98,218 | 2,471,911 | 37,972 |
+| 98 | BL-MEMOS-080 | janus `a547846` | 1 | Revise migration lock fix: derived counts, hung-holder wording, typed lock-open error | open | 2026-09-14T11:09:34+07:00 | 2026-09-14T11:09:51+07:00 | 0m16s | 3 | 62,513 | 6 | 23,816 | 38,691 | 1,020 |
