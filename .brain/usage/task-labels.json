@@ -659,7 +659,18 @@
           "task_ids": [
             "BL-MEMOS-057"
           ],
-          "label": "PH-MEMOS-4 code review, round 2 closure check (892ae1d)",
+          "label": "PH-MEMOS-4 code review, round 2 closure check (0 critical, 5 warnings: replay nonce gap real)"
+        }
+      }
+    },
+    "a212ff31525986ccf": {
+      "actor": "kin",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-057"
+          ],
+          "label": "PH-MEMOS-4: consume nonce on erasure replay, fix 4 doc warnings",
           "status": "open"
         }
       }
