@@ -88,7 +88,7 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
       validateThreadContract(name, args);
 
       // PH-MEMOS-3 stage 2 (§8.4): agentId/workspaceId are required on
-      // every one of the ten tools (verifyThreadGrant, BL-MEMOS-040) and
+      // every one of the fifteen tools (verifyThreadGrant, BL-MEMOS-040) and
       // several domain-layer methods need the calling agent's own id for
       // reasons beyond currency (the journal actor on an agent-attributable
       // entry, the speaker id on a resolved-path delivery, the agent_id

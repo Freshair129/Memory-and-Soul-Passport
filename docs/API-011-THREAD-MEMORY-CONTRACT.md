@@ -207,7 +207,13 @@ that mutates nothing). `dry_run: true` runs the identical candidate
 `SELECT`s the live pass would `UPDATE` from, issuing no `UPDATE` at all, and
 consumes no nonce — but still writes a journal entry, exactly like
 `dry_run: false`; only the nonce exemption is dry-run-specific. Bounded to
-200 rows per table per call, reusing the nonce-pruning bound.
+200 rows per table per call, reusing the nonce-pruning bound. This is the
+only one of the fifteen tools whose schema accepts `now`: a synthetic
+clock here moves a tenant-wide mutation horizon (`cutoff = now - days`),
+which is why it carries the same `MSP_TEST_CLOCK`/`allowTestClock`
+test-clock gate every other tool's `now` already has ("Test clock (W1)",
+below) — never honored outside a test composition root, and already
+excluded from `@freshair129/msp-client-js`'s environment allowlist.
 
 **`msp_thread_principal_export`** (optional `principal_id`, defaulting to
 the grant's own principal) is a read, **not thread-bound**, gated by the
