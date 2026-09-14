@@ -375,8 +375,7 @@
           "task_ids": [
             "BL-MEMOS-047"
           ],
-          "label": "Stage 2 non-blocking fold: journal workspace_id, legacy audit columns, grantExpiresAt bounds",
-          "status": "open"
+          "label": "Stage 2 non-blocking fold: journal workspace_id, legacy audit columns, grantExpiresAt bounds (40843b2)"
         }
       }
     },
@@ -436,6 +435,13 @@
             "BL-MEMOS-047"
           ],
           "label": "Stage 2 implementation code review, round 2 (APPROVED, 4d0df3c)"
+        },
+        "10": {
+          "task_ids": [
+            "BL-MEMOS-047"
+          ],
+          "label": "Confirm stage 2 non-blocking fold (40843b2)",
+          "status": "open"
         }
       }
     },
