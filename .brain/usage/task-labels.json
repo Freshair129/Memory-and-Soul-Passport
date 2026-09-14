@@ -564,7 +564,18 @@
           "task_ids": [
             "BL-MEMOS-050..057"
           ],
-          "label": "PH-MEMOS-4 spec review, round 2 (92539a2)",
+          "label": "PH-MEMOS-4 spec review, round 2 (2 critical: guard fix still broken, UNKNOWN-speaker leak)"
+        }
+      }
+    },
+    "a579a112e147650ff": {
+      "actor": "ather",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050..059"
+          ],
+          "label": "PH-MEMOS-4 spec revision round 3 (design v0.5.2b)",
           "status": "open"
         }
       }
