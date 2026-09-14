@@ -648,7 +648,18 @@
           "task_ids": [
             "BL-MEMOS-057"
           ],
-          "label": "PH-MEMOS-4 revision: journal replay, DEC-34 positive tests, retention 5-table assertions, plus 4 recommended",
+          "label": "PH-MEMOS-4 revision: journal replay, DEC-34 positive tests, retention 5-table assertions, plus 4 recommended (892ae1d)"
+        }
+      }
+    },
+    "a223117c7b9a18662": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-057"
+          ],
+          "label": "PH-MEMOS-4 code review, round 2 closure check (892ae1d)",
           "status": "open"
         }
       }
