@@ -575,7 +575,18 @@
           "task_ids": [
             "BL-MEMOS-050..059"
           ],
-          "label": "PH-MEMOS-4 spec revision round 3 (design v0.5.2b)",
+          "label": "PH-MEMOS-4 spec revision round 3 (design v0.5.2b, 3c4b4d7)"
+        }
+      }
+    },
+    "a4ffd638fe267b0b7": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050..057"
+          ],
+          "label": "PH-MEMOS-4 spec review, round 3 (3c4b4d7)",
           "status": "open"
         }
       }
