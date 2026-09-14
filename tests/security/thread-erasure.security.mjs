@@ -249,7 +249,7 @@ test("erase: direct-DB assertions -- messages/records tombstoned and blanked (bo
   }
 });
 
-test("erase: idempotent -- a second call with the SAME (tenant_id, idempotency_key) and the SAME principal_id returns the stored receipt with NO further writes", async () => {
+test("erase: idempotent -- a second call with the SAME (tenant_id, idempotency_key), the SAME principal_id, and a FRESH nonce returns the stored receipt with no content-table or erasure_receipts writes, but does journal and does consume its own nonce", async () => {
   const { dbPath, cleanup } = tempDbPath("erase-idempotent");
   const call = spawnRuntime(dbPath);
   try {
@@ -302,6 +302,66 @@ test("erase: idempotent -- a second call with the SAME (tenant_id, idempotency_k
     assert.deepEqual(messageAfterReplay, messageBeforeReplay, "a replay must never re-touch a content table");
     const erasureRowAfterReplay = await row(dbPath, "SELECT tables_affected_json FROM erasure_receipts WHERE erasure_receipt_id = ?", first.erasureReceiptId);
     assert.deepEqual(erasureRowAfterReplay, erasureRow, "a replay must never touch the stored erasure_receipts row");
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("erase: a LITERAL replay of the exact same signed request (same nonce, same idempotency_key) is refused grant_replayed from the second call onward -- only the very first call is ever accepted, and no refused call ever journals", async () => {
+  // RKOI review round 5, WARNING 2: reproduces RKOI's own probe exactly.
+  // Before this round's fix, the erasure replay arm never reached
+  // #consumeNonce at all, so all four identical calls were ACCEPTED, each
+  // appending its own journal row under the real principal's HMAC -- an
+  // unbounded, attacker-controlled write to the compliance journal. The
+  // exact accept/refuse sequence asserted here, not merely "eventually
+  // refused": call 0 (idempotency_key not yet on file) takes the
+  // NON-replay arm and consumes the nonce as part of its own mutation;
+  // calls 1-3 (same idempotency_key, now on file) take the replay arm,
+  // whose own #consumeNonce call collides on the SAME (tenant_id, nonce)
+  // row call 0 already inserted and is refused grant_replayed every time --
+  // there is no "second accepted call" window at all.
+  const { dbPath, cleanup } = tempDbPath("erase-literal-replay");
+  const call = spawnRuntime(dbPath);
+  try {
+    const FIXED_NONCE = "fixed-nonce-literal-replay-0123456789ab";
+    const claims = directClaims({ externalRoomRef: "dm-erase-literal-replay" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-erase-literal-replay" }, claims),
+    );
+    await call(
+      "msp_thread_message_append",
+      signed("msp_thread_message_append", { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "hi" }, claims),
+    );
+
+    const eraseClaims = { ...claims, dataSubjectAccess: true, nonce: FIXED_NONCE };
+    const outcomes = [];
+    for (let i = 0; i < 4; i += 1) {
+      const request = signed("msp_thread_principal_erase", { idempotency_key: "k-literal-replay" }, eraseClaims);
+      try {
+        const result = await call("msp_thread_principal_erase", request);
+        outcomes.push({ accepted: true, replay: result.replay });
+      } catch (error) {
+        outcomes.push({ accepted: false, message: error.message });
+      }
+    }
+
+    assert.equal(outcomes[0].accepted, true, "the first call must be accepted (non-replay arm, mints the receipt)");
+    assert.equal(outcomes[0].replay, false);
+    for (let i = 1; i < 4; i += 1) {
+      assert.equal(outcomes[i].accepted, false, `call ${i} (a literal resend) must be refused, not accepted`);
+      assert.match(outcomes[i].message, /grant_replayed/, `call ${i} must be refused specifically as grant_replayed`);
+    }
+
+    const journalCount = await row(dbPath, "SELECT COUNT(*) AS count FROM journal WHERE tool_name = 'msp_thread_principal_erase'");
+    assert.equal(journalCount.count, 1, "only the single accepted call may ever journal -- a refused literal replay must add NO journal row");
+
+    const receiptCount = await row(dbPath, "SELECT COUNT(*) AS count FROM erasure_receipts");
+    assert.equal(receiptCount.count, 1, "a refused literal replay must never mint or touch an erasure_receipts row");
+
+    const nonceCount = await row(dbPath, "SELECT COUNT(*) AS count FROM grant_nonces WHERE nonce = ?", FIXED_NONCE);
+    assert.equal(nonceCount.count, 1, "the fixed nonce is consumed exactly once, by the first (accepted) call only");
   } finally {
     await call.close();
     cleanup();

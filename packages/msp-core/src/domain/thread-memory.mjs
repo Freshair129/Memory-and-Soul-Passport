@@ -1982,11 +1982,33 @@ export class ThreadMemoryStore {
       // tablesAffected snapshot the stored receipt already has, no raw
       // principal id, same actor convention (principalHmac) as the
       // non-replay arm below. This journal write is the ONLY effect of a
-      // replay -- no content table or erasure_receipts row is touched, and
-      // no nonce is consumed here (a replay of the idempotency key is a
-      // different HTTP call with its own fresh grant/nonce, consumed via
-      // the normal guard-level replay-protection path, unaffected by this
-      // arm).
+      // (nonce-fresh) replay -- no content table or erasure_receipts row is
+      // touched.
+      //
+      // RKOI review round 5, WARNING 2: the nonce IS consumed right here,
+      // in this arm's own tiny transaction, before the journal append --
+      // there is no separate "guard-level replay-protection path" that
+      // does this instead; thread-guard.mjs only checks that a nonce claim
+      // is PRESENT on the request, and #consumeNonce below is the entire
+      // replay-detection mechanism, called from every nonce-required arm
+      // including this one. Skipping it here (as the prior comment
+      // incorrectly claimed happened elsewhere) let a literal replay of
+      // the exact same signed request -- same nonce, same idempotency_key
+      // -- be accepted on every resend, each accepted call appending its
+      // own journal row: an unbounded, attacker-controlled write to the
+      // compliance journal under the real principal's HMAC. Consuming the
+      // nonce here closes that: a literal replay (identical nonce) now
+      // collides on the SAME grant_nonces PRIMARY KEY the original,
+      // non-replay call already consumed, and is refused with
+      // GrantReplayedError before the journal append below ever runs -- no
+      // journal row is added for a refused attempt. A LEGITIMATE second
+      // call for the same idempotency_key -- a different signed request
+      // carrying its own fresh nonce (e.g. a caller retrying blind after a
+      // dropped response) -- is unaffected: its nonce is new, consumeNonce
+      // succeeds, and the replay:true return below still applies exactly
+      // as before.
+      this.#db.transaction(() => this.#consumeNonce(tenant, nonce, grantExpiresAt))();
+
       const tablesAffected = parseJson(existingReceipt.tables_affected_json, {});
       this.#journalAppend({
         actor: this.#hmacPrincipal(principal),

@@ -151,7 +151,11 @@ exception — and never itself transitions `threads.status`. Naming a
 in one transaction; it is `DIRECT`-only (refused `thread_scope_denied` on
 `GROUP`/`ROOM`) and requires **both** `assertParticipants: true` and a new
 claim, `assertRelink: true` — neither substitutes for the other, and
-`operator` never substitutes for either. The `threads` `UPDATE` is
+`operator` never substitutes for either. `close_for_relink` takes no
+additional request fields: a request supplying `speaker_id` alongside
+`action: 'close_for_relink'` is refused `validation_failed` (previously
+accepted and silently ignored; this is a wire-visible change). The
+`threads` `UPDATE` is
 `WHERE thread_id = ? AND status = 'ACTIVE'`; a concurrent close_for_relink
 racing an in-flight append is refused via the store's own
 transaction-internal re-check (not merely the guard's earlier read) with a
@@ -175,8 +179,20 @@ every thread the principal has ever touched in the calling grant's own
 `tenantId`. Self-erasure requires `dataSubjectAccess: true`; naming a
 *different* `principal_id` additionally requires `dataSubjectAdmin: true`
 — neither claim is `operator`. Idempotent by `(tenant_id, idempotency_key)`:
-a replay with the same `principal_id` returns the stored receipt with no
-further writes; the same key with a different `principal_id` is `conflict`.
+a replay with the same `principal_id` returns the stored receipt and makes
+no change to any content table or to `erasure_receipts` itself — but it is
+not a no-op end to end. The nonce on the replaying request is consumed
+exactly like every other nonce-required call, and a journal entry is
+appended (`replay: true`, the same `tables_affected` snapshot the stored
+receipt already has). A replay carrying a **fresh** nonce (a different
+signed request reusing the same `idempotency_key`, e.g. a caller retrying
+blind after a dropped response) succeeds this way every time. A replay
+that reuses the exact same nonce as a prior call — a literal resend of the
+identical signed request — collides on the same `(tenant_id, nonce)`
+uniqueness every other nonce-required tool enforces and is refused
+`grant_replayed` instead, with no journal row added for the refused
+attempt. The same `idempotency_key` with a different `principal_id` is
+`conflict`.
 An unknown `principal_id` is a trivial zero-count success, never `not_found`
 (avoiding a cross-principal existence oracle). One transaction, three
 stages, always in order: resolve every affected row set, tombstone every
@@ -208,7 +224,7 @@ that mutates nothing). `dry_run: true` runs the identical candidate
 consumes no nonce — but still writes a journal entry, exactly like
 `dry_run: false`; only the nonce exemption is dry-run-specific. Bounded to
 200 rows per table per call, reusing the nonce-pruning bound. This is the
-only one of the fifteen tools whose schema accepts `now`: a synthetic
+only one of the five PH-MEMOS-4 tools whose schema accepts `now`: a synthetic
 clock here moves a tenant-wide mutation horizon (`cutoff = now - days`),
 which is why it carries the same `MSP_TEST_CLOCK`/`allowTestClock`
 test-clock gate every other tool's `now` already has ("Test clock (W1)",
@@ -361,7 +377,7 @@ CRITICAL 1).
 ### Multi-agent (stage 2, BL-MEMOS-040..048/112, DEC-MEMOS-17..21)
 
 **A hard cutover, no compatibility mode (DEC-MEMOS-17).** Every one of the
-ten tools above now requires two more grant claims: `agentId` and
+fifteen API-011 tools now requires two more grant claims: `agentId` and
 `workspaceId` (non-empty strings, ≤128 characters, unconstrained charset —
 opaque Tier-1-owned identifiers, exactly like `principalId`). Their
 absence is `grant_signature_invalid`, the same "missing required claim"
