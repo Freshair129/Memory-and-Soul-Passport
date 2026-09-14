@@ -223,9 +223,16 @@ describe("db/migrate concurrent cold start (multi-process)", () => {
 
       // Simulate "waiting is impossible": hold the SAME dedicated lock file
       // migrate.mjs itself uses (documented in docs/MIGRATION.md as
-      // `<dbPath>.migrate-lock`) open and never release it -- exactly what a
-      // holder that crashed mid-migration without releasing its OS file lock
-      // would leave behind.
+      // `<dbPath>.migrate-lock`) open and never release it. This is
+      // deliberately NOT modeling a crashed holder -- the OS releases a
+      // SQLite file lock the instant the holding process dies (measured at
+      // 19ms after SIGKILL; see docs/MIGRATION.md), so a crash can never
+      // actually produce this refusal. What this models is a HUNG holder
+      // (wedged but still alive -- e.g. deadlocked, or blocked on something
+      // that will never resolve) or a legitimate migration that simply runs
+      // longer than `lockTimeoutMs`: either way, the process holding the
+      // lock is still running, just not finishing, and the waiter must
+      // eventually give up rather than block forever.
       const lockPath = `${dbPath}.migrate-lock`;
       const stuckHolder = openLock(lockPath, 5000);
       stuckHolder.exec("BEGIN IMMEDIATE");
@@ -263,10 +270,47 @@ describe("db/migrate concurrent cold start (multi-process)", () => {
     15000,
   );
 
+  it("refuses with a typed migration_lock_unavailable: error, never a raw driver error, when the lock path is a directory", () => {
+    // Portable across platforms (Windows and POSIX both refuse to open a
+    // directory as a SQLite database file, `SQLITE_CANTOPEN_ISDIR` on
+    // POSIX): unlike the directory-denies-file-creation case (Windows-ACL-
+    // specific, exercised manually -- see the DevOps report), a directory
+    // sitting at the exact path `runMigrations` wants to use for its lock
+    // file reproduces the same class of failure -- `openLock` cannot open
+    // it -- everywhere this suite runs, including CI's `ubuntu-latest`.
+    const migrationsDir = setupMigrationsDir({ "0001_a.sql": "CREATE TABLE t1 (id INTEGER PRIMARY KEY);" });
+    const dbPath = path.join(tempRunDir(), "lock-is-a-dir.sqlite3");
+    const db = open(dbPath);
+    cleanups.push(() => db.close());
+
+    const lockPath = `${dbPath}.migrate-lock`;
+    mkdirSync(lockPath);
+
+    expect(() => runMigrations(db, migrationsDir)).toThrow(SchemaVersionError);
+    let thrown;
+    try {
+      runMigrations(db, migrationsDir);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SchemaVersionError);
+    expect(thrown.message).toMatch(/^migration_lock_unavailable:/);
+    expect(thrown.message).toContain(lockPath);
+    // The "never a raw driver error" promise: nothing SQLite-internal (its
+    // own error code word, e.g. "SQLITE_CANTOPEN") leaks into the message.
+    expect(thrown.message).not.toMatch(/SQLITE_/);
+
+    // Nothing was applied -- the failure happens before schema_migrations
+    // is ever created.
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'").all()).toEqual([]);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 't1'").all()).toEqual([]);
+  });
+
   it(
     "is not flaky across 20 independent concurrent cold starts (N=4 processes each, real root migrations)",
     async () => {
       const ITERATIONS = 20;
+      const expectedCount = rootMigrationVersions().length;
       const loopResults = [];
 
       for (let i = 0; i < ITERATIONS; i++) {

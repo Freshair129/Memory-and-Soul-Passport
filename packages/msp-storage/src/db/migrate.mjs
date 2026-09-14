@@ -405,12 +405,26 @@
 // migration runs, not just one write's worth of ordinary contention) makes
 // SQLite retry underneath, so the waiter blocks and then proceeds, never
 // surfacing a raw `SQLITE_BUSY` to its caller. Only if the timeout itself
-// elapses -- meaning waiting was not merely slow but effectively impossible,
-// e.g. a holder crashed mid-migration without ever releasing its OS file
-// lock, or some other process is simply never going to finish -- does this
-// module give up, and even then it never lets the raw `SqliteError` through:
-// it is rethrown as the typed `migration_concurrent_conflict:`-prefixed
-// `SchemaVersionError`, naming the database file and how long it waited.
+// elapses -- meaning waiting was not merely slow but effectively impossible
+// within the budget -- does this module give up, and even then it never
+// lets the raw `SqliteError` through: it is rethrown as the typed
+// `migration_concurrent_conflict:`-prefixed `SchemaVersionError`, naming the
+// database file and how long it waited. RKOI review: this is NOT a "crashed
+// holder" case -- the operating system releases a SQLite process's file
+// lock the instant that process dies (measured at 19ms after `SIGKILL`), so
+// a crash can never be what triggers this refusal; the next caller simply
+// acquires the lock right away. The real trigger is a HUNG holder (still
+// running, but wedged and never going to finish or release the lock) or,
+// just as importantly, a perfectly legitimate migration that genuinely runs
+// longer than `lockTimeoutMs` -- confirmed empirically: a 3.6-second
+// migration made a waiter configured with a 1000ms `lockTimeoutMs` refuse,
+// while the same waiter with the default (30s) budget waited it out and
+// succeeded. The practical consequence: a second process cold-starting
+// while a long rebuild migration is running against a large database can
+// see `migration_concurrent_conflict:` instead of waiting forever -- that is
+// this module failing closed rather than hanging, and the fix is for the
+// operator to retry once the in-progress migration finishes, not to treat
+// the message as evidence of a crash.
 //
 // Whichever process acquires the lock re-reads `schema_migrations` from
 // scratch once inside the critical section (`applyPendingMigrations`'s own
@@ -1051,15 +1065,37 @@ function migrationLockPath(db) {
 // concurrent second caller block (inside the lock connection's own generous
 // `busy_timeout`) instead of racing `fn()` itself. If SQLite still reports
 // `SQLITE_BUSY` after that timeout -- waiting was not merely slow but
-// effectively impossible, e.g. a prior holder crashed without releasing its
-// OS-level file lock -- this throws the typed `migration_concurrent_conflict:`
-// `SchemaVersionError` naming the database and how long it waited, never a
-// raw `SqliteError`.
+// effectively impossible within the budget, e.g. a HUNG holder that is
+// still running but will never finish or release the lock, or simply a
+// legitimate migration that outran `lockTimeoutMs` -- this throws the typed
+// `migration_concurrent_conflict:` `SchemaVersionError` naming the database
+// and how long it waited, never a raw `SqliteError`. Not a crashed-holder
+// case: the OS drops a dead process's SQLite file lock immediately (see the
+// module header comment), so a crash resolves on its own well before this
+// timeout could ever fire.
 function withMigrationLock(db, lockTimeoutMs, fn) {
   const lockPath = migrationLockPath(db);
   if (!lockPath) return fn();
 
-  const lockDb = openLock(lockPath, lockTimeoutMs);
+  // RKOI review (revision): if the lock file itself cannot be opened --
+  // the directory denies file creation (`SQLITE_CANTOPEN`), or `lockPath`
+  // names an existing directory instead of a file (`SQLITE_CANTOPEN_ISDIR`)
+  // -- `openLock` used to let a raw, unprefixed driver error straight out of
+  // `runMigrations`, breaking the "never a raw driver error" promise every
+  // other guard in this module keeps. Wrapped here in the typed
+  // `migration_lock_unavailable:` prefix, naming the lock path so an
+  // operator knows exactly which file to look at, but deliberately NOT
+  // embedding the raw driver error's own message/internals in the thrown
+  // text.
+  let lockDb;
+  try {
+    lockDb = openLock(lockPath, lockTimeoutMs);
+  } catch {
+    throw new SchemaVersionError(
+      `migration_lock_unavailable: could not open the migration lock file "${lockPath}". Check that its parent ` +
+        `directory exists, is writable, and that "${lockPath}" is not itself a directory. Refusing to start.`,
+    );
+  }
   try {
     try {
       lockDb.exec("BEGIN IMMEDIATE");

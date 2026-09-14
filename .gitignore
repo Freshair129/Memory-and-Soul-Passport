@@ -6,6 +6,7 @@ coverage/
 *.db
 *.db-shm
 *.db-wal
+*.migrate-lock
 *.log
 .DS_Store
 
