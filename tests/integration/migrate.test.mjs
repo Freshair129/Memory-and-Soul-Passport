@@ -97,7 +97,7 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(9);
+    expect(result.appliedCount).toBe(10);
     const tables = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN " +
@@ -136,7 +136,7 @@ describe("db/migrate (AC-03)", () => {
     runMigrations(db, migrationsDir);
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(0);
-    expect(second.currentVersion).toBe(9);
+    expect(second.currentVersion).toBe(10);
   });
 
   // TASK-MEMOS-002 stage 1: 0008_thread_memory.sql is a real, non-directive
@@ -149,8 +149,8 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(9);
-    expect(result.currentVersion).toBe(9);
+    expect(result.appliedCount).toBe(10);
+    expect(result.currentVersion).toBe(10);
     expect(db.pragma("foreign_key_check")).toEqual([]);
     const threadTables = db
       .prepare(
@@ -176,8 +176,8 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(9);
-    expect(result.currentVersion).toBe(9);
+    expect(result.appliedCount).toBe(10);
+    expect(result.currentVersion).toBe(10);
     expect(db.pragma("foreign_key_check")).toEqual([]);
     const agentTables = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('thread_agents','grant_nonces')")
@@ -193,7 +193,8 @@ describe("db/migrate (AC-03)", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNamesThrough0008 = readdirSync(rootMigrationsDir)
       .filter((name) => /^\d{4}_.*\.sql$/.test(name))
-      .filter((name) => !name.startsWith("0009_"));
+      .filter((name) => !name.startsWith("0009_"))
+      .filter((name) => !name.startsWith("0010_"));
     expect(migrationFileNamesThrough0008).toHaveLength(8);
     const filesThrough0008 = Object.fromEntries(migrationFileNamesThrough0008.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]));
     const migrationsDir0009 = setupMigrationsDir(filesThrough0008);
@@ -236,12 +237,110 @@ describe("db/migrate (AC-03)", () => {
     expect(pending).toEqual({ agent_id: null, workspace_id: null, text: "pending-before-0009" });
   });
 
+  // PH-MEMOS-4 (TASK-MEMOS-004): 0010_erasure_receipts.sql is a real,
+  // non-directive migration -- an additive trigger replacement on
+  // protected_memory_records (REQUIRES 0009, since the recreated trigger's
+  // body references the agent_id/visibility columns 0009 adds) plus one
+  // brand-new table (erasure_receipts). Both a fresh database and one
+  // already populated through 0009 (with a real ACTIVE protected_memory_
+  // records row) must apply 0010 with an EMPTY PRAGMA foreign_key_check
+  // and with every pre-existing row intact -- 0010 rebuilds nothing from
+  // an earlier migration (no table is dropped, only a trigger).
+  it("0010_erasure_receipts.sql applies cleanly on a fresh database: 0001-0010 in order, zero foreign_key_check violations", () => {
+    const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
+    const db = freshDb();
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(10);
+    expect(result.currentVersion).toBe(10);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+    const erasureTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'erasure_receipts'").all();
+    expect(erasureTables).toHaveLength(1);
+    const erasureCols = db.prepare("PRAGMA table_info(erasure_receipts)").all().map((col) => col.name);
+    expect(erasureCols).toEqual(
+      expect.arrayContaining(["erasure_receipt_id", "tenant_id", "principal_id", "idempotency_key", "requested_by_agent_id", "tables_affected_json", "created_at"]),
+    );
+  });
+
+  it("0010_erasure_receipts.sql applies cleanly on a database already populated through 0009: pre-existing rows survive, rootpage unchanged, zero foreign_key_check violations", () => {
+    const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
+    const migrationFileNamesThrough0009 = readdirSync(rootMigrationsDir)
+      .filter((name) => /^\d{4}_.*\.sql$/.test(name))
+      .filter((name) => !name.startsWith("0010_"));
+    expect(migrationFileNamesThrough0009).toHaveLength(9);
+    const filesThrough0009 = Object.fromEntries(migrationFileNamesThrough0009.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]));
+    const migrationsDir0010 = setupMigrationsDir(filesThrough0009);
+    const db0010 = freshDb();
+
+    const first0010 = runMigrations(db0010, migrationsDir0010);
+    expect(first0010.appliedCount).toBe(9);
+
+    // Populate a real thread and an ACTIVE protected_memory_records row
+    // through the 0001-0009 schema before 0010 ever runs.
+    const nowIso = "2026-01-01T00:00:00.000Z";
+    db0010.prepare(
+      "INSERT INTO threads(thread_id, thread_kind, channel_type, channel_account_id, external_room_ref_hmac, tenant_id, business_id, status, created_at, updated_at) VALUES (?,'DIRECT','LINE','oa','hash-precedes-0010','tenant-precedes-0010',NULL,'ACTIVE',?,?)",
+    ).run("thread-precedes-0010", nowIso, nowIso);
+    db0010.prepare(
+      "INSERT INTO chat_sessions(session_id, tenant_id, thread_id, status, opened_at, idle_deadline, policy_revision) VALUES (?,?,?,'OPEN',?,?, 'p')",
+    ).run("session-precedes-0010", "tenant-precedes-0010", "thread-precedes-0010", nowIso, nowIso);
+    db0010.prepare(
+      "INSERT INTO thread_participants(membership_id, tenant_id, thread_id, speaker_id, speaker_kind, identity_assurance, joined_at) VALUES (?,?,?, 'alice','HUMAN','VERIFIED',?)",
+    ).run("membership-precedes-0010", "tenant-precedes-0010", "thread-precedes-0010", nowIso);
+    db0010.prepare(
+      "INSERT INTO protected_memory_records(record_id, tenant_id, thread_id, session_id, kind, asserted_by_speaker_id, subject_person_id, scope_json, body_json, source_message_refs_json, status, verification_state, version, created_at, updated_at) VALUES (?,?,?,?,'PREFERENCE','alice','alice','{\"raw\":true}','{}','[]','ACTIVE','CANDIDATE',1,?,?)",
+    ).run("record-precedes-0010", "tenant-precedes-0010", "thread-precedes-0010", "session-precedes-0010", nowIso, nowIso);
+
+    // REGRESSION GUARD: before 0010 ships, the shipped 0009 trigger still
+    // pins scope_json unchanged even on its tombstone branch -- an erasure-
+    // shaped UPDATE that also blanks scope_json is refused.
+    expect(() =>
+      db0010
+        .prepare("UPDATE protected_memory_records SET redaction_state = 'tombstoned', body_json = '{}', scope_json = '{}' WHERE record_id = ?")
+        .run("record-precedes-0010"),
+    ).toThrow(/may only be superseded|tombstoned/i);
+
+    // rootpage-unchanged proof, same style as 0009's own drop+recreate
+    // acceptance -- this is a trigger-only replacement, no table rebuild.
+    const rootpageBefore = db0010.prepare("SELECT rootpage FROM sqlite_master WHERE type='table' AND name='protected_memory_records'").get().rootpage;
+
+    writeFileSync(path.join(migrationsDir0010, "0010_erasure_receipts.sql"), readFileSync(path.join(rootMigrationsDir, "0010_erasure_receipts.sql"), "utf8"), "utf8");
+    const second0010 = runMigrations(db0010, migrationsDir0010);
+    expect(second0010.appliedCount).toBe(1);
+    expect(second0010.currentVersion).toBe(10);
+    expect(db0010.pragma("foreign_key_check")).toEqual([]);
+
+    const rootpageAfter = db0010.prepare("SELECT rootpage FROM sqlite_master WHERE type='table' AND name='protected_memory_records'").get().rootpage;
+    expect(rootpageAfter).toBe(rootpageBefore);
+
+    // The pre-existing row is untouched -- 0010 never rebuilds an earlier
+    // migration's table.
+    const before = db0010.prepare("SELECT scope_json, redaction_state FROM protected_memory_records WHERE record_id = ?").get("record-precedes-0010");
+    expect(before).toEqual({ scope_json: '{"raw":true}', redaction_state: "none" });
+
+    // Now the SAME erasure-shaped UPDATE the regression guard above
+    // refused is accepted -- the recreated trigger's tombstone branch now
+    // also permits scope_json -> '{}'.
+    db0010
+      .prepare("UPDATE protected_memory_records SET redaction_state = 'tombstoned', body_json = '{}', scope_json = '{}' WHERE record_id = ?")
+      .run("record-precedes-0010");
+    const after = db0010.prepare("SELECT scope_json, body_json, redaction_state FROM protected_memory_records WHERE record_id = ?").get("record-precedes-0010");
+    expect(after).toEqual({ scope_json: "{}", body_json: "{}", redaction_state: "tombstoned" });
+
+    // erasure_receipts exists, is insertable, and is immutable/no-delete.
+    db0010
+      .prepare("INSERT INTO erasure_receipts (erasure_receipt_id, tenant_id, principal_id, idempotency_key, requested_by_agent_id, tables_affected_json, created_at) VALUES (?,?,?,?,?,?,?)")
+      .run("receipt-0010", "tenant-precedes-0010", "alice", "key-1", "agent-1", "{}", nowIso);
+    expect(() => db0010.prepare("UPDATE erasure_receipts SET principal_id = 'bob' WHERE erasure_receipt_id = ?").run("receipt-0010")).toThrow(/immutable/i);
+    expect(() => db0010.prepare("DELETE FROM erasure_receipts WHERE erasure_receipt_id = ?").run("receipt-0010")).toThrow(/never be deleted/i);
+  });
+
   it("0008_thread_memory.sql applies cleanly on a database already populated through 0007: pre-existing rows survive, zero foreign_key_check violations", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir)
       .filter((name) => /^\d{4}_.*\.sql$/.test(name))
       .filter((name) => !name.startsWith("0008_"))
-      .filter((name) => !name.startsWith("0009_"));
+      .filter((name) => !name.startsWith("0009_"))
+      .filter((name) => !name.startsWith("0010_"));
     expect(migrationFileNames).toHaveLength(7);
     const files = Object.fromEntries(migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]));
     const migrationsDir = setupMigrationsDir(files);
@@ -702,7 +801,7 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
   it("the real root migrations 0001-0007, copied into a temp directory, apply with no directive classification error -- none of their leading comment blocks mentions msp-migration", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
-    expect(migrationFileNames).toHaveLength(9);
+    expect(migrationFileNames).toHaveLength(10);
 
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
@@ -711,8 +810,8 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
     const db = freshDb();
 
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(9);
-    expect(result.currentVersion).toBe(9);
+    expect(result.appliedCount).toBe(10);
+    expect(result.currentVersion).toBe(10);
   });
 
   it("idempotency: a second runMigrations over the same directory applies 0 migrations and leaves foreign_keys at 1", () => {
@@ -938,7 +1037,7 @@ describe("db/migrate structural foreign-key check on the plain path (RKOI follow
   it("applies the real root migrations 0001-0007 cleanly under the new plain-path structural check, then a follow-on plain migration 0008 too -- an ordinary follow-on migration is not rejected", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
-    expect(migrationFileNames).toHaveLength(9);
+    expect(migrationFileNames).toHaveLength(10);
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
     );
@@ -946,16 +1045,16 @@ describe("db/migrate structural foreign-key check on the plain path (RKOI follow
     const db = freshDb();
 
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(9);
+    expect(result.appliedCount).toBe(10);
 
     writeFileSync(
-      path.join(migrationsDir, "0010_trivial_followup.sql"),
+      path.join(migrationsDir, "0011_trivial_followup.sql"),
       "CREATE TABLE trivial_followup (id INTEGER PRIMARY KEY);",
       "utf8",
     );
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(1);
-    expect(second.currentVersion).toBe(10);
+    expect(second.currentVersion).toBe(11);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_followup'").all()).toHaveLength(1);
   });
 
@@ -1646,7 +1745,7 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
   it("applies the real root migrations 0001-0007 -- including the real entities_fts virtual table and its shadow tables -- then a follow-on plain migration and a follow-on directive migration too, under the new type-aware check", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
-    expect(migrationFileNames).toHaveLength(9);
+    expect(migrationFileNames).toHaveLength(10);
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
     );
@@ -1654,7 +1753,7 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
     const db = freshDb();
 
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(9);
+    expect(result.appliedCount).toBe(10);
 
     // entities_fts is a real FTS5 virtual table with real shadow tables --
     // confirm at least one shadow table is present and typed correctly by
@@ -1665,20 +1764,20 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
     const shadowEntries = tableList.filter((row) => row.name.startsWith("entities_fts_") && row.type === "shadow");
     expect(shadowEntries.length).toBeGreaterThan(0);
 
-    writeFileSync(path.join(migrationsDir, "0010_trivial_plain_followup.sql"), "CREATE TABLE trivial_plain_followup (id INTEGER PRIMARY KEY);", "utf8");
+    writeFileSync(path.join(migrationsDir, "0011_trivial_plain_followup.sql"), "CREATE TABLE trivial_plain_followup (id INTEGER PRIMARY KEY);", "utf8");
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(1);
-    expect(second.currentVersion).toBe(10);
+    expect(second.currentVersion).toBe(11);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_plain_followup'").all()).toHaveLength(1);
 
     writeFileSync(
-      path.join(migrationsDir, "0011_trivial_directive_followup.sql"),
+      path.join(migrationsDir, "0012_trivial_directive_followup.sql"),
       withDirective("CREATE TABLE trivial_directive_followup (id INTEGER PRIMARY KEY);"),
       "utf8",
     );
     const third = runMigrations(db, migrationsDir);
     expect(third.appliedCount).toBe(1);
-    expect(third.currentVersion).toBe(11);
+    expect(third.currentVersion).toBe(12);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_directive_followup'").all()).toHaveLength(1);
   });
 });
