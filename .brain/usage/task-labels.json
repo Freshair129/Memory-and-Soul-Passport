@@ -370,6 +370,13 @@
             "BL-MEMOS-048"
           ],
           "label": "Stage 2 revision: iterative scanner, nonce expiry/bounds, replay+departed tests, GKS/legacy JSON, journal (efa395e, 4d0df3c)"
+        },
+        "13": {
+          "task_ids": [
+            "BL-MEMOS-047"
+          ],
+          "label": "Stage 2 non-blocking fold: journal workspace_id, legacy audit columns, grantExpiresAt bounds",
+          "status": "open"
         }
       }
     },
@@ -428,8 +435,7 @@
           "task_ids": [
             "BL-MEMOS-047"
           ],
-          "label": "Stage 2 implementation code review, round 2 (4d0df3c)",
-          "status": "open"
+          "label": "Stage 2 implementation code review, round 2 (APPROVED, 4d0df3c)"
         }
       }
     },
@@ -465,6 +471,18 @@
             "BL-MEMOS-047"
           ],
           "label": "CI engine canary for V8 JSON.parse bug (e0a3624)"
+        }
+      }
+    },
+    "a0d58fa2e909241ec": {
+      "actor": "janus",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-080"
+          ],
+          "label": "Fix concurrent cold-start migration race (fix/migrate-concurrent-cold-start)",
+          "status": "open"
         }
       }
     }
