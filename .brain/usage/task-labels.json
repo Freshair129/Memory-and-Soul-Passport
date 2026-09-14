@@ -586,7 +586,18 @@
           "task_ids": [
             "BL-MEMOS-050..057"
           ],
-          "label": "PH-MEMOS-4 spec review, round 3 (3c4b4d7)",
+          "label": "PH-MEMOS-4 spec review, round 3 (1 critical: ADR decision paragraphs stale)"
+        }
+      }
+    },
+    "afc1dfeb35fe0aed3": {
+      "actor": "ather",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050..059"
+          ],
+          "label": "PH-MEMOS-4 spec revision round 4 (design v0.5.3b)",
           "status": "open"
         }
       }
