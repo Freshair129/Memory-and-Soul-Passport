@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.6
+
+- `MSP_THREAD_RETENTION_DAYS` is forwarded to the MSP child (added to
+  `MSP_RUNTIME_ENV_NAMES`; PH-MEMOS-4, `msp_thread_retention_tick`,
+  `BL-MEMOS-054`). It is optional and opt-in: unset or `0`, the tick is a
+  documented, always-callable no-op that mutates nothing and returns
+  all-zero counts, never refused. Once set to a positive integer, it is
+  the single deployment-wide age horizon (in days) `msp_thread_retention_tick`
+  tombstones content past, for every tenant that calls it. Never journaled
+  or echoed back to a caller, same as the other thread-memory deployment
+  ceilings (`MSP_THREAD_IDLE_TIMEOUT_MINUTES`/`MSP_THREAD_RECENT_EXCHANGES`).
+
 ## 0.2.5
 
 RKOI stage-2 revision (NEEDS REVISION, 1 critical) of the 0.2.4 defense:

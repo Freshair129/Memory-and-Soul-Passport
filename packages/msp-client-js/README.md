@@ -20,7 +20,7 @@ start without one rather than choosing a database path for you.
 **This is the behaviour most likely to surprise you.** The MSP child is not
 given your process environment. It is given exactly:
 
-- `MSP_RUNTIME_ENV_NAMES` — the fourteen variables the MSP server reads:
+- `MSP_RUNTIME_ENV_NAMES` — the fifteen variables the MSP server reads:
   `MSP_DB_PATH`, `MSP_GKS_COMMAND`, `MSP_GKS_ARGS`, `MSP_GKS_CWD`,
   `MSP_PIPELINE_PRINCIPALS`, `MSP_GKS_PIPELINE_CREDENTIAL`,
   `MSP_PIPELINE_WORKER_URL`, `MSP_PIPELINE_WORKER_TOKEN`, `OLLAMA_BASE_URL`,
@@ -30,12 +30,14 @@ given your process environment. It is given exactly:
   entirely, for every tenant, with no fallback), `MSP_IDENTITY_HMAC_KEY`
   (API-011 thread-memory secrets — see
   `docs/API-011-THREAD-MEMORY-CONTRACT.md` — never journaled or echoed back
-  to a caller), and `MSP_THREAD_IDLE_TIMEOUT_MINUTES` /
-  `MSP_THREAD_RECENT_EXCHANGES` (API-011 per-deployment ceilings). The
-  server also reads `MSP_TEST_CLOCK`, but that one is deliberately **not**
-  in this allowlist: it is read only at the server's own composition root,
-  never by a client-spawned child's caller, so a caller can never steal or
-  extend a lease by lying about the time.
+  to a caller), `MSP_THREAD_IDLE_TIMEOUT_MINUTES` /
+  `MSP_THREAD_RECENT_EXCHANGES` (API-011 per-deployment ceilings), and
+  `MSP_THREAD_RETENTION_DAYS` (PH-MEMOS-4, `msp_thread_retention_tick`'s
+  deployment-wide age horizon in days — unset or `0` is a documented,
+  always-callable no-op). The server also reads `MSP_TEST_CLOCK`, but that
+  one is deliberately **not** in this allowlist: it is read only at the
+  server's own composition root, never by a client-spawned child's caller,
+  so a caller can never steal or extend a lease by lying about the time.
 - any variable named `GKS_*` — MSP does not read these, but must pass them to
   the GKS child it may spawn in turn
 - `MSP_OS_ENV_NAMES` — the OS basics a Node child needs to start, plus
