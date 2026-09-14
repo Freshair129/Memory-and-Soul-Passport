@@ -10,6 +10,10 @@ coverage/
 *.log
 .DS_Store
 
+# Subagent worktrees. Each agent's isolated checkout lives here; never a
+# repo artifact, and `git add -A` would otherwise stage whole checkouts.
+.claude/worktrees/
+
 # Environment files. MSP takes every credential from the environment its caller
 # passes it, so a stray .env in the tree is a secret one commit from the remote.
 .env
