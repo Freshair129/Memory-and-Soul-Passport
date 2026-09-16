@@ -684,6 +684,17 @@
           "label": "PH-MEMOS-4 confirm nonce fix (APPROVED, ready to merge, 740e9d9)"
         }
       }
+    },
+    "a2b47af15aee5ddee": {
+      "actor": "ather",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-087"
+          ],
+          "label": "Record owner confirmation of DEC-MEMOS-22..35 across ADR/design/plan"
+        }
+      }
     }
   },
   "coordinator": {
@@ -955,7 +966,26 @@
       "task_ids": [
         "OPS-MEMOS-004"
       ],
-      "label": "Merge PRs 27/28; record owner confirmation of DEC-MEMOS-22..35 (ATHER); open and merge PRs 29/30 for PH-MEMOS-4"
+      "label": "Merge PR #27 (lockfile sync)"
+    },
+    "45": {
+      "task_ids": [
+        "OPS-MEMOS-004"
+      ],
+      "label": "Merge PR #28 (gitignore worktrees)"
+    },
+    "46": {
+      "task_ids": [
+        "BL-MEMOS-087"
+      ],
+      "label": "Owner confirms DEC-MEMOS-22..35; record in ADR/design/plan (ATHER), commit b511fc8"
+    },
+    "47": {
+      "task_ids": [
+        "BL-MEMOS-050..059",
+        "OPS-MEMOS-004"
+      ],
+      "label": "Open and merge PRs #29/#30; lockfile carry to 0.2.6; ledger"
     }
   }
 }
