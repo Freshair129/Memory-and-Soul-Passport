@@ -1,7 +1,7 @@
 ---
-version: "0.1.18b"
+version: "0.1.19b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-16T14:00:00+07:00,ATHER"
+last_update: "2026-09-16T18:00:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -1153,15 +1153,32 @@ RKOI-review-response round below, were confirmed by the owner on
     `BL-MEMOS-106`/`092`/`093`, since production use is itself deferred
     by owner direction (2026-09-14). — *pending owner confirmation.*
     (design §5.3.1).
-49. **DEC-MEMOS-49, new (RKOI PH-MEMOS-5 review round 1, CRITICAL 1) —
-    the `access_context` gate is nine new call sites, not a reuse of
-    `assertVaultScope`'s existing one.** `domain/vault-registry.mjs`
-    gains `classifyPrincipalAccess(vault, accessContext)`, built on the
-    existing `isVaultAccessibleTo` but returning a three-way outcome
-    (`null`/`'access_context_required'`/`'access_context_denied'`/`'ok'`)
-    a boolean cannot express; `contracts/vault-scope-guard.mjs` gains a
-    new export, `assertAccessContext(outcome, message)`, throwing one of
-    two new error classes (`AccessContextRequiredError`/
+49. **DEC-MEMOS-49, new (RKOI PH-MEMOS-5 review round 1, CRITICAL 1;
+    revised in place, RKOI PH-MEMOS-5 review round 2, CRITICAL 3/WARNING
+    3) — the `access_context` gate is nine new call sites, not a reuse of
+    `assertVaultScope`'s existing one, and its branch logic has exactly
+    one normative statement.** `domain/vault-registry.mjs` gains
+    `classifyPrincipalAccess(vault, accessContext)`, returning a
+    three-way outcome (`null`/`'access_context_required'`/
+    `'access_context_denied'`/`'ok'`) a boolean cannot express; it is
+    built on a new, private, row-taking `#isVaultRowAccessibleTo(vault,
+    ctx)`, called directly with the row `classifyPrincipalAccess` already
+    has (no second `SELECT` — round 1's text said it called the
+    `SELECT`-performing public `isVaultAccessibleTo(vault.vault_id,
+    {...})`, which would have re-fetched a row already in hand, WARNING
+    3). `#isVaultRowAccessibleTo` is the single normative branch set for
+    this gate — round 1's design §5.1 carried its own, looser, duplicate
+    copy that never checked `vault.status`; that copy is removed, and
+    `#isVaultRowAccessibleTo` now refuses `status !== 'active'` before any
+    tuple comparison, folded into the existing `access_context_denied`
+    answer rather than a new oracle (CRITICAL 3 — an erased principal
+    vault's still-populated `tenant_id`/`agent_id`/`workspace_id` columns,
+    since erasure blanks only `principal_id`, previously matched and read
+    `'ok'`). The public `isVaultAccessibleTo(vaultId, ctx)` (`mountVault`'s
+    sole caller) becomes a thin `SELECT`-then-delegate wrapper around the
+    same private helper. `contracts/vault-scope-guard.mjs` gains a new
+    export, `assertAccessContext(outcome, message)`, throwing one of two
+    new error classes (`AccessContextRequiredError`/
     `AccessContextDeniedError`, same shape as `VaultScopeDeniedError`).
     `assertVaultScope`'s own signature and its one existing call site
     (`msp_memory_links_create`'s endpoint-consistency check) are
@@ -1169,19 +1186,37 @@ RKOI-review-response round below, were confirmed by the owner on
     contracts guard together widen `msp-contracts`' own "no `.prepare(`/
     `.exec(`/`.pragma(` anywhere" structural proof. — *pending owner
     confirmation.* (design §5.1, §5.2).
-50. **DEC-MEMOS-50, new (RKOI PH-MEMOS-5 review round 1, CRITICAL 2) —
-    principal-vault re-provisioning after erasure mints a new
-    `provision_epoch`, never colliding with or reactivating an erased
-    row.** A new `vaults.provision_epoch INTEGER NOT NULL DEFAULT 0`
-    column folds into the deterministic `vault_id` computation
-    (`stableId(..., String(epoch))`); provisioning selects
-    `MAX(provision_epoch)` across every generation (active or erased) of
-    a tuple and mints `epoch + 1` when no active row exists. A genuine
-    concurrent first-ever-provision race for one tuple collides on
-    `vault_id`'s own `PRIMARY KEY` — corrected from the prior revision's
-    wrong citation of the partial unique index as the sole race
-    backstop — and retries via a fresh active-row `SELECT`, bounded at 5
-    attempts. — *pending owner confirmation.* (design §5.2, §12.4).
+50. **DEC-MEMOS-50, new (RKOI PH-MEMOS-5 review round 1, CRITICAL 2;
+    revised in place a second time, RKOI PH-MEMOS-5 review round 2,
+    CRITICAL 1/2) — principal-vault re-provisioning after erasure mints a
+    new `provision_epoch`, keyed on a column erasure cannot blank, and a
+    genuine provisioning race is refused without any internal retry.** A
+    `vaults.provision_epoch INTEGER NOT NULL DEFAULT 0` column folds into
+    the deterministic `vault_id` computation (`stableId(...,
+    String(epoch))`); provisioning selects `MAX(provision_epoch)` across
+    every generation (active or erased) of a tuple and mints `epoch + 1`
+    when no active row exists. **Round 1's own fix still keyed that
+    `MAX(provision_epoch)` lookup on `principal_id`, which §12.4's own
+    `CHECK` blanks to `NULL` on erasure — so the lookup found nothing for
+    an erased tuple and re-collided on the identical `vault_id`, RKOI's
+    direct reproduction against the real runner.** A new column,
+    `vaults.principal_hmac TEXT` (an HMAC of the owner principal, computed
+    once by the `msp_vault_resolve` handler and pinned across the erasure
+    transition by `trg_vaults_update_guard`'s extended branch (b), never
+    blanked the way `principal_id` is), replaces `principal_id` as the
+    epoch lookup's key. **A genuine concurrent first-ever-provision race
+    for one tuple never reaches `vault_id`'s own `PRIMARY KEY` at all —
+    corrected a second time**: probed against two real connections on one
+    WAL database, SQLite serializes writers, so the loser is refused
+    `SQLITE_BUSY`/`SQLITE_BUSY_SNAPSHOT` at the transaction-locking layer
+    before its own `INSERT` ever executes. The round-1 bounded-retry loop
+    is removed entirely, not merely re-bounded — a retry nested inside
+    `msp_vault_resolve`'s own outer transaction (§5.3) cannot observe a
+    commit made after that outer transaction's snapshot was taken; the
+    loser is instead refused a new typed error,
+    `VaultProvisionConflictError`/`vault_provision_conflict`, and its own
+    next, genuinely top-level call is what resolves the race. —
+    *pending owner confirmation.* (design §5.2, §5.3, §12.4).
 51. **DEC-MEMOS-51, new (RKOI PH-MEMOS-5 review round 1, CRITICAL 3 and
     WARNING 2) — `msp_context_resolve`'s write path, and
     `msp_vault_resolve`'s `MSP_IDENTITY_HMAC_KEY` requirement, both
@@ -1516,6 +1551,99 @@ plan-only).
 "### The thirty-five decisions" below, pending owner confirmation like
 `36..48`.**
 
+## Revision note — RKOI PH-MEMOS-5 review round 2, NEEDS REVISION 3 critical (2026-09-16)
+
+RKOI reviewed the round-1 answer above (commit `38caf08`, design v0.6.1b)
+and returned **NEEDS REVISION with 3 critical findings plus 7 warnings**,
+every one proved by running code against the real runner or two real
+`better-sqlite3` connections, not by paraphrase. Round 1's own criticals 1,
+3 and 4 are confirmed closed; **round 1's critical 2 was not**, and reopens
+below as this round's own CRITICAL 1. Full technical detail lives in
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.7.0b; this ADR
+records only the decision-paragraph corrections, per this ADR's own "what
+this ADR does not decide" boundary. No new `DEC-MEMOS` id this round —
+`DEC-MEMOS-49`/`50` are revised in place a second time, since the
+mechanism changed again, not merely the prose describing it.
+
+- **CRITICAL 1** (design §5.2, §12.4, `DEC-MEMOS-50`): round 1's
+  `provision_epoch` fix still keyed its `MAX(provision_epoch)` lookup on
+  `principal_id` — the exact column §12.4's own `CHECK` requires blanked
+  to `NULL` on erasure. Against an erased row the lookup therefore still
+  returned `NULL`, the epoch still reset to `0`, and re-provisioning after
+  erasure still collided on `vault_id`'s own `PRIMARY KEY`, reproduced
+  directly (`re-provision after erasure THREW:
+  SQLITE_CONSTRAINT_PRIMARYKEY`). Resolved with a new column,
+  `vaults.principal_hmac` — computed once by the `msp_vault_resolve`
+  handler, never inside `VaultRegistry`, and pinned across the erasure
+  transition by `trg_vaults_update_guard`'s extended branch (b) — used in
+  place of `principal_id` for the epoch lookup.
+- **CRITICAL 2** (design §5.2, §5.3, `DEC-MEMOS-50`): round 1's race-
+  handling text again named the wrong constraint. RKOI probed two real
+  `better-sqlite3` connections against one WAL database — the only way two
+  racers are reachable, since a single connection is synchronous — and
+  found `SQLITE_BUSY`/`SQLITE_BUSY_SNAPSHOT`, never `vault_id`'s own
+  `PRIMARY KEY`: SQLite serializes writers, so the loser's `INSERT` never
+  reaches the storage engine's constraint check at all. The round-1
+  bounded-retry loop is removed, not merely re-bounded — nested inside
+  `msp_vault_resolve`'s own outer transaction (§5.3's "one transaction"
+  wrap), a retry cannot observe a commit made after that outer
+  transaction's own snapshot was taken (`better-sqlite3` nests a
+  `.transaction()` invoked from inside another as a `SAVEPOINT`, not a
+  fresh `BEGIN`). Resolved by catching exactly `SQLITE_BUSY_SNAPSHOT`
+  (matching §7.1's own narrowed `close_for_relink` precedent) and
+  throwing a new typed error, `VaultProvisionConflictError`/
+  `vault_provision_conflict` (added to design §5.3's own error table) —
+  the caller's own next, genuinely top-level call is what resolves the
+  race, not an internal loop.
+- **CRITICAL 3** (design §5.1, §5.2, new finding against the `DEC-MEMOS-49`
+  mechanism, present since round 1): neither `classifyPrincipalAccess`/
+  `isVaultAccessibleTo` nor `requireKnownVault` ever checked `vault.status`
+  — an `access_context` tuple matching an **erased** principal vault's
+  still-populated `tenant_id`/`agent_id`/`workspace_id` columns (erasure
+  blanks only `principal_id`, per §12.4's own `CHECK`) read as `'ok'`,
+  reproduced directly. Resolved by unifying `isVaultAccessibleTo`/
+  `classifyPrincipalAccess` into one row-taking branch set,
+  `#isVaultRowAccessibleTo`, that refuses `status !== 'active'` before any
+  tuple comparison — folded into the existing `access_context_denied`
+  answer, not a new, distinguishing oracle — and that `classifyPrincipalAccess`
+  calls directly with the row it already has (also closes WARNING 3 below:
+  round 1's text would have performed a second `SELECT`). Design §5.1's
+  own duplicate, looser restatement of the branch set is removed, leaving
+  §5.2 as this gate's single normative source.
+
+**Warnings folded in** (full text in the design's own CHANGELOG, v0.7.0b):
+(1) design §5's owner-tuple claim — a reader's first stop, one level above
+where round 1's own correction landed — rescoped to "while no erasure has
+happened," matching §5.2/§12.4; (2) `MSP_IDENTITY_HMAC_KEY` named in
+design §13's `msp_vault_resolve` tool row and §14's
+`identity_hmac_unconfigured` meaning broadened beyond "a call that must
+hash a channel reference," not only in §5.3's prose — plan's
+`BL-MEMOS-062` gains a README documentation deliverable, owner JANUS,
+closing the condition RKOI's round-1 acceptance of the mandatory-key
+decision was conditioned on; (3) `isVaultAccessibleTo` no longer performs
+a second `SELECT` when reached via `classifyPrincipalAccess` (folded into
+the CRITICAL 3 fix above, `DEC-MEMOS-49`); (4) the two principal-type
+branches in `#isVaultRowAccessibleTo` now sit ahead of the workspace-mount
+short-circuit, removing (not merely restating) the dependency on
+`vault_mounts`'s own principal-exclusion triggers; (5) design §5.1's
+`AccessContext` type block now states normatively that unknown keys (e.g.
+`msp_vault_resolve`'s wider `access_context` object) are accepted and
+silently ignored on reuse, never `validation_failed`; (6) `msp_context_diff`'s
+`include_payload` refusal is kept, its rationale reworded (design §5.4,
+§15 row 31, plan) — it is defense in depth, since `msp_context_resolve`
+hard-codes `*_vault_refs` to `[]` today, not a channel this revision found
+open and closed; (7) plan's `BL-MEMOS-062` proof column rewritten to a
+race case that can actually pass under CRITICAL 2's corrected mechanism.
+**Also added, per RKOI's ruling on this design's own self-asserted
+`access_context` pattern:** one paragraph in design §5.4 stating the
+scoped-`contexts` control's actual strength rests on the random,
+non-derivable `context_id`, not the self-asserted `tenant_id`/
+`principal_id` pair.
+
+**No new decisions this round — `DEC-MEMOS-49`/`50` revised in place a
+second time (see their own paragraphs above, "the thirty-five decisions"),
+`DEC-MEMOS-51`/`52` unaffected.**
+
 ## Consequences
 
 - MSP gains one coherent API-011 surface instead of two incompatible ones,
@@ -1618,13 +1746,13 @@ numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-
 - [ ] 46. Scoped `contexts` rows add nullable `tenant_id`/`principal_id` via a plain `ALTER TABLE`, both-or-neither enforced at the contracts layer; `include_payload` is refused unconditionally for a scoped row on `msp_context_diff` only — `audit`/`replay` expose no payload field (DEC-MEMOS-46, corrected RKOI PH-MEMOS-5 review round 1).
 - [ ] 47. The live edit to `docs/API-009-Persistent-Memory-Contract.md` is deferred to `BL-MEMOS-063`'s own implementation-time commit, not part of this design pass (DEC-MEMOS-47).
 - [ ] 48. New cross-repo item `BL-MEMOS-113`: zuri-ai's `validateVaultSet` must be updated to read and forward the new principal-vault response fields before they are usable in production, deferred to PH-MEMOS-8 (DEC-MEMOS-48).
-- [ ] 49. The `access_context` gate is nine new call sites in `memory-handlers.mjs` via a new `classifyPrincipalAccess`/`assertAccessContext` mechanism, never a reuse of `assertVaultScope`'s existing call site, which stays unchanged (DEC-MEMOS-49).
-- [ ] 50. Principal-vault re-provisioning after erasure mints a new `provision_epoch`-derived `vault_id`, never colliding with or reactivating an erased row's own PK (DEC-MEMOS-50).
+- [ ] 49. The `access_context` gate is nine new call sites in `memory-handlers.mjs` via a new `classifyPrincipalAccess`/`assertAccessContext` mechanism built on one row-taking branch set (`#isVaultRowAccessibleTo`) that refuses an erased vault's `status` before any tuple comparison, never a reuse of `assertVaultScope`'s existing call site, which stays unchanged (DEC-MEMOS-49, revised in place, RKOI PH-MEMOS-5 review round 2).
+- [ ] 50. Principal-vault re-provisioning after erasure mints a new `provision_epoch`-derived `vault_id`, keyed on the erasure-surviving `principal_hmac` column, never colliding with or reactivating an erased row's own PK; a genuine concurrent provisioning race is refused `vault_provision_conflict` on `SQLITE_BUSY_SNAPSHOT`, with no internal retry (DEC-MEMOS-50, revised in place a second time, RKOI PH-MEMOS-5 review round 2).
 - [ ] 51. `msp_context_resolve` gains a real, specified `access_context` write path; `MSP_IDENTITY_HMAC_KEY` is mandatory for `msp_vault_resolve` as a whole, not a principal-vault-specific subset (DEC-MEMOS-51).
 - [ ] 52. `msp_memory_promote` is explicitly excluded from the `access_context` branch set; the "no special-casing" claim about its eligibility is withdrawn as false about its actual mechanics (DEC-MEMOS-52).
 
 Overturning any row above reopens the corresponding section of
-`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.6.1b named in its
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.7.0b named in its
 mapping table (§3.1).
 
 ## Evidence and implementation map
@@ -1642,6 +1770,7 @@ mapping table (§3.1).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.19b | 2026-09-16 | proposed | **Answers RKOI's PH-MEMOS-5 review round 2, NEEDS REVISION 3 critical plus 7 warnings** — new "Revision note — RKOI PH-MEMOS-5 review round 2" section, against design v0.6.1b/plan v0.1.19b (commit `38caf08`). Round 1's own criticals 1/3/4 confirmed closed; round 1 critical 2 was not, reopening as this round's CRITICAL 1. Revised **`DEC-MEMOS-49`** in place (the access-context gate is now one row-taking branch set, `#isVaultRowAccessibleTo`, refusing an erased vault's `status` before any tuple comparison, and `classifyPrincipalAccess` calls it directly with no second `SELECT` — CRITICAL 3/WARNING 3) and **`DEC-MEMOS-50`** in place a second time (the epoch lookup is now keyed on a new `principal_hmac` column that survives erasure, not `principal_id`, which erasure blanks — CRITICAL 1; the race backstop is `SQLITE_BUSY`/`SQLITE_BUSY_SNAPSHOT`, not `vault_id`'s `PRIMARY KEY`, and the internal retry loop is removed in favor of a typed `vault_provision_conflict` error the caller's own next call resolves — CRITICAL 2). Corrected checklist rows 49/50 to match and the checklist-overturn design-version citation to v0.7.0b. No new decision id — `DEC-MEMOS-49`/`50` revised in place, `51`/`52` unaffected. | working-tree | ATHER |
 | 0.1.18b | 2026-09-16 | proposed | **Answers RKOI's PH-MEMOS-5 review round 1, NEEDS REVISION 4 critical plus 7 warnings** — new "Revision note — RKOI PH-MEMOS-5 review round 1" section, against design v0.6.0b/plan v0.1.18b (commit `0aaad44`). Corrected decision paragraphs **44** (`vault_scope_denied` is not broadened — withdrawn, since none of the nine `msp_memory_*` tools ever produced it) and **46** (`include_payload`'s refusal narrows to `msp_context_diff` alone — `audit`/`replay` expose no payload field) in place. Added **`DEC-MEMOS-49..52`**: 49 (the `access_context` gate is nine new call sites via a new `classifyPrincipalAccess`/`assertAccessContext` mechanism, not a reuse of `assertVaultScope`'s one existing call site — CRITICAL 1), 50 (principal-vault re-provisioning after erasure mints a new `provision_epoch`-derived `vault_id`, corrected from the wrong partial-unique-index race citation — CRITICAL 2), 51 (`msp_context_resolve`'s `access_context` write path specified end to end; `MSP_IDENTITY_HMAC_KEY` stated mandatory for `msp_vault_resolve` as a whole — CRITICAL 3, WARNING 2), 52 (`msp_memory_promote` explicitly excluded from the branch set; its "no special-casing" eligibility claim withdrawn as false about its actual mechanics — CRITICAL 4). Extended the "Cross-repo changes PH-MEMOS-5 requires of zuri-ai" section with the `MSP_IDENTITY_HMAC_KEY` deployment-prerequisite note (warning 2). Added checklist rows 49–52 and corrected the text of rows 44/46, all unchecked alongside 36–48. Updated the design-version citation to v0.6.1b. No id renumbered or reused; new ids: `DEC-MEMOS-49..52`. | working-tree | ATHER |
 | 0.1.17b | 2026-09-16 | proposed | **PH-MEMOS-5 (principal vaults, API-010, API-009 `access_context` amendment) scoped for the first time — design pass only, not yet RKOI-reviewed.** Added a new revision-note section and **`DEC-MEMOS-36..48`** (13 new adopted defaults, pending owner confirmation) to the decision list, matching `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.6.0b §5–§5.5/§12.4–§12.4.1. Added a new "Cross-repo changes PH-MEMOS-5 requires of zuri-ai" section (`BL-MEMOS-113`, the `authorizationFacts()`/`allow_passport` gap) separate from `RSK-MEMOS-01`. Added checklist rows 36–48, unchecked. Corrected checklist item 7's stale placeholder migration number (`0009` → `0011`, `DEC-MEMOS-37`) without reopening `DEC-MEMOS-07`/`14`'s underlying merge-order rule. Extended "what this ADR does not decide" with the `0011`/`0012` DDL and the deferred API-009 contract-file edit (`DEC-MEMOS-47`). Updated the design-version citation to v0.6.0b throughout. No id renumbered or reused; new ids: `DEC-MEMOS-36..48`, cross-repo item `BL-MEMOS-113`. | working-tree | ATHER |
 | 0.1.16b | 2026-09-15 | proposed | Owner confirmed DEC-MEMOS-22..35 ("ยืนยัน"); status-only change, no decision text altered. | working-tree | ATHER |
