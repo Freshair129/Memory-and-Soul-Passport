@@ -1021,7 +1021,7 @@ indistinguishable regardless of what other fields the request carries.
 
 **Fixed now, not deferred.** `vault-handlers.mjs`'s `msp_vault_mount`
 request-parsing layer rejects an embedded control character
-(`/[ -]/`) in `workspace_id` and `mount_alias`, refusing
+(`/[\u0000-\u001f]/`) in `workspace_id` and `mount_alias`, refusing
 `validation_failed` — ahead of any vault lookup, in the same "presence
 checks" bucket §5.0.3's existence-and-type check already runs after — with
 no change to `mountId`'s own stored derivation
@@ -1729,7 +1729,7 @@ authenticated in this turn.
   valid, matching grant resolves and provisions the principal half exactly
   as before, and requires the key.
 - **`mountId` control-character rejection**: `workspace_id`/`mount_alias`
-  containing ` `–`` is `validation_failed`, before any vault
+  containing `U+0000`–`U+001F` is `validation_failed`, before any vault
   lookup; a NUL byte specifically no longer produces two different tuples
   the same `mount_id`.
 - **`global_private` gate**: with the deployment setting off (default), a

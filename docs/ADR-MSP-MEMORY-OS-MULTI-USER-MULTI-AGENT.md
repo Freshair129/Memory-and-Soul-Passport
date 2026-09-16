@@ -1111,7 +1111,7 @@ Twelve settled points, each reopening the decision(s) named:
    withdrawn as the mechanism's own naming.
 10. **`mountId` NUL injection, fixed now (new, `DEC-MEMOS-61`).** Both
     reviewers agree. Request-side rejection of control characters
-    (`/[ -]/`) on `workspace_id`/`mount_alias` in the
+    (`/[\u0000-\u001f]/`) on `workspace_id`/`mount_alias` in the
     `msp_vault_mount` handler, with no stored-id change — adds no
     existence or timing leak, run in the same "presence checks" bucket as
     every other pre-existence-check validation on this tool.
@@ -2235,7 +2235,7 @@ RKOI-review-response round below, were confirmed by the owner on
 61. **DEC-MEMOS-61, new (both reviewers, RKOI/Fable second parallel
     review, 2026-09-16) — `mountId` NUL-injection fixed now, not
     deferred.** Both reviewers agree: request-side rejection of control
-    characters (`/[ -]/`) on `workspace_id`/`mount_alias` in
+    characters (`/[\u0000-\u001f]/`) on `workspace_id`/`mount_alias` in
     the `msp_vault_mount` handler's request-parsing layer, ahead of any
     vault lookup — no stored-id change, no existence or timing leak (a
     pure request-shape check, the same class every other
