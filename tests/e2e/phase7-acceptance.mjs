@@ -441,29 +441,194 @@ async function runThreadMatrix() {
     } catch (error) {
       summaryEvidence = status("BL083.summary", "FAIL", "real stdio sweep -> claim -> commit", errorText(error));
     }
-    return { matrix: legs, directed, summary: summaryEvidence };
+    const phase6 = await runPhase6Acceptance(call, dbPath);
+    return { matrix: legs, directed, summary: summaryEvidence, phase6 };
   } finally {
     await call.close();
     rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
+async function runPhase6Acceptance(call, dbPath) {
+  const tenantId = "phase7-phase6-tenant";
+  const principalId = "phase7-phase6-principal";
+  const agentId = "phase7-phase6-agent";
+  const workspaceId = "phase7-phase6-workspace";
+  const room = "phase7-phase6-direct";
+  const claims = makeClaims({
+    tenantId,
+    principalId,
+    agentId,
+    workspaceId,
+    room,
+    audienceKind: "DIRECT",
+    readPrivate: true,
+    writePrivate: true,
+    confirmMemory: true,
+    assertParticipants: true,
+    assertAgents: true,
+    allowPassport: true,
+    dataSubjectAccess: true,
+  });
+
+  try {
+    const vault = await call(
+      "msp_vault_resolve",
+      signed(
+        "msp_vault_resolve",
+        {
+          actor: "phase7-phase6-acceptance",
+          access_context: {
+            tenant_id: tenantId,
+            principal_id: principalId,
+            agent_id: agentId,
+            workspace_id: workspaceId,
+            project_id: "phase7-phase6-project",
+            policy_version: policyRevision,
+          },
+          authorization: {
+            allowed: true,
+            read: true,
+            write_private: true,
+            write_shared: false,
+            allow_passport: true,
+          },
+        },
+        claims,
+      ),
+    );
+    assert(vault.principalPrivateVaultId, "Phase6 acceptance must resolve a principal private vault");
+
+    const resolved = await call(
+      "msp_thread_resolve",
+      signed(
+        "msp_thread_resolve",
+        {
+          thread_kind: "DIRECT",
+          audience_kind: "DIRECT",
+          channel_type: "TEST",
+          channel_account_id: `phase7-${tenantId}`,
+          external_room_ref: room,
+          tenant_id: tenantId,
+        },
+        claims,
+      ),
+    );
+    const threadId = resolved.thread?.threadId;
+    assert(threadId, "Phase6 acceptance must resolve a DIRECT thread");
+
+    const inbound = await call(
+      "msp_thread_message_append",
+      signed(
+        "msp_thread_message_append",
+        {
+          thread_id: threadId,
+          source_event_id: "phase7-phase6-source-event",
+          speaker_id: principalId,
+          speaker_kind: "HUMAN",
+          identity_assurance: "VERIFIED",
+          person_id: principalId,
+          direction: "INBOUND",
+          text: "phase7 phase6 source",
+        },
+        claims,
+      ),
+    );
+    const sessionId = inbound.session?.sessionId;
+    const messageId = inbound.message?.messageId;
+    assert(sessionId && messageId, "Phase6 acceptance must create a source session and message");
+
+    const record = await call(
+      "msp_thread_memory_record",
+      signed(
+        "msp_thread_memory_record",
+        {
+          thread_id: threadId,
+          session_id: sessionId,
+          kind: "PREFERENCE",
+          asserted_by_speaker_id: principalId,
+          subject_person_id: principalId,
+          body: { phase7: "consolidation-source" },
+          scope: {},
+          source_message_refs: [messageId],
+          verification_state: "CONFIRMED",
+          visibility: "AGENT",
+          confidence: 0.95,
+        },
+        claims,
+      ),
+    );
+    assert(record.recordId, "Phase6 acceptance must create a protected source record");
+
+    const consolidationInput = {
+      source_record_id: record.recordId,
+      target_vault_id: vault.principalPrivateVaultId,
+      entity_category: "preference",
+      entity_key: "phase7",
+      idempotency_key: "phase7-phase6-consolidation",
+    };
+    const consolidated = await call(
+      "msp_memory_consolidate",
+      signed("msp_memory_consolidate", consolidationInput, claims),
+    );
+    assert(consolidated.decision === "consolidated" && consolidated.entity_id, "Phase6 acceptance must consolidate the DIRECT source");
+
+    const digest = await call(
+      "msp_memory_context_digest",
+      signed("msp_memory_context_digest", { limit: 50 }, claims),
+    );
+    assert(digest.items.some((item) => item.entity_id === consolidated.entity_id), "Phase6 digest must expose the consolidated entity before erasure");
+
+    const erased = await call(
+      "msp_thread_principal_erase",
+      signed(
+        "msp_thread_principal_erase",
+        { idempotency_key: "phase7-phase6-erasure", erase_vault: true },
+        claims,
+      ),
+    );
+    assert(erased.replay === false, "Phase6 vault erasure must be a first execution");
+
+    const db = openDatabase(dbPath);
+    try {
+      const vaultRows = db.prepare("SELECT status, tenant_id, principal_id, agent_id, workspace_id FROM vaults WHERE vault_id IN (?, ?)")
+        .all(vault.principalPrivateVaultId, vault.principalPassportVaultId);
+      assert(vaultRows.length >= 1 && vaultRows.every((row) => row.status === "erased" && row.tenant_id === null && row.principal_id === null && row.agent_id === null && row.workspace_id === null), "vault erasure must clear every principal owner tuple");
+
+      const entity = db.prepare("SELECT lifecycle_state, body_json, epistemic_state, confidence FROM entities WHERE entity_id=?")
+        .get(consolidated.entity_id);
+      assert(entity && entity.lifecycle_state === "forgotten" && entity.body_json === "{}" && entity.epistemic_state === "deprecated" && entity.confidence === 0, "vault erasure must forget the consolidated entity");
+
+      const history = db.prepare("SELECT redaction_state, body_json, epistemic_state, confidence FROM entity_history WHERE entity_id=?")
+        .all(consolidated.entity_id);
+      assert(history.length > 0 && history.every((row) => row.redaction_state === "tombstoned" && row.body_json === "{}" && row.epistemic_state === "deprecated" && row.confidence === 0), "vault erasure must tombstone every entity history row");
+
+      const provenance = db.prepare("SELECT redaction_state, source_message_refs_json FROM entity_provenance WHERE provenance_id=?")
+        .get(consolidated.provenance_id);
+      assert(provenance && provenance.redaction_state === "tombstoned" && provenance.source_message_refs_json === "[]", "vault erasure must tombstone provenance and clear message references");
+
+      const sourceRow = db.prepare("SELECT redaction_state, body_json, scope_json FROM protected_memory_records WHERE record_id=?")
+        .get(record.recordId);
+      assert(sourceRow && sourceRow.redaction_state === "tombstoned" && sourceRow.body_json === "{}" && sourceRow.scope_json === "{}", "principal erasure must tombstone the source record");
+      assert(db.prepare("SELECT COUNT(*) AS count FROM entities_fts WHERE entity_id=?").get(consolidated.entity_id).count === 0, "vault erasure must remove the FTS projection");
+
+      return status("BL083.phase6.consolidation-erasure", "PASS", "real stdio consolidation + digest + principal erase + direct DB tombstones", {
+        entityId: consolidated.entity_id,
+        provenanceId: consolidated.provenance_id,
+        vaults: vaultRows.length,
+        historyRows: history.length,
+        eraseTables: erased.tablesAffected,
+      });
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    return status("BL083.phase6.consolidation-erasure", "FAIL", "real stdio Phase6 tools", errorText(error));
+  }
+}
+
 function dependencyStatuses() {
-  const consolidationContract = path.join(repoRoot, "packages", "msp-contracts", "schemas", "API-012.tools.json");
-  const phase6ContractExists = existsSync(consolidationContract);
   return [
-    status(
-      "BL083.phase6.consolidation",
-      "NOT_RUN",
-      "docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md §10.2 and BL-MEMOS-070",
-      phase6ContractExists ? "API-012 exists; phase6 consolidation adapter still needs explicit harness binding" : "baseline has no approved consolidation tool/schema; no API name invented",
-    ),
-    status(
-      "BL083.phase6.vault-erasure",
-      "NOT_RUN",
-      "BL-MEMOS-073/074",
-      "phase6 vault-erase contract and implementation are a prerequisite; thread erase alone cannot close this case",
-    ),
     status("BL084.gate-a-rebaseline", "NOT_RUN", "BL083", "blocked until the complete BL083 matrix is green"),
     status("BL085.client-release", "NOT_RUN", "BL083", "release/package evidence waits for the complete matrix and phase5 env allowlist integration"),
     status("BL086.documentation-closure", "NOT_RUN", "BL083", "README/architecture closure waits for the complete matrix"),
@@ -475,7 +640,7 @@ async function main() {
   assert(existsSync(binPath), `server entrypoint is missing: ${binPath}`);
   const results = [legacyShapeEvidence(), await runLegacyVaultCase()];
   const threadRun = await runThreadMatrix();
-  results.push(...threadRun.matrix, ...threadRun.directed, threadRun.summary, ...dependencyStatuses());
+  results.push(...threadRun.matrix, ...threadRun.directed, threadRun.summary, threadRun.phase6, ...dependencyStatuses());
 
   const counts = results.reduce((out, row) => {
     out[row.result] = (out[row.result] ?? 0) + 1;
