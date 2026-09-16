@@ -96,6 +96,7 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, iden
         supersedesRecordId: args.supersedes_record_id,
         status: args.status,
         verificationState: args.verification_state,
+        confidence: args.confidence,
         // PH-MEMOS-3 stage 2 (BL-MEMOS-043): agentId is guard-verified
         // (grant.agentId), never trusted from the wire; visibility is a
         // new, optional, additive request field (default THREAD).
@@ -235,6 +236,7 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, iden
     // from the raw request body past the guard.
     async msp_thread_principal_erase(args = {}) {
       return store.erasePrincipal({
+        eraseVault: args.erase_vault,
         principalId: args.principal_id,
         tenantId: args.tenant_id,
         idempotencyKey: args.idempotency_key,

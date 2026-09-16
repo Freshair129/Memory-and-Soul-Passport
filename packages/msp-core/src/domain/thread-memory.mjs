@@ -84,6 +84,13 @@ const MAX_IDENTITY_KEY_VERSION_LENGTH = 128;
 export class ThreadMemoryValidationError extends ThreadValidationError {}
 export class ThreadMemoryConflictError extends ThreadConflictError {}
 export class ThreadMemoryNotFoundError extends ThreadNotFoundError {}
+export class MemoryErasureLimitError extends Error {
+  constructor() {
+    super("memory_erasure_limit_exceeded: erasure exceeds the bounded row limit.");
+    this.name = "MemoryErasureLimitError";
+    this.code = "memory_erasure_limit_exceeded";
+  }
+}
 export { AgentNotCurrentError, CompactionLeaseConflictError, GrantReplayedError, IdentityHmacUnconfiguredError, RecordSubjectMismatchError, ThreadPayloadTooLargeError };
 
 function requiredString(value, label) {
@@ -111,6 +118,13 @@ function positiveInteger(value, label) {
 
 function nonNegativeInteger(value, label) {
   if (!Number.isInteger(value) || value < 0) throw new ThreadMemoryValidationError(`${label} must be a non-negative integer.`);
+  return value;
+}
+
+function confidenceValue(value, label = "confidence") {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw new ThreadMemoryValidationError(`${label} must be a finite number between 0 and 1.`);
+  }
   return value;
 }
 
@@ -241,6 +255,25 @@ function translateTriggerError(error) {
   throw error;
 }
 
+// Erasure is tenant/principal scoped and can race a second connection that
+// is already writing the same database. Keep that driver detail out of the
+// public tool contract: a lock or receipt uniqueness race is an ordinary
+// typed conflict, while consumeGrantNonce's own GrantReplayedError remains
+// untouched because it is raised before a raw uniqueness error can escape.
+function translateErasureMutationError(error) {
+  const code = error?.code;
+  if (
+    code === "SQLITE_BUSY" ||
+    code === "SQLITE_BUSY_SNAPSHOT" ||
+    code === "SQLITE_CONSTRAINT_UNIQUE" ||
+    code === "SQLITE_CONSTRAINT_PRIMARYKEY" ||
+    /UNIQUE constraint failed/.test(String(error?.message ?? ""))
+  ) {
+    throw new ThreadMemoryConflictError("concurrent erasure mutation; retry");
+  }
+  translateTriggerError(error);
+}
+
 function hmacPrincipal(key, speakerId) {
   // RKOI review, WARNING 8: same >=32-character bar as hmacRoomRef.
   if (typeof key !== "string" || key.length < 32) throw new IdentityHmacUnconfiguredError();
@@ -319,6 +352,7 @@ function rowProtected(row) {
     status: row.status,
     assertedBySpeakerId: row.asserted_by_speaker_id,
     subjectPersonId: row.subject_person_id,
+    confidence: row.confidence ?? 0,
     scope: parseJson(row.scope_json, {}),
     body: parseJson(row.body_json, {}),
     sourceMessageRefs: parseJson(row.source_message_refs_json, []),
@@ -1051,6 +1085,7 @@ export class ThreadMemoryStore {
     supersedesRecordId = null,
     status = "ACTIVE",
     verificationState = "CANDIDATE",
+    confidence = 0,
     agentId = null,
     workspaceId = null,
     visibility = "THREAD",
@@ -1062,6 +1097,7 @@ export class ThreadMemoryStore {
     const memoryKind = enumValue(kind, MEMORY_KINDS, "kind");
     const memoryStatus = enumValue(status, MEMORY_STATUSES, "status");
     const verification = enumValue(verificationState, VERIFICATION_STATES, "verification_state");
+    const recordConfidence = confidenceValue(confidence);
     const speaker = requiredString(assertedBySpeakerId, "asserted_by_speaker_id");
     const person = optionalString(subjectPersonId, "subject_person_id");
     // PH-MEMOS-3 stage 2 (BL-MEMOS-043, DEC-MEMOS-19): visibility defaults
@@ -1119,7 +1155,13 @@ export class ThreadMemoryStore {
     // agents structurally cannot (each supplies its own agentId). Without
     // this, agent B's identical assertion would collide on agent A's
     // existing record_id and hand B back A's AGENT-visibility row.
-    const recordId = `memory-record_${sha256(JSON.stringify([thread.threadId, sessionId, memoryKind, speaker, person, scopeValue, payload, [...sourceRefs].sort(), supersedesRecordId, verification, memoryStatus, recordAgentId, recordVisibility]))}`;
+    const recordIdentity = [thread.threadId, sessionId, memoryKind, speaker, person, scopeValue, payload, [...sourceRefs].sort(), supersedesRecordId, verification, memoryStatus];
+    // Rows written before migration 0015 have no confidence field and their
+    // deterministic id was derived from this legacy prefix. Keep the
+    // confidence=0 default on that same identity so a retry of an old signed
+    // request still deduplicates; a positive source confidence gets its own
+    // identity and cannot collide with the legacy row.
+    const recordId = `memory-record_${sha256(JSON.stringify(recordConfidence === 0 ? [...recordIdentity, recordAgentId, recordVisibility] : [...recordIdentity, recordConfidence, recordAgentId, recordVisibility]))}`;
     const existingRecord = this.#db.prepare('SELECT * FROM protected_memory_records WHERE record_id=?').get(recordId);
     if (existingRecord) {
       // BL-MEMOS-048: the dedup short-circuit is not itself a write, but
@@ -1158,11 +1200,11 @@ export class ThreadMemoryStore {
             (record_id, tenant_id, thread_id, session_id, kind, status, asserted_by_speaker_id,
              subject_person_id, scope_json, body_json, source_message_refs_json,
              supersedes_record_id, verification_state, version, created_at, updated_at,
-             agent_id, visibility)
+             agent_id, visibility, confidence)
           VALUES (@record_id, @tenant_id, @thread_id, @session_id, @kind, @status, @asserted_by_speaker_id,
              @subject_person_id, @scope_json, @body_json, @source_message_refs_json,
              @supersedes_record_id, @verification_state, 1, @created_at, @updated_at,
-             @agent_id, @visibility)
+             @agent_id, @visibility, @confidence)
         `)
         .run({
           record_id: recordId,
@@ -1182,6 +1224,7 @@ export class ThreadMemoryStore {
           updated_at: timestamp,
           agent_id: recordAgentId,
           visibility: recordVisibility,
+          confidence: recordConfidence,
         });
       if (supersedesRecordId) {
         const changed = this.#db.prepare("UPDATE protected_memory_records SET status = 'SUPERSEDED', updated_at = ?, version = version + 1 WHERE record_id = ? AND status='ACTIVE' AND asserted_by_speaker_id=?").run(timestamp, supersedesRecordId, speaker);
@@ -1973,11 +2016,12 @@ export class ThreadMemoryStore {
   // principal has ever touched in the calling grant's own tenantId. Every
   // authorization decision (dataSubjectAccess/dataSubjectAdmin) is already
   // made by the guard before this method ever runs.
-  erasePrincipal({ principalId, tenantId, idempotencyKey, agentId, workspaceId, nonce, grantExpiresAt, now } = {}) {
+  erasePrincipal({ principalId, tenantId, idempotencyKey, agentId, workspaceId, eraseVault = false, nonce, grantExpiresAt, now } = {}) {
     const tenant = requiredString(tenantId, "tenant_id");
     const principal = requiredString(principalId, "principal_id");
     const key = requiredString(idempotencyKey, "idempotency_key");
     if (key.length > 128) throw new ThreadMemoryValidationError("idempotency_key must be at most 128 characters.");
+    if (typeof eraseVault !== "boolean") throw new ThreadMemoryValidationError("erase_vault must be a boolean.");
     const agent = requiredString(agentId, "agentId");
     const workspace = requiredString(workspaceId, "workspaceId");
     const timestamp = iso(now);
@@ -2033,27 +2077,42 @@ export class ThreadMemoryStore {
       // dropped response) -- is unaffected: its nonce is new, consumeNonce
       // succeeds, and the replay:true return below still applies exactly
       // as before.
-      this.#db.transaction(() => {
-        this.#assertErasureReceiptIdentityConfig();
-        this.#consumeNonce(tenant, nonce, grantExpiresAt);
-      })();
-
       const tablesAffected = parseJson(existingReceipt.tables_affected_json, {});
-      this.#journalAppend({
+      const previousEraseVault = Object.prototype.hasOwnProperty.call(tablesAffected, "vaults");
+      const replayJournalEntry = {
         actor: this.#hmacPrincipal(principal),
         toolName: "msp_thread_principal_erase",
         ref: existingReceipt.erasure_receipt_id,
         workspaceId: workspace,
         payload: { idempotency_key: key, tables_affected: tablesAffected, replay: true },
         policyDecision: "allow",
-      });
-      return {
+      };
+      try {
+        this.#db.transaction(() => {
+          this.#assertErasureReceiptIdentityConfig();
+          this.#consumeNonce(tenant, nonce, grantExpiresAt);
+          if (previousEraseVault !== eraseVault) {
+            throw new ThreadMemoryConflictError("idempotency_key was already used for a different erasure request.");
+          }
+          // A vault erase is one compliance mutation. Keep its replay audit
+          // row in the same SQLite transaction so a journal failure cannot
+          // leave a successful nonce-consuming replay without its audit row.
+          if (eraseVault) this.#journalAppend(replayJournalEntry);
+        }).immediate();
+      } catch (error) {
+        translateErasureMutationError(error);
+      }
+      if (!eraseVault) this.#journalAppend(replayJournalEntry);
+      const replayResult = {
         erasureReceiptId: existingReceipt.erasure_receipt_id,
-        principalId: principal,
-        tenantId: tenant,
         tablesAffected,
         replay: true,
       };
+      if (!eraseVault) {
+        replayResult.principalId = principal;
+        replayResult.tenantId = tenant;
+      }
+      return replayResult;
     }
 
     let result;
@@ -2069,6 +2128,102 @@ export class ThreadMemoryStore {
         // Stage 1: RESOLVE every matching row set first (Sec.11.2,
         // DEC-MEMOS-32/34) -- nothing is written yet.
         const qualifyingThreadIds = this.#qualifyingThreadIds(tenant, principal);
+
+        // BL-MEMOS-073: erase_vault resolves every row that the same atomic
+        // erasure will touch before issuing any UPDATE/DELETE. The bound is
+        // deliberately checked inside this transaction so a refusal also
+        // rolls back the nonce and leaves every table unchanged.
+        let principalVaultIds = [];
+        let principalEntityIds = [];
+        let vaultErasureCounts = null;
+        if (eraseVault) {
+          principalVaultIds = this.#db
+            .prepare("SELECT vault_id FROM vaults WHERE tenant_id = ? AND principal_id = ? AND status = 'active' AND vault_type IN ('principal_private', 'principal_passport')")
+            .all(tenant, principal)
+            .map((row) => row.vault_id);
+          if (principalVaultIds.length > 0) {
+            const vaultPlaceholders = principalVaultIds.map(() => "?").join(",");
+            principalEntityIds = this.#db
+              .prepare(`SELECT entity_id FROM entities WHERE vault_id IN (${vaultPlaceholders})`)
+              .all(...principalVaultIds)
+              .map((row) => row.entity_id);
+            const entityPlaceholders = principalEntityIds.map(() => "?").join(",");
+            const countRows = (sql, params = []) => this.#db.prepare(sql).get(...params)?.count ?? 0;
+            const messageCount = countRows(
+              "SELECT COUNT(*) AS count FROM thread_messages WHERE tenant_id = ? AND speaker_id = ? AND speaker_kind = 'HUMAN' AND redaction_state = 'none'",
+              [tenant, principal],
+            );
+            const recordCount = countRows(
+              "SELECT COUNT(*) AS count FROM protected_memory_records WHERE tenant_id = ? AND (asserted_by_speaker_id = ? OR subject_person_id = ?) AND redaction_state = 'none'",
+              [tenant, principal, principal],
+            );
+            const summaryCount = qualifyingThreadIds.length
+              ? countRows(
+                  `SELECT COUNT(*) AS count FROM session_summaries WHERE tenant_id = ? AND thread_id IN (${qualifyingThreadIds.map(() => "?").join(",")}) AND redaction_state = 'none'`,
+                  [tenant, ...qualifyingThreadIds],
+                )
+              : 0;
+            const receiptCount = qualifyingThreadIds.length
+              ? countRows(
+                  `SELECT COUNT(*) AS count FROM thread_delivery_receipts WHERE tenant_id = ? AND redaction_state = 'none'
+                   AND message_id IN (SELECT message_id FROM thread_messages WHERE thread_id IN (${qualifyingThreadIds.map(() => "?").join(",")}))`,
+                  [tenant, ...qualifyingThreadIds],
+                )
+              : 0;
+            const participantCount = countRows(
+              "SELECT COUNT(*) AS count FROM thread_participants WHERE tenant_id = ? AND speaker_id = ? AND speaker_kind = 'HUMAN' AND left_at IS NULL",
+              [tenant, principal],
+            );
+            const entityCount = principalEntityIds.length;
+            const entityHistoryCount = entityPlaceholders
+              ? countRows(`SELECT COUNT(*) AS count FROM entity_history WHERE entity_id IN (${entityPlaceholders})`, principalEntityIds)
+              : 0;
+            const embeddingCount = entityPlaceholders
+              ? countRows(`SELECT COUNT(*) AS count FROM embeddings WHERE entity_id IN (${entityPlaceholders})`, principalEntityIds)
+              : 0;
+            const ftsCount = entityPlaceholders
+              ? countRows(`SELECT COUNT(*) AS count FROM entities_fts WHERE entity_id IN (${entityPlaceholders})`, principalEntityIds)
+              : 0;
+            const provenanceCount = countRows(
+              `SELECT COUNT(*) AS count FROM entity_provenance WHERE target_vault_id IN (${vaultPlaceholders}) AND redaction_state = 'none'`,
+              principalVaultIds,
+            );
+            vaultErasureCounts = {
+              threadMessages: messageCount,
+              protectedMemoryRecords: recordCount,
+              sessionSummaries: summaryCount,
+              threadDeliveryReceipts: receiptCount,
+              threadParticipants: participantCount,
+              vaults: principalVaultIds.length,
+              entities: entityCount,
+              entityHistory: entityHistoryCount,
+              embeddings: embeddingCount,
+              entitiesFts: ftsCount,
+              entityProvenance: provenanceCount,
+            };
+          } else {
+            vaultErasureCounts = {
+              threadMessages: this.#db.prepare("SELECT COUNT(*) AS count FROM thread_messages WHERE tenant_id = ? AND speaker_id = ? AND speaker_kind = 'HUMAN' AND redaction_state = 'none'").get(tenant, principal).count,
+              protectedMemoryRecords: this.#db.prepare("SELECT COUNT(*) AS count FROM protected_memory_records WHERE tenant_id = ? AND (asserted_by_speaker_id = ? OR subject_person_id = ?) AND redaction_state = 'none'").get(tenant, principal, principal).count,
+              sessionSummaries: qualifyingThreadIds.length
+                ? this.#db.prepare(`SELECT COUNT(*) AS count FROM session_summaries WHERE tenant_id = ? AND thread_id IN (${qualifyingThreadIds.map(() => "?").join(",")}) AND redaction_state = 'none'`).get(tenant, ...qualifyingThreadIds).count
+                : 0,
+              threadDeliveryReceipts: qualifyingThreadIds.length
+                ? this.#db.prepare(`SELECT COUNT(*) AS count FROM thread_delivery_receipts WHERE tenant_id = ? AND redaction_state = 'none' AND message_id IN (SELECT message_id FROM thread_messages WHERE thread_id IN (${qualifyingThreadIds.map(() => "?").join(",")}))`).get(tenant, ...qualifyingThreadIds).count
+                : 0,
+              threadParticipants: this.#db.prepare("SELECT COUNT(*) AS count FROM thread_participants WHERE tenant_id = ? AND speaker_id = ? AND speaker_kind = 'HUMAN' AND left_at IS NULL").get(tenant, principal).count,
+              vaults: 0,
+              entities: 0,
+              entityHistory: 0,
+              embeddings: 0,
+              entitiesFts: 0,
+              entityProvenance: 0,
+            };
+          }
+          if (Object.values(vaultErasureCounts).some((count) => count > RETENTION_ROW_BOUND)) {
+            throw new MemoryErasureLimitError();
+          }
+        }
 
         // Stage 2: TOMBSTONE. Every UPDATE is scoped
         // AND redaction_state = 'none', so it is naturally a no-op on
@@ -2119,6 +2274,44 @@ export class ThreadMemoryStore {
           .prepare("UPDATE thread_participants SET left_at = ? WHERE tenant_id = ? AND speaker_id = ? AND speaker_kind = 'HUMAN' AND left_at IS NULL")
           .run(timestamp, tenant, principal);
 
+        let vaults = { changes: 0 };
+        let entities = { changes: 0 };
+        let entityHistory = { changes: 0 };
+        let embeddings = { changes: 0 };
+        let entitiesFts = { changes: 0 };
+        let entityProvenance = { changes: 0 };
+        if (eraseVault && principalVaultIds.length > 0) {
+          const vaultPlaceholders = principalVaultIds.map(() => "?").join(",");
+          const entityPlaceholders = principalEntityIds.map(() => "?").join(",");
+          entities = entityPlaceholders
+            ? this.#db
+                .prepare(`UPDATE entities SET lifecycle_state = 'forgotten', body_json = '{}', epistemic_state = 'deprecated', confidence = 0, updated_at = ? WHERE entity_id IN (${entityPlaceholders})`)
+                .run(timestamp, ...principalEntityIds)
+            : { changes: 0 };
+          entityHistory = entityPlaceholders
+            ? this.#db
+                .prepare(`UPDATE entity_history SET redaction_state = 'tombstoned', body_json = '{}', epistemic_state = 'deprecated', confidence = 0 WHERE entity_id IN (${entityPlaceholders}) AND redaction_state = 'none'`)
+                .run(...principalEntityIds)
+            : { changes: 0 };
+          embeddings = entityPlaceholders
+            ? this.#db.prepare(`DELETE FROM embeddings WHERE entity_id IN (${entityPlaceholders})`).run(...principalEntityIds)
+            : { changes: 0 };
+          const ftsDelete = entityPlaceholders
+            ? this.#db.prepare(`DELETE FROM entities_fts WHERE entity_id IN (${entityPlaceholders})`).run(...principalEntityIds)
+            : { changes: 0 };
+          // The entities UPDATE above already invokes trg_entities_fts_au,
+          // so the explicit defense-in-depth DELETE normally sees zero
+          // remaining rows. Report the preflight projection count as the
+          // logical table effect rather than hiding those trigger deletes.
+          entitiesFts = { changes: vaultErasureCounts?.entitiesFts ?? ftsDelete.changes };
+          entityProvenance = this.#db
+            .prepare(`UPDATE entity_provenance SET redaction_state = 'tombstoned', source_message_refs_json = '[]' WHERE target_vault_id IN (${vaultPlaceholders}) AND redaction_state = 'none'`)
+            .run(...principalVaultIds);
+          vaults = this.#db
+            .prepare(`UPDATE vaults SET status = 'erased', principal_id = NULL, tenant_id = NULL, agent_id = NULL, workspace_id = NULL WHERE vault_id IN (${vaultPlaceholders}) AND status = 'active'`)
+            .run(...principalVaultIds);
+        }
+
         const tablesAffected = {
           threadMessages: messages.changes,
           protectedMemoryRecords: records.changes,
@@ -2126,6 +2319,16 @@ export class ThreadMemoryStore {
           threadDeliveryReceipts: receipts.changes,
           threadParticipants: participants.changes,
         };
+        if (eraseVault) {
+          Object.assign(tablesAffected, {
+            vaults: vaults.changes,
+            entities: entities.changes,
+            entityHistory: entityHistory.changes,
+            embeddings: embeddings.changes,
+            entitiesFts: entitiesFts.changes,
+            entityProvenance: entityProvenance.changes,
+          });
+        }
 
         const receiptId = ref("erasure-receipt");
         const principalHmacSalt = randomBytes(ERASURE_RECEIPT_SALT_BYTES).toString("hex");
@@ -2140,25 +2343,47 @@ export class ThreadMemoryStore {
           )
           .run(receiptId, tenant, principalHmac, principalHmacSalt, this.#identityHmacKeyVersion, key, agent, JSON.stringify(tablesAffected), timestamp);
 
+        // A vault erase is one compliance mutation. Keep its first-call audit
+        // row in the same SQLite transaction so an injected journal failure
+        // rolls back the nonce, tombstones, owner-tuple clearing, and receipt
+        // together with the audit write.
+        if (eraseVault) {
+          this.#journalAppend({
+            actor: this.#hmacPrincipal(principal),
+            toolName: "msp_thread_principal_erase",
+            ref: receiptId,
+            workspaceId: workspace,
+            payload: { idempotency_key: key, tables_affected: tablesAffected, replay: false },
+            policyDecision: "allow",
+          });
+        }
+
         return { erasureReceiptId: receiptId, tablesAffected };
-      })();
+      }).immediate();
     } catch (error) {
-      translateTriggerError(error);
+      translateErasureMutationError(error);
     }
 
     // W5: pseudonym only -- actor is the journal's existing principalHmac
     // convention. It is deliberately domain-separated from the receipt's
     // principal_hmac so a journal reader cannot correlate the two for free.
-    this.#journalAppend({
-      actor: this.#hmacPrincipal(principal),
-      toolName: "msp_thread_principal_erase",
-      ref: result.erasureReceiptId,
-      workspaceId: workspace,
-      payload: { idempotency_key: key, tables_affected: result.tablesAffected, replay: false },
-      policyDecision: "allow",
-    });
+    if (!eraseVault) {
+      this.#journalAppend({
+        actor: this.#hmacPrincipal(principal),
+        toolName: "msp_thread_principal_erase",
+        ref: result.erasureReceiptId,
+        workspaceId: workspace,
+        payload: { idempotency_key: key, tables_affected: result.tablesAffected, replay: false },
+        policyDecision: "allow",
+      });
+    }
 
-    return { erasureReceiptId: result.erasureReceiptId, principalId: principal, tenantId: tenant, tablesAffected: result.tablesAffected, replay: false };
+    const response = { erasureReceiptId: result.erasureReceiptId, tablesAffected: result.tablesAffected, replay: false };
+    if (!eraseVault) {
+      response.principalId = principal;
+      response.tenantId = tenant;
+    }
+    return response;
   }
 
   // PH-MEMOS-4 (BL-MEMOS-054, design Sec.11.2): msp_thread_retention_tick.

@@ -1,12 +1,30 @@
 ---
 doc_id: "API-011-THREAD-MEMORY-CONTRACT"
-version: "0.4.0b"
+version: "0.4.1b"
 status: "beta"
 created_at: "2026-09-08T00:25:00+07:00,RWANG"
-last_update: "2026-09-15T00:00:00+07:00,KIN"
+last_update: "2026-09-17T03:40:00+07:00,RWANG"
 ---
 
 # API-011 Thread, Speaker, Session and Compaction Contract
+
+## Approved Phase 6 additions
+
+The owner-approved [Phase 6 contract](PHASE6-CONSOLIDATION-PASSPORT.md)
+extends `msp_thread_memory_record` with optional `confidence`: a finite JSON
+number in [0,1], default 0 for legacy callers. It is part of the signed
+payload and stored unchanged; consolidation cannot override it.
+
+`msp_thread_principal_erase` accepts optional `erase_vault` (default false).
+When true, it clears the subject's principal vault owner tuples and content,
+tombstones history/provenance, deletes embeddings/FTS, closes participants,
+and records its immutable pseudonymized receipt in one immediate transaction.
+The preflight limit is 200 affected rows per table; overflow returns
+`memory_erasure_limit_exceeded` without mutation. A fresh-nonce retry must
+retain the same erase mode. The true-mode response contains the receipt id,
+table counts and replay flag, with no raw principal identifier. Existing
+false-mode behavior remains compatible. See the Phase 6 contract for exact
+dispositions, conflict handling and authorization.
 
 This contract is MSP's first owned persistence slice for Zuri's unified
 thread memory. Zuri supplies the tenant, business, channel and identity
@@ -756,6 +774,7 @@ GKS-as-DNA meaning is not imported into Zuri's GKS knowledge authority.
 
 | Version | Date | Status | Summary | Agent |
 |---|---|---|---|---|
+| 0.4.1b | 2026-09-17 | beta | Add signed stored source confidence and bounded atomic erase_vault extension under approved Phase 6 contract. | RWANG |
 | 0.3.3b | 2026-09-15 | beta | RKOI ruling (merge-blocking, TASK-MEMOS-002 stage 2): documented the transport-level escaped-object-key refusal that now applies to every thread tool (a real V8 `JSON.parse` engine bug -- see `docs/API-009-Persistent-Memory-Contract.md` §6 and `docs/NOTES.md`); this is a transport-boundary `invalid_request` refusal, distinct from the `grant_*`/`thread_*` error vocabulary above. | KIN |
 | 0.3.2b | 2026-09-15 | beta | TASK-MEMOS-002 stage 2, BL-MEMOS-049: optional per-tenant `MSP_THREAD_SERVICE_KEYRING` (opt-in, no fallback once configured, parsed/validated once at server start before the database is even opened); RKOI code review round 1 CRITICAL closed -- no rejection ever quotes anything read out of the keyring, only an entry's 1-based position, closing a path where an inverted `{key: tenantId}` map could echo the key through the startup crash into both the server's stderr and the calling application's own error | KIN |
 | 0.3.1b | 2026-09-14 | beta | RKOI review revision (2 CRITICALs, multiple WARNINGs, 4 rounds against zuri-ai `origin/main`): dropped `channel_type` from the room hash and removed `channelType` from the delivery grant (CRITICAL 1, zuri-ai's real delivery grant never sent one); added DEC-MEMOS-15's self-upgrade exception plus its stored-`person_id` tightening (CRITICAL 2); added the per-tool audience requirement (required on every tool except delivery) and the room-hash cross-check on every thread-bound tool including compaction claim/commit/retry; `person_id` constrained to `{null, principalId}` unconditionally; tenant-scoped uniqueness extended to `thread_injection_receipts`/`thread_summary_invalidations`/cross-references between messages, jobs, summaries and their sessions; `chat_sessions` uniqueness narrowed to "at most one OPEN" only (a schema-level "one CLOSING" constraint was tried and dropped -- late-delivery reconciliation legitimately produces two); tombstone-then-INSERT and `IS NOT`-safe tenant triggers; `ON CONFLICT DO NOTHING` replacing `INSERT OR IGNORE` where it could swallow a NOT NULL violation; output-contract validation removed (ran only after commit); typed grant-verification errors (`grant_unconfigured`/`grant_signature_invalid`/`grant_expired`/`grant_payload_mismatch`) | KIN |

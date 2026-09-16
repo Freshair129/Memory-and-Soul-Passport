@@ -1,7 +1,7 @@
 ---
-version: "0.1.2b"
+version: "0.1.3b"
 created_at: "2026-09-17T00:00:00+07:00,LUNA"
-last_update: "2026-09-17T00:00:00+07:00,LUNA"
+last_update: "2026-09-17T03:48:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -53,29 +53,28 @@ phase-5 behavior is reported as `FAIL` with that contract gap.
 | BL080 | `docs/MIGRATION.md` shadow-table policy | PASS in this branch | None; documentation-only hardening |
 | BL081 | `tests/integration/migrate.test.mjs` visible rtree skip | PASS in this branch | None; runner test is explicit when rtree is unavailable |
 | BL082 | `docs/MIGRATION.md` exact line-1 short circuit and integration test | PASS in this branch | None |
-| BL083 thread surface | 24 real-process matrix legs, four directed boundary refusals, plus real summary commit | PASS locally | Combined run: 31 PASS, 0 FAIL, 6 dependent NOT_RUN; unsigned legacy resolver now passes |
-| BL083 consolidation | No approved callable tool/schema exists in the baseline; no name is guessed | NOT_RUN | BL070/BL071/BL072 must publish the Phase 6 contract and implementation |
-| BL083 vault erasure | Thread erase and Phase 6 vault erase are separate surfaces | NOT_RUN | BL073/BL074 and the Phase 6 erasure suite |
-| BL084 | Gate A re-baseline | NOT_RUN | Requires complete BL083, including Phase 6 rows |
-| BL085 | Client package/version/env allowlist review | NOT_RUN | Requires BL083 and the Phase 5/6 environment contract; Phase 5 owns `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED` |
-| BL086 | README/architecture/NOTES closure | NOT_RUN | Requires the complete acceptance result |
+| BL083 thread surface | 24 real-process matrix legs, four directed boundary refusals, plus eight real summary commits | PASS locally | Combined runtime run: 33 PASS, 0 FAIL |
+| BL083 consolidation | Signed source consolidation and pre-erasure digest for all 12 DIRECT tenant/principal/agent legs | PASS locally | Protected-record contract; summary-item ingestion remains outside this API |
+| BL083 vault erasure | Six tenant/principal erasures; direct DB owner tuple/content/history/provenance/FTS assertions | PASS locally | Additional named security suite proves embeddings, bounds, replay and rollback |
+| BL084 | Gate A re-baseline | Local document updated | Not executed by the runtime harness; see GATE-A.md |
+| BL085 | Client 0.2.7 candidate, CHANGELOG and pack dry-run | PASS locally, unpublished | Not executed by the runtime harness; actual publication remains separate |
+| BL086 | README/architecture/NOTES closure | Local documents updated | Legacy unscoped context and summary-ingestion boundaries remain explicit |
 | BL087 | Existing decision confirmation record | DONE upstream | No Phase 7 code change is needed here |
 | BL088 | Release review and tag | NOT_RUN | Requires BL083–087; this harness never tags or publishes |
 
-The consolidation row stays `NOT_RUN` until the Phase 6 agent provides the
-approved tool name, request/response schema, provenance fields, and failure
-cases. The vault-erasure row stays separate because a green thread-erasure call
-cannot prove entity/history/embedding/FTS/vault-row disposition. This table is
-the handoff to Phase 6 and does not close BL083–088.
-
-The integrated run is recorded in `.tmp/final-phase7.log`. BL076 receipt
-pseudonymization is included, but it does not implement full vault erasure
-and therefore does not close the six remaining release dependencies.
+The integrated run is recorded in `.tmp/phase6-final-phase7.log`: 33 PASS,
+0 FAIL, four external NOT_RUN rows, exit 2. The runtime harness does not
+execute document review, npm packaging or release actions, so its external
+rows are not replaced with fabricated runtime passes. The manual document
+and actual pack results above are separate evidence. BL075 merge and BL088
+release remain open. See `../.brain/reviews/PHASE6-REVIEW.md` for full local
+test and independent review evidence.
 
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.3b | 2026-09-17 | beta | Record real Phase 6 matrix consolidation/erasure and separate runtime results from document/package/release gates. | working-tree | RWANG |
 | 0.1.2b | 2026-09-17 | beta | Record the combined 31-pass result and preserve six Phase 6/release dependencies. | working-tree | RWANG |
 | 0.1.1b | 2026-09-17 | beta | Added deterministic summary timing and directed cross-tenant, cross-principal, cross-agent, and cross-workspace denial cases; the Phase 6 dependency rows remain NOT_RUN until their approved contract exists. | working-tree | LUNA |
 | 0.1.0b | 2026-09-17 | beta | Added the real-process Phase 7 acceptance harness, explicit 24-leg matrix, latest phase-5 unsigned legacy vault proof, and dependency evidence table that keeps Phase 6 consolidation/vault-erasure cases as NOT_RUN until their approved contract exists. | working-tree | LUNA |

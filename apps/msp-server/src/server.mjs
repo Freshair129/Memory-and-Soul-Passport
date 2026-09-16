@@ -25,6 +25,7 @@ import { VaultRegistry } from "@freshair129/msp-core/vault-registry";
 import { createRetrievalService } from "@freshair129/msp-retrieval/retrieval-service";
 import { createVectorClient } from "@freshair129/msp-retrieval/vector";
 import { createContextHandlers } from "./transport/handlers/context-handlers.mjs";
+import { createConsolidationHandlers } from "./transport/handlers/consolidation-handlers.mjs";
 import { createLifecycleHandlers } from "./transport/handlers/lifecycle-handlers.mjs";
 import { createMemoryHandlers } from "./transport/handlers/memory-handlers.mjs";
 import { createPipelineHandlers } from "./transport/handlers/pipeline-handlers.mjs";
@@ -91,6 +92,7 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const lifecycleHandlers = createLifecycleHandlers({ db, entityStore, vaultRegistry, journal, gksProvider, keyFor: threadServiceKeyFor, globalPrivateGrantRequired });
   const memoryHandlers = createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore, keyFor: threadServiceKeyFor, globalPrivateGrantRequired });
   const pipelineHandlers = createPipelineHandlers({ gksProvider, journal, env });
+  const consolidationHandlers = createConsolidationHandlers({ db, entityStore, vaultRegistry, keyFor: threadServiceKeyFor });
 
   // W1: whether a caller-supplied `now` may ever reach the thread-memory
   // domain layer is decided ONCE, here, at the composition root -- never
@@ -142,6 +144,7 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   for (const [name, handler] of Object.entries(contextHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(lifecycleHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(memoryHandlers)) toolRegistry.register(name, handler);
+  for (const [name, handler] of Object.entries(consolidationHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(pipelineHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(threadHandlers)) {
     toolRegistry.register(name, guardThreadHandler({ name, handler }));

@@ -171,7 +171,8 @@ async function runThreadMatrix() {
   const call = spawnRuntime(dbPath, {
     MSP_DB_PATH: dbPath,
     MSP_THREAD_SERVICE_KEY: serviceKey,
-    MSP_IDENTITY_HMAC_KEY: identityKey,
+      MSP_IDENTITY_HMAC_KEY: identityKey,
+      MSP_IDENTITY_HMAC_KEY_VERSION: "phase7-v1",
     MSP_THREAD_IDLE_TIMEOUT_MINUTES: "1",
     MSP_TEST_CLOCK: "1",
   }, { allowTestClock: true });
@@ -276,12 +277,14 @@ async function runThreadMatrix() {
                     "msp_thread_memory_record",
                     {
                       thread_id: resolved.thread.threadId,
+                      session_id: inbound.session.sessionId,
                       kind: "PREFERENCE",
                       asserted_by_speaker_id: principalId,
                       subject_person_id: principalId,
                       body: { text: `phase7 record ${legId}` },
                       source_message_refs: [inbound.message.messageId],
                       verification_state: "CONFIRMED",
+                      confidence: 0.95,
                     },
                     claims,
                   ),

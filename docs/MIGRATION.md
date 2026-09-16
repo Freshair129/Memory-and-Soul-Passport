@@ -1,7 +1,7 @@
 ---
-version: "0.1.20b"
+version: "0.1.21b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-17T00:00:00+07:00,LUNA"
+last_update: "2026-09-17T03:48:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -10,6 +10,20 @@ attributes:
 ---
 
 # Consumer migration guide
+
+## Approved Phase 6 storage (0015)
+
+`0015_phase6_consolidation.sql` adds source confidence (existing rows default
+to 0), immutable entity provenance, history tombstone state, and the FTS
+update guard that removes forgotten entities. It is a normal additive
+migration with foreign keys enabled; migrations 0001–0014 are unchanged by
+this slice. The source-confidence column is pinned by the protected-record
+update trigger. Existing entities and history remain intact during upgrade.
+
+`erase_vault:true` is an explicit signed request, not a migration side effect.
+It applies the approved 200-row-per-table bound and atomic disposition. The
+local database is an engineering instance; applying 0015 does not activate
+an external runtime or authorize a release.
 
 ## Standalone server
 
@@ -251,6 +265,7 @@ Revert the single dependency/re-export change and reinstall GoVibe dependencies.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.21b | 2026-09-17 | beta | Record approved additive Phase 6 migration 0015 and explicit bounded erasure behavior. | working-tree | RWANG |
 | 0.1.20b | 2026-09-17 | beta | PH-MEMOS-7 hardening follow-up: made the exact-line-1 directive short-circuit explicit, and recorded the repository policy against FTS5/rtree shadow-table foreign keys even when SQLite accepts a current key shape. | working-tree | LUNA |
 | 0.1.19b | 2026-09-16 | beta | **New owner decision, PH-MEMOS-6 deliverable (`DEC-MEMOS-53`) -- does not touch, reopen or block PH-MEMOS-5.** Documented two new cases in the "Foreign-keys=off mode" section: (1) a forward pointer from `0010_erasure_receipts.sql`'s own paragraph to the new rebuild below; (2) a new paragraph distinguishing `migrations/0013_erasure_receipts_pseudonymize.sql`'s rebuild from the `vaults` rebuild case immediately above it -- `erasure_receipts`' own two immutability triggers are defined `ON erasure_receipts` itself (not on a sibling table referencing it by name, unlike `0011`'s `trg_vault_mounts_*`/`vaults`), so `DROP TABLE erasure_receipts` auto-drops them with nothing left to pre-emptively `DROP TRIGGER`, and no `PRAGMA legacy_alter_table` is needed; both triggers are explicitly recreated with unchanged text after the rename. Confirmed no other table references `erasure_receipts` by foreign key or trigger body, so this migration also needs no `-- msp-migration: foreign-keys=off` directive despite being a genuine rebuild, unlike `0011`'s. No SQL in this repository changed; `0013` does not exist yet (design-stage only, see `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` §12.5). | working-tree | ATHER |
 | 0.1.18b | 2026-09-16 | beta | RKOI PH-MEMOS-5 review round 5 closure (0 critical, 2 warnings, both text-only) informational note: documented, in the "Foreign-keys=off mode" section, that any migration *after* the principal-vaults migration (`0011`) that rebuilds `vaults` again must first `DROP TRIGGER`/recreate `0011`'s own `trg_vault_mounts_refuse_principal_insert`/`_update` (or run under `PRAGMA legacy_alter_table = ON`) — both triggers reference `vaults` by name, so the rebuild's own `ALTER TABLE vaults_new RENAME TO vaults` step fails `no such table: main.vaults` otherwise; `0011` itself is unaffected, since it creates those two triggers only after its own rename completes. Also corrected this file's own frontmatter `version`, which had drifted one entry behind the CHANGELOG's actual latest row (`0.1.17b`) since that row was added. No SQL in this repository changed; `0011` does not exist yet (design-stage only). | working-tree | ATHER |

@@ -1,7 +1,7 @@
 ---
-version: "0.1.5b"
+version: "0.1.9b"
 created_at: "2026-08-12T08:33:00+07:00,ATHER,394a176"
-last_update: "2026-09-15T00:00:00+07:00,KIN"
+last_update: "2026-09-17T03:48:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -10,6 +10,23 @@ attributes:
 ---
 
 # Gate A verification report
+
+## 2026-09-17 local re-baseline (BL084)
+
+The approved Phase 6 package adds principal consolidation/passport isolation
+and bounded vault erasure. The combined implementation passes 487 Vitest
+tests (one conditional engine-canary skip), four immutable-consumer cross
+tests and the 33 runtime acceptance cases. The latter includes all 24 thread
+matrix legs, all 12 DIRECT consolidations and six tenant/principal erasures.
+Full security result and independent review are recorded in
+[`PHASE6-REVIEW.md`](../.brain/reviews/PHASE6-REVIEW.md).
+
+Migration lineage is now 0001–0015; Phase 6 adds only 0015 and preserves
+0001–0014 byte-for-byte. Fresh/populated migration and content/retrieval
+erasure assertions pass. Local `.local/msp.db` is schema 15, integrity ok,
+zero FK violations. Client 0.2.7 pack dry-run passes; it is unpublished.
+Hosted CI, merge/tag and consumer activation are separate evidence gates.
+The original extraction evidence below remains historical.
 
 Verified on Windows from the standalone MSP checkout on 2026-08-12. A checkbox is marked only where the cited command exercised the behavior.
 
@@ -54,6 +71,7 @@ All seven root migration files matched the SHA-256 of the corresponding GoVibe s
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.9b | 2026-09-17 | beta | Re-baseline approved Phase 6 principal/thread isolation, migration lineage and local package evidence with release gates explicit. | working-tree | RWANG |
 | 0.1.8b | 2026-09-15 | beta | PH-MEMOS-4 (TASK-MEMOS-003/004, per docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md v0.5.4b, RKOI-approved spec after four review rounds): participant lifecycle (`msp_thread_participant_lifecycle`), agent detach (`msp_thread_agent_detach`), and thread-scoped erasure/retention/export (`msp_thread_principal_erase`/`msp_thread_retention_tick`/`msp_thread_principal_export`), plus a correction to already-shipped stage-1 code (`BL-MEMOS-058`, CRITICAL 1: a departed principal could silently rejoin a thread through the claim-free first-membership path -- the guard now distinguishes never-participated/rejoin/current-row as three cases, not two). New migration `migrations/0010_erasure_receipts.sql` (an additive trigger replacement on `protected_memory_records` plus the new `erasure_receipts` table) -- ten root migrations now apply cleanly on both a fresh database and one already populated through `0009`. New `tests/security/participant-lifecycle-relink.security.mjs` (15 cases) and `tests/security/thread-erasure.security.mjs` (19 cases); `npm run test:security` grew from the predecessor row's 104 real-process tests to **138**, all passing. `npm run test:vitest` (contract+integration) grew to 443 passing (1 skipped); `dependency-boundaries.test.mjs` and `npm run test:cross-zuri` both still pass. `@freshair129/msp-client-js` bumped 0.2.5 -> 0.2.6 to forward the new `MSP_THREAD_RETENTION_DAYS` deployment variable -- the one place this phase's client surface genuinely had to grow. | working-tree | KIN |
 | 0.1.7b | 2026-09-15 | beta | TASK-MEMOS-002 stage 2 multi-agent (BL-MEMOS-040..048/112, per docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md v0.4.3b, RKOI-approved spec): `agentId`/`workspaceId`/`nonce` required grant claims, `thread_agents` attachment and the agent gate, delivery's own agent scoping (CRITICAL 1), per-agent protected-record visibility (CRITICAL 2), and replay-nonce bookkeeping. New `tests/security/thread-agent-scoping.security.mjs` (GATE-MEMOS-3's umbrella file). Between this row and its predecessor, two prior fixes also landed and are folded in here for the record: a V8 `JSON.parse` non-first-key-corruption engine bug closed in the keyring parser (`tests/security/thread-service-keyring.security.mjs` grew 9 -> 11 cases), and RKOI's merge-blocking transport-level escaped-object-key pre-scan (new `tests/security/transport-json-parse-hardening.security.mjs`, 3 cases). The full security suite is now **100 real-process tests**, up from the 75 this row's predecessor recorded. `npm run test:vitest` (contract+integration) is 425 tests. | working-tree | KIN |
 | 0.1.5b | 2026-09-15 | beta | TASK-MEMOS-002 stage 2 (BL-MEMOS-049, per-tenant `MSP_THREAD_SERVICE_KEYRING`): added `tests/security/thread-service-keyring.security.mjs`. After RKOI's stage-2 code review round 1 (the CRITICAL closure: no rejection ever quotes anything read out of the keyring, only an entry's position), the full security suite is **75 real-process tests**, 9 of them keyring cases in that file -- up from the 66/21 (thread-memory) split this row's predecessor recorded. | working-tree | KIN |

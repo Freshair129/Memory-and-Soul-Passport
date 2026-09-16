@@ -1,23 +1,23 @@
 ---
 doc_id: "PHASE6-CONSOLIDATION-PASSPORT"
-version: "0.3.0b"
-status: "candidate"
+version: "0.3.1b"
+status: "beta"
 created_at: "2026-09-17T00:00:00+07:00,RWANG"
-last_update: "2026-09-17T00:00:00+07:00,RWANG"
+last_update: "2026-09-17T03:48:00+07:00,RWANG"
 attributes:
   domain: "mission-state-protocol"
-  doc_type: "phase6-candidate"
+  doc_type: "phase6-contract"
   scope: "BL-MEMOS-070..075-consolidation-passport-and-erasure"
-  authority: "owner approval required"
+  authority: "owner approved v0.3.0b on 2026-09-17: approve"
 ---
 
-# Phase 6 consolidation and passport candidate
+# Phase 6 consolidation and passport contract
 
-This candidate closes the contract gaps left by the current design and
-implementation plan for BL-MEMOS-070..075. It is one bounded package for
-approval. It authorizes no implementation until the owner approves or amends
-the package. BL-MEMOS-076 remains the separately specified §12.5 slice and is
-not widened by this document.
+The owner approved this package as v0.3.0b on 2026-09-17 with "approve".
+Implementation is authorized for its protected-record APIs and erasure
+extension. Summary-item ingestion in the broader BL070 backlog remains
+outside this concrete source_record_id contract; no summary API is invented.
+BL-MEMOS-076 remains the separately specified §12.5 slice.
 
 The risk level is **HIGH**: this package adds authenticated write/read
 surfaces, a provenance table, and a principal-vault erasure transaction.
@@ -415,21 +415,25 @@ flowchart TD
   XE --> XV[Cleared vault tombstone + immutable receipt]
 ~~~
 
-## Approval request
+## Approval and implementation interpretation
 
-Please approve or amend this single concrete package: the three tool names
-and request/response shapes in §3, the entity_provenance schema and redaction
-transition in §4, the phase6-v1 thresholds/limits in §2, and the exact
-vault/entity/history/FTS/embedding disposition and error in §5. Once approved,
-implementation can proceed against this document and the existing §5.0 grant
-contract without inventing API or policy at code time. Until then, BL070..075
-remain documentation-only; BL076 is independently testable and scoped to
-§12.5.
+Approved without policy amendments. The existing `state` table holds hashed
+operation/tenant/idempotency keys and request hashes with reference-only
+responses, including deferred outcomes; no raw principal or source body is
+stored there. This implements §6 without extending the provenance schema.
+The grant/nonce causes described in §6 collapse to the §1.6 `not_found`
+envelope on the new principal APIs; existing erasure keeps its typed errors.
+Digest search text is bounded to 1024 characters and its opaque, scope-bound
+cursor to 2048. The three new tools have an explicit handler allowlist and
+their own signed guard; they are not registered through the thread-bound
+guard. Source AGENT visibility remains restricted to its stored agent;
+passport reads remain agent-agnostic after the subject/passport checks.
 
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.3.1b | 2026-09-17 | beta | Record owner approval of v0.3.0b and implementation mapping for replay metadata, principal refusal envelopes, bounded digest inputs and protected-record scope. | working-tree | RWANG |
 | 0.3.0b | 2026-09-17 | candidate | Bound logical entity identity and merge semantics, added source-owned confidence, required passport source tuple checks, separated fresh-nonce anti-replay from idempotent retry, and marked cleared owner tuples as inherited erasure disposition. | working-tree | RWANG |
 | 0.2.1b | 2026-09-17 | candidate | Clarified operation-scoped provenance idempotency, entity-history redaction state, and the conditional FTS update trigger required by the proposed erasure disposition. | working-tree | RWANG |
 | 0.2.0b | 2026-09-17 | candidate | Replaced owner-decision placeholders with one bounded proposed Phase 6 contract: inherited grant and vault rules, concrete consolidation/passport/digest APIs, thresholds, limits, provenance schema, tombstone/cleared-vault erasure, transaction guarantees, and acceptance suites. | working-tree | RWANG |

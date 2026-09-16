@@ -1,7 +1,7 @@
 ---
-version: "0.2.0b"
+version: "0.2.1b"
 created_at: "2026-09-17T02:09:12+07:00,RWANG,bfe7c9d"
-last_update: "2026-09-17T03:00:00+07:00,RWANG"
+last_update: "2026-09-17T03:49:00+07:00,RWANG"
 status: under review
 attributes:
   domain: mission-state-protocol
@@ -12,7 +12,8 @@ attributes:
 # MEMOS-008 implementation review
 
 Verdict: approved-scope implementation reviewed; final local suites PASS.
-Full Phase 6 and release remain OPEN. No production deployment is claimed.
+The later approved Phase 6 implementation is reviewed in PHASE6-REVIEW.md.
+Release remains OPEN. No production deployment is claimed.
 Complexity C-3; risk HIGH (authorization, replay protection, schema changes).
 
 ## Authority and integration baseline
@@ -31,8 +32,9 @@ not edited or switched.
 
 The owner approved nonce amendment v0.1.1b on 2026-09-17 with "ลุย".
 Migration 0013 and the consistent global refusal rule implement it.
-The separate Phase 6 candidate v0.3.0b has been presented for approval;
-BL070-075 remain documentation-only until that answer is received.
+The owner subsequently approved Phase 6 v0.3.0b with `approve`. Its concrete
+protected-record contract is implemented and reviewed in PHASE6-REVIEW.md;
+the evidence below records the preceding MEMOS-008 baseline.
 
 ## Review checklist
 
@@ -174,5 +176,6 @@ not evidence of a deployed data audit or production activation.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.1b | 2026-09-17 | under review | Link the subsequent approved Phase 6 implementation review while preserving MEMOS-008 baseline evidence. | working-tree | RWANG |
 | 0.2.0b | 2026-09-17 | under review | Record approved nonce correction, integrated evidence, local database audit and release limits | working-tree | RWANG |
 | 0.1.0b | 2026-09-17 | under review | Record authority, reproducible baseline, acceptance checklist and pending gates | bfe7c9d | RWANG |

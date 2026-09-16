@@ -1,0 +1,383 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Approved Phase 6 consolidation and passport tools",
+  "contract": {
+    "doc_id": "PHASE6-CONSOLIDATION-PASSPORT",
+    "version": "0.3.1b",
+    "source": "docs/PHASE6-CONSOLIDATION-PASSPORT.md"
+  },
+  "$defs": {
+    "access": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grant",
+        "signature"
+      ],
+      "properties": {
+        "grant": {
+          "type": "object",
+          "required": [
+            "operation",
+            "expiresAt",
+            "payloadHash"
+          ],
+          "properties": {
+            "operation": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "expiresAt": {
+              "type": "integer"
+            },
+            "payloadHash": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            },
+            "tenantId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "principalId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "workspaceId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "allowPassport": {
+              "type": "boolean"
+            },
+            "nonce": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "additionalProperties": true
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "msp_memory_consolidate",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "access",
+          "idempotency_key",
+          "source_record_id",
+          "target_vault_id",
+          "entity_category",
+          "entity_key"
+        ],
+        "properties": {
+          "access": {
+            "$ref": "#/$defs/access"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "source_record_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "target_vault_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "entity_category": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^(?!\\s*$)[^ ]+$"
+          },
+          "entity_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "\\S"
+          }
+        }
+      },
+      "outputSchema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "decision",
+              "entity_id",
+              "target_vault_id",
+              "provenance_id",
+              "replay"
+            ],
+            "properties": {
+              "decision": {
+                "const": "consolidated"
+              },
+              "entity_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target_vault_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "provenance_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "replay": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "decision",
+              "reason"
+            ],
+            "properties": {
+              "decision": {
+                "const": "passport_deferred"
+              },
+              "reason": {
+                "enum": [
+                  "source_ineligible",
+                  "threshold_not_met",
+                  "duplicate_source"
+                ]
+              },
+              "entity_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "replay": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "msp_memory_passport_promote",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "access",
+          "idempotency_key",
+          "entity_id"
+        ],
+        "properties": {
+          "access": {
+            "$ref": "#/$defs/access"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "entity_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      },
+      "outputSchema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "decision",
+              "entity_id",
+              "passport_entity_id",
+              "provenance_ids",
+              "replay"
+            ],
+            "properties": {
+              "decision": {
+                "const": "promoted"
+              },
+              "entity_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "passport_entity_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "provenance_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "replay": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "decision",
+              "reason"
+            ],
+            "properties": {
+              "decision": {
+                "const": "passport_deferred"
+              },
+              "reason": {
+                "enum": [
+                  "source_ineligible",
+                  "threshold_not_met",
+                  "duplicate_source"
+                ]
+              },
+              "entity_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "replay": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "msp_memory_context_digest",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "access"
+        ],
+        "properties": {
+          "access": {
+            "$ref": "#/$defs/access"
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              }
+            ]
+          },
+          "include_passport": {
+            "type": "boolean"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "entity_id",
+                "vault_id",
+                "category",
+                "key",
+                "confidence",
+                "provenance_receipt"
+              ],
+              "properties": {
+                "entity_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "vault_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "category": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "provenance_receipt": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "errors": [
+    "not_found",
+    "validation_failed",
+    "conflict"
+  ]
+}

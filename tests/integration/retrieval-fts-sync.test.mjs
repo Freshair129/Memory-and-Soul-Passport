@@ -48,16 +48,16 @@ describe("AC-01: migration 0004_retrieval.sql applies idempotently", () => {
   it("applies cleanly as migration version 4, alongside the prior three (and WP-16/WP-17's 0005/0006 that now follow it)", () => {
     const db = freshDb();
     const rows = db.prepare("SELECT version, name FROM schema_migrations ORDER BY version").all();
-    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
     expect(rows[3].name).toBe("0004_retrieval.sql");
-    expect(db.pragma("user_version", { simple: true })).toBe(14);
+    expect(db.pragma("user_version", { simple: true })).toBe(15);
   });
 
   it("re-running migrations against an already-migrated database is a no-op (idempotent)", () => {
     const db = freshDb();
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(0);
-    expect(second.currentVersion).toBe(14);
+    expect(second.currentVersion).toBe(15);
   });
 
   it("entities_fts and embeddings tables exist with the documented columns", () => {
@@ -150,12 +150,10 @@ describe("AC-01: entities_fts stays in sync with entities across insert/update/d
     const afterUpdate = db.prepare("SELECT body_text FROM entities_fts WHERE entity_id = ?").get(created.entity.entity_id);
     expect(afterUpdate.body_text).toContain("gadget");
 
-    // forget() is a soft delete (UPDATE lifecycle_state='forgotten'), which
-    // fires the AFTER UPDATE trigger -- entities_fts keeps a row (the
-    // exclusion from search results is ftsSearch's job, via a JOIN back to
-    // entities.lifecycle_state, not entities_fts deletion).
+    // Phase 6's approved FTS guard removes a forgotten projection while
+    // retaining the entity/history rows for their tombstone lifecycle.
     store.forget({ vaultId: "vault-store", category: "note", key: "widget-spec", reason: "done", actor: "test" });
-    expect(ftsRowCount(db, created.entity.entity_id)).toBe(1);
+    expect(ftsRowCount(db, created.entity.entity_id)).toBe(0);
   });
 });
 

@@ -1,7 +1,7 @@
 ---
-version: "0.2.10b"
+version: "0.2.11b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-17T02:27:00+07:00,RWANG"
+last_update: "2026-09-17T03:48:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -10,6 +10,21 @@ attributes:
 ---
 
 # MSP extraction notes
+
+## Phase 6 approved implementation scope
+
+The three tools in `packages/msp-contracts/schemas/PHASE6.tools.json` use
+verified principal grants. They cannot use actor strings or legacy context
+rows as authority. Protected-record consolidation requires live CONFIRMED
+DIRECT evidence and the current source thread agent/workspace attachment;
+passport reads remain subject-owned and agent-agnostic. The digest returns
+only entity metadata and opaque provenance receipts, with authenticated
+scope-bound cursors. Legacy unscoped API-006 context behavior described below
+is retained; it is not silently declared fixed by the new surface.
+
+Summary-item ingestion from the broader BL070 plan is not part of the
+owner-approved source_record_id API. Release merge/tag/npm publication and
+consumer activation remain distinct from local tests and package dry-runs.
 
 ## Scope and invariants
 
@@ -501,6 +516,7 @@ anyway.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.11b | 2026-09-17 | beta | Record approved Phase 6 scope and its remaining summary-ingestion/release boundaries. | working-tree | RWANG |
 | 0.2.10b | 2026-09-17 | beta | Distinguish signed scoped context reads from the retained legacy ownership gap. | working-tree | RWANG |
 | 0.2.9b | 2026-09-14 | beta | Fixed a pre-existing migration-runner race (RKOI review): two processes cold-starting `runMigrations` against the same fresh database file could have the loser throw a raw `SqliteError` instead of a typed one. `runMigrations` now serializes the whole read-pending-then-apply sequence behind a real cross-process lock (`BEGIN IMMEDIATE` on a dedicated `<dbPath>.migrate-lock` file); a losing process waits and re-reads fresh state, or refuses with the new `migration_concurrent_conflict:` prefix only if waiting is genuinely impossible. Also fixed a related `connection.mjs` race switching a brand-new file to WAL mode. See `docs/MIGRATION.md`'s "Concurrent cold start" section and `tests/integration/migrate-concurrent.test.mjs` (real multi-process coverage, 20-iteration non-flakiness loop). | working-tree | JANUS |
 | 0.2.8b | 2026-09-15 | beta | JANUS CI canary for the V8 `JSON.parse` non-first-key corruption bisected in 0.2.4b/0.2.3b above: `tests/contract/engine-json-parse-canary.test.mjs` runs the exact repro on module load, always logs `node=<version> v8=<version> affected=true|false` (picked up automatically by `test:vitest`/`test:contract`, no `package.json` script change needed since the file already lives under `tests/contract/`), and, only when the running engine is affected, asserts `containsEscapedObjectKey` and `parseThreadServiceKeyring` are both still refusing/decoding correctly against the exact trigger shape -- never fails CI just for running on an affected engine (verified: passes with `affected: true` on this workspace's Node 24.19.0, passes with `affected: false` on Node 22.23.2 via `npx -y node@22`, and fails when either mitigation is deliberately broken in a scratch copy, reverting cleanly). `.github/workflows/test.yml` keeps the `["22", "24"]` matrix unchanged and adds a step that captures the canary's console line into `$GITHUB_STEP_SUMMARY` per leg, `if: always()`, with no network dependency; YAML validated locally with PyYAML. See "CI engine canary" above for why `engines.node` stays `>=22`. | working-tree | JANUS |

@@ -1,7 +1,7 @@
 ---
-version: "0.3.1b"
+version: "0.3.2b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-17T02:54:00+07:00,RWANG"
+last_update: "2026-09-17T03:40:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp"
@@ -92,15 +92,21 @@ for matching after rotation; it does not authorize thread grants. See
 [receipt evidence and rotation](docs/BL-MEMOS-076-EVIDENCE.md).
 
 The requested local database is initialized at `.local/msp.db` with schema
-14. From an integration checkout, set `MSP_DB_PATH` to its absolute path
+15. From an integration checkout, set `MSP_DB_PATH` to its absolute path
 before `npm start`. The runtime is a stdio service. No credentials or
 external service activation are implied by creating the empty database.
 Migration 0013 adds the global nonce partition; 0014 pseudonymizes erasure
 receipts and refuses an existing non-empty raw receipt table.
 
-Full Phase 6 consolidation/passport and Phase 7 release remain gated by
-[the candidate contract](docs/PHASE6-CONSOLIDATION-PASSPORT.md) and complete
-acceptance evidence. Local test passes do not close those gates.
+The owner-approved [Phase 6 contract](docs/PHASE6-CONSOLIDATION-PASSPORT.md)
+adds protected-record consolidation, threshold-gated passport promotion and
+a reference-only context digest. Signed writes consume fresh nonces in the
+entity/provenance transaction. `msp_thread_memory_record.confidence` defaults
+to 0; passport promotion requires confidence >= 0.90 and two distinct
+confirmed sessions. `msp_thread_principal_erase({erase_vault:true})` performs
+bounded atomic content/retrieval erasure. Migration 0015 adds these storage
+contracts. Summary-item ingestion remains outside the approved concrete API.
+Release review, merge/tag and publication remain separate gates.
 
 ## GenesisRAG17 relay
 
@@ -131,6 +137,7 @@ See [docs/NOTES.md](docs/NOTES.md) for extraction evidence and known gaps, and [
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.3.2b | 2026-09-17 | beta | Describe approved Phase 6 APIs, confidence policy and bounded vault erasure; distinguish package candidate from release activation. | working-tree | RWANG |
 | 0.3.1b | 2026-09-17 | beta | Align signed grants, unsigned legacy compatibility, global gate, receipt key versioning and local schema setup; retain Phase 6/release gates. | working-tree | RWANG |
 | 0.3.0b | 2026-09-16 | beta | PH-MEMOS-5: principal vaults (`principal_private`/`principal_passport`, `migrations/0011`), API-010 `msp_vault_resolve`, the API-009 `access_context` amendment on all nine `msp_memory_*` tools, scoped `contexts` receipts (`migrations/0012`), and the multi-agent vault rules. `MSP_IDENTITY_HMAC_KEY` is now a hard deployment prerequisite for `msp_vault_resolve`. | working-tree | KIN |
 | 0.2.2b | 2026-09-12 | beta | Toolchain section: Node `>=22` for `better-sqlite3` 13 (N-API), why 11.x/12.x must not return, and the second-process rule that `close()` now enforces. | working-tree | Claude Opus 5 |

@@ -1,7 +1,7 @@
 ---
-version: "0.2.7b"
+version: "0.2.8b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-14T10:00:00+07:00,ATHER"
+last_update: "2026-09-17T03:40:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -12,6 +12,22 @@ attributes:
 # Standalone MSP architecture
 
 ## Boundary
+
+The approved Phase 6 surface adds `msp_memory_consolidate`,
+`msp_memory_passport_promote` and `msp_memory_context_digest`. Pure contract
+modules verify signed grants and schemas; transport supplies verified claims
+to the core consolidation store. Core owns immediate entity/provenance/nonce
+transactions and the source eligibility checks. The thread store owns the
+bounded `erase_vault` transaction; migration 0015 supplies immutable provenance,
+history redaction and the forgotten-entity FTS guard. The client remains a
+generic stdio boundary and cannot authorize a request itself.
+
+Principal-private ownership is tenant/person/agent/workspace; passport target
+ownership is tenant/person plus `allowPassport: true`. Scoped context receipt
+reads verify tenant/person grants, while legacy unscoped context rows retain
+their historical contract. Digest reads never include GROUP/ROOM sources and
+return reference-only provenance receipts. Fresh grants do not make revoked
+or erased source content eligible again.
 
 MSP is the memory and context authority between a consumer such as GoVibe and the optional GKS knowledge provider. For the isolated GenesisRAG17 pipeline it is the Tier 2 authenticated relay between Tier 1 zuri-ai, Tier 3 GKS and the Tier 4 worker. The extracted repository preserves the process boundary:
 
@@ -105,6 +121,7 @@ Risk is HIGH because code crosses package and repository boundaries and migratio
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.8b | 2026-09-17 | beta | Describe approved Phase 6 layering, principal/passport boundaries and atomic erasure. | working-tree | RWANG |
 | 0.2.7b | 2026-09-14 | beta | Linked the proposed multi-user/multi-agent memory surface (API-011): `ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md` and the `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.0b rewrite. No code change. | working-tree | ATHER |
 | 0.2.6b | 2026-09-14 | beta | Migration ownership paragraph corrected: the structural foreign-key check is not directive-gated -- it now runs for every pending migration, plain or directive (RKOI follow-up warning 2); `-- msp-migration: foreign-keys=off` (WP-E0) relaxes row-level enforcement only. | working-tree | JANUS |
 | 0.2.5b | 2026-09-13 | beta | Migration ownership paragraph now names the runner's `-- msp-migration: foreign-keys=off` mode (WP-E0), for rebuilding a table other tables reference by foreign key once the database can hold rows the rebuild would orphan. | working-tree | JANUS |
