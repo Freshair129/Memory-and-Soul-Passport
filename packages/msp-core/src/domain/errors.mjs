@@ -158,3 +158,20 @@ export class GrantReplayedError extends MspRuntimeError {
     super(`grant_replayed: ${message}`, "grant_replayed");
   }
 }
+
+// PH-MEMOS-5 (design doc §5.2/§5.3, DEC-MEMOS-50): a concurrent
+// msp_vault_resolve call is provisioning the identical principal-vault
+// owner tuple's first-ever generation -- the losing INSERT's own
+// transaction was refused SQLITE_BUSY_SNAPSHOT at the transaction-locking
+// layer (never vault_id's own PRIMARY KEY: SQLite serializes writers, so
+// the loser's INSERT never reaches the storage engine's constraint check
+// at all). Raised by domain/vault-registry.mjs's #provisionPrincipalVault,
+// never retried internally -- the caller's own next, top-level call is
+// what actually resolves the race, since that call opens a fresh
+// top-level transaction and snapshot that can see the winner's already-
+// committed row.
+export class VaultProvisionConflictError extends MspRuntimeError {
+  constructor(message = "a concurrent vault-resolve call is provisioning the same principal vault; retry") {
+    super(`vault_provision_conflict: ${message}`, "vault_provision_conflict");
+  }
+}

@@ -19,8 +19,18 @@
 // this packet's file to fix. This module reuses the *mechanism*
 // (stableId/mintRef) exactly as instructed; it does not claim byte-for-byte
 // id parity with vaults.mjs's preview ids.
-import { MspRuntimeError } from "./errors.mjs";
+import { MspRuntimeError, VaultProvisionConflictError } from "./errors.mjs";
 import { mintRef, stableId } from "./ids.mjs";
+
+// PH-MEMOS-5 (design §5.2): a generous, fixed bound on
+// #provisionPrincipalVault's epoch-probe loop -- never expected to bind
+// under correct operation, since a real tuple only ever accumulates one
+// generation per erasure. Deliberately internal-only, not a typed/
+// client-facing error: BL-MEMOS-061's own proof requirement is a property
+// test that this bound cannot be reached under any real erasure count a
+// tuple can actually accumulate through shipped tools, plus a forced-
+// past-the-bound unit test asserting the exact thrown message.
+export const PROVISION_EPOCH_PROBE_LIMIT = 10_000;
 
 function rowToVault(row) {
   if (!row) return null;
@@ -31,8 +41,12 @@ function rowToVault(row) {
     project_id: row.project_id,
     workspace_id: row.workspace_id,
     agent_id: row.agent_id,
+    tenant_id: row.tenant_id ?? null,
+    principal_id: row.principal_id ?? null,
     role: row.role ?? null,
     status: row.status,
+    decay_policy: row.decay_policy,
+    provision_epoch: row.provision_epoch,
     created_at: row.created_at,
   };
 }
@@ -58,7 +72,9 @@ export class VaultRegistry {
   #selectWorkspacePrivate;
   #selectGlobalPrivate;
   #selectById;
+  #selectByVaultId;
   #insertVault;
+  #insertPrincipalVault;
   #backfillProjectId;
   #selectMount;
   #selectAnyMount;
@@ -70,9 +86,23 @@ export class VaultRegistry {
     this.#selectWorkspacePrivate = db.prepare("SELECT * FROM vaults WHERE vault_type = 'workspace_private' AND workspace_id = ?");
     this.#selectGlobalPrivate = db.prepare("SELECT * FROM vaults WHERE vault_type = 'global_private' AND agent_id = ?");
     this.#selectById = db.prepare("SELECT * FROM vaults WHERE vault_id = ?");
+    // PH-MEMOS-5 (design §5.2): the epoch-probe loop's own existence check
+    // -- a plain SELECT 1, never a lookup keyed on any owner column.
+    this.#selectByVaultId = db.prepare("SELECT 1 FROM vaults WHERE vault_id = ?");
     this.#insertVault = db.prepare(`
       INSERT INTO vaults (vault_id, vault_type, project_id, workspace_id, agent_id, role, status, created_at)
       VALUES (@vault_id, @vault_type, @project_id, @workspace_id, @agent_id, @role, 'active', @created_at)
+    `);
+    // PH-MEMOS-5 (design §5.2, §12.4): a NEW prepared statement, not a
+    // reuse of #insertVault above -- #insertVault's fixed column list
+    // omits decay_policy/tenant_id/principal_id/provision_epoch entirely,
+    // so routing a principal_passport row through it would insert with no
+    // decay_policy value, falling to the column's own
+    // DEFAULT 'ebbinghaus', which then fails 0011's own
+    // decay_policy = 'pinned' CHECK for that type.
+    this.#insertPrincipalVault = db.prepare(`
+      INSERT INTO vaults (vault_id, vault_type, tenant_id, principal_id, agent_id, workspace_id, decay_policy, status, provision_epoch, created_at)
+      VALUES (@vault_id, @vault_type, @tenant_id, @principal_id, @agent_id, @workspace_id, @decay_policy, @status, @provision_epoch, @created_at)
     `);
     this.#backfillProjectId = db.prepare(
       "UPDATE vaults SET project_id = @project_id WHERE vault_id = @vault_id AND project_id IS NULL",
@@ -214,6 +244,153 @@ export class VaultRegistry {
   }
 
   /**
+   * PH-MEMOS-5 (design §5.2), lazy/idempotent, keyed on all four owner
+   * fields: two agents serving the same person get two DISTINCT episodic
+   * vaults (design §5.5 rule 1), falling directly out of this key, not a
+   * separate enforcement path.
+   */
+  provisionPrincipalPrivateVault({ tenantId, principalId, agentId, workspaceId }) {
+    if (!tenantId) throw new TypeError("provisionPrincipalPrivateVault requires tenantId.");
+    if (!principalId) throw new TypeError("provisionPrincipalPrivateVault requires principalId.");
+    if (!agentId) throw new TypeError("provisionPrincipalPrivateVault requires agentId.");
+    if (!workspaceId) throw new TypeError("provisionPrincipalPrivateVault requires workspaceId.");
+    return this.#provisionPrincipalVault({
+      vaultType: "principal_private",
+      idParts: ["principal-private", tenantId, principalId, agentId, workspaceId],
+      activeWhere:
+        "vault_type = 'principal_private' AND tenant_id = ? AND principal_id = ? AND agent_id = ? AND workspace_id = ? AND status = 'active'",
+      activeParams: [tenantId, principalId, agentId, workspaceId],
+      row: {
+        vault_type: "principal_private",
+        tenant_id: tenantId,
+        principal_id: principalId,
+        agent_id: agentId,
+        workspace_id: workspaceId,
+        decay_policy: "ebbinghaus",
+      },
+    });
+  }
+
+  /**
+   * PH-MEMOS-5 (design §5.2), lazy/idempotent, keyed on tenantId +
+   * principalId only -- agent_id/workspace_id are always null for this
+   * type (design §5, §12.4).
+   */
+  provisionPrincipalPassportVault({ tenantId, principalId }) {
+    if (!tenantId) throw new TypeError("provisionPrincipalPassportVault requires tenantId.");
+    if (!principalId) throw new TypeError("provisionPrincipalPassportVault requires principalId.");
+    return this.#provisionPrincipalVault({
+      vaultType: "principal_passport",
+      idParts: ["principal-passport", tenantId, principalId],
+      activeWhere: "vault_type = 'principal_passport' AND tenant_id = ? AND principal_id = ? AND status = 'active'",
+      activeParams: [tenantId, principalId],
+      row: {
+        vault_type: "principal_passport",
+        tenant_id: tenantId,
+        principal_id: principalId,
+        agent_id: null,
+        workspace_id: null,
+        decay_policy: "pinned",
+      },
+    });
+  }
+
+  /**
+   * Shared by both provisionPrincipal*Vault methods above (design §5.2,
+   * DEC-MEMOS-50). Run inside this.#db.transaction(...), matching the
+   * "lazy, idempotent" shape every existing provision*Vault method already
+   * establishes.
+   *
+   * No internal retry loop: a bounded RETRY loop here could only re-enter
+   * a SAVEPOINT of an already-open OUTER transaction (msp_vault_resolve's
+   * own, when this call is nested inside it) and would therefore read the
+   * SAME snapshot taken when that outer transaction began -- structurally
+   * unable to observe a commit made by a concurrent winner after that
+   * snapshot. Instead: a genuine concurrent first-ever-provision race for
+   * one tuple is refused at the transaction-locking layer, before either
+   * racer's own INSERT ever executes (SQLite serializes writers) --
+   * SQLITE_BUSY if the loser races while the winner's write transaction is
+   * still open, SQLITE_BUSY_SNAPSHOT if the loser's own read snapshot
+   * (from its probe SELECTs below) is already stale relative to the
+   * winner's commit. Only the SQLITE_BUSY_SNAPSHOT case is caught here,
+   * exactly, and re-mapped to a typed VaultProvisionConflictError -- a
+   * plain SQLITE_BUSY from ordinary lock contention is NOT this specific
+   * race and is not remapped, propagating as an untyped driver error,
+   * mirroring domain/thread-memory.mjs's close_for_relink precedent for
+   * the identical distinction. The retry that actually resolves the race
+   * happens one level up, at the caller's own NEXT top-level call, which
+   * opens a fresh top-level transaction and snapshot that CAN see the
+   * winner's already-committed row.
+   *
+   * Re-provisioning after erasure: the active-row SELECT below finds
+   * nothing for an erased tuple (status = 'erased' never satisfies
+   * activeWhere), so the epoch-probe loop runs. It finds the erased row
+   * itself at epoch 0 (its vault_id is still exactly what the tuple
+   * deterministically derives) and mints a genuinely different vault_id at
+   * the next unused epoch -- found by probing vault_id's own PRIMARY KEY
+   * existence directly, never by a lookup keyed on any stored column, so
+   * this holds regardless of MSP_IDENTITY_HMAC_KEY's state, including a
+   * rotation between the original provision and the re-engagement (design
+   * §5.2, DEC-MEMOS-50 round 3).
+   */
+  #provisionPrincipalVault({ vaultType, idParts, activeWhere, activeParams, row }) {
+    const run = this.#db.transaction(() => {
+      const existing = this.#db.prepare(`SELECT * FROM vaults WHERE ${activeWhere}`).get(...activeParams);
+      if (existing) return rowToVault(existing);
+
+      // No active row for this tuple -- either never provisioned, or every
+      // prior generation for this tuple is erased. Mint the next
+      // generation's id by probing PRIMARY KEY existence directly, epoch 0
+      // upward. idParts is the raw tuple THIS CALL already received in
+      // plaintext -- it is never read back from a stored row -- so this
+      // needs no column that must survive erasure and no column keyed by
+      // MSP_IDENTITY_HMAC_KEY: it is immune to both erasure blanking
+      // principal_id and to identity-key rotation, because neither is an
+      // input to this loop at all.
+      let epoch = 0;
+      let vaultId = stableId("vault", ...idParts, String(epoch));
+      while (this.#selectByVaultId.get(vaultId)) {
+        epoch += 1;
+        if (epoch > PROVISION_EPOCH_PROBE_LIMIT) {
+          // Unreachable under correct operation -- every real tuple has a
+          // small, bounded number of prior generations (one per erasure).
+          // A loud internal failure here beats a silent infinite loop or a
+          // resurrected id; not a client-facing error code (design §14),
+          // and deliberately so -- see PROVISION_EPOCH_PROBE_LIMIT's own
+          // comment above. Message carries only vaultType, never a
+          // tenant/principal/agent/workspace identifier.
+          throw new Error(`provisionPrincipalVault: exceeded ${PROVISION_EPOCH_PROBE_LIMIT} generation probes for ${vaultType}`);
+        }
+        vaultId = stableId("vault", ...idParts, String(epoch));
+      }
+
+      try {
+        this.#insertPrincipalVault.run({
+          vault_id: vaultId,
+          ...row,
+          status: "active",
+          provision_epoch: epoch,
+          created_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        // A genuine concurrent first-ever-provision race for this exact
+        // tuple never reaches this catch's own constraint branch at all --
+        // SQLite serializes writers, so the loser's own attempt to enter
+        // this transaction's write phase is refused at the locking layer
+        // before its own INSERT ever executes (see this method's own
+        // header comment for the real error codes this actually raises,
+        // and why this catch is not a retry).
+        if (err.code === "SQLITE_BUSY_SNAPSHOT") {
+          throw new VaultProvisionConflictError();
+        }
+        throw err; // includes plain SQLITE_BUSY -- not this race, not remapped
+      }
+      return rowToVault(this.#db.prepare("SELECT * FROM vaults WHERE vault_id = ?").get(vaultId));
+    });
+    return run();
+  }
+
+  /**
    * WP-14 AC-04: the ownership/scope check backing `vault_scope_denied`
    * enforcement. Returns a plain boolean -- never throws, never itself
    * shapes an error -- so transport/handlers/*.mjs can pass the result
@@ -222,34 +399,65 @@ export class VaultRegistry {
    * contracts/ decoupled from this module (see that file's header comment
    * for the layering rationale).
    *
-   * A caller (identified by workspaceId and/or agentId, whichever the
-   * calling tool's request shape actually carries) is considered
-   * authorized for vaultId if:
-   *   - the vault is unknown: false (an unknown vault_id is a distinct
-   *     not_found condition, not a scope question -- callers check
-   *     getVaultById() separately when they need to tell the two apart);
-   *   - a workspace_mounts row already links vaultId to workspaceId
-   *     (status='mounted'): true -- a previously-authorized mount remains
-   *     authorized (idempotent re-mount with a different alias, etc.);
-   *   - vault_type is 'workspace_private': true only if the vault's own
-   *     workspace_id equals the caller's workspaceId (a workspace never
-   *     owns another workspace's private vault);
-   *   - vault_type is 'global_private': true only if the vault's own
-   *     agent_id equals the caller's agentId (this cannot be satisfied
-   *     through a request shape that carries no agentId, e.g.
-   *     msp_vault_mount's current request -- that is a deliberate,
-   *     conservative consequence of this fix, not an oversight: a
-   *     workspace-scoped mount request has no way to prove agent
-   *     ownership of a Global-Private vault, so it is denied);
-   *   - vault_type is 'shared': true only if the caller's own
-   *     workspace-private vault (looked up by workspaceId) is already
-   *     known to belong to the same project_id as the shared vault.
+   * PH-MEMOS-5 (design §5.2): now a thin SELECT-then-delegate wrapper
+   * around #isVaultRowAccessibleTo below, the single row-taking branch set
+   * this method and classifyPrincipalAccess() both share -- this is
+   * mountVault's sole caller and remains fully backward-compatible for
+   * every existing {workspaceId, agentId}-only caller.
    */
-  isVaultAccessibleTo(vaultId, { workspaceId = null, agentId = null } = {}) {
+  isVaultAccessibleTo(vaultId, ctx = {}) {
     const vault = this.#selectById.get(vaultId);
-    if (!vault) return false;
+    return this.#isVaultRowAccessibleTo(vault, ctx);
+  }
 
-    if (workspaceId && this.#selectAnyMount.get(vaultId, workspaceId)) {
+  /**
+   * PH-MEMOS-5 (design §5.2), the single normative branch set both
+   * isVaultAccessibleTo() and classifyPrincipalAccess() share -- never
+   * restated a second time anywhere else in this codebase. Takes an
+   * ALREADY-FETCHED row (never performs its own SELECT), so a caller that
+   * already has the row in hand (classifyPrincipalAccess, called from a
+   * transport handler's own requireKnownVault/getVaultById lookup) never
+   * pays for a second one.
+   *
+   *   - vault not found: false (unchanged).
+   *   - vault.status !== 'active': false, checked FIRST, before any tuple
+   *     comparison, for every vault type -- an erased principal vault's
+   *     still-populated tenant_id/agent_id/workspace_id columns (0011
+   *     blanks only principal_id on erasure) must never read as
+   *     accessible merely because they still match. This is the single
+   *     place this status gate lives; requireKnownVault stays existence-
+   *     only by design (API-009 §5.1) and is never asked to check status.
+   *   - vault_type === 'principal_private': all four owner fields must be
+   *     present AND match exactly.
+   *   - vault_type === 'principal_passport': tenantId/principalId must
+   *     match AND allowPassport must be exactly true.
+   *   - the three legacy branches (workspace-mount short-circuit,
+   *     workspace_private, global_private, shared) are unchanged from
+   *     before this phase -- reordered only so the two principal branches
+   *     above sit ahead of the workspace-mount short-circuit, removing
+   *     (at zero behavioral cost, since 0011's vault_mounts triggers
+   *     already refuse ever inserting a mount row naming a principal
+   *     vault_id) principal-vault isolation's dependency on that
+   *     cross-table invariant.
+   */
+  #isVaultRowAccessibleTo(vault, { workspaceId = null, agentId = null, tenantId = null, principalId = null, allowPassport = false } = {}) {
+    if (!vault) return false;
+    if (vault.status !== "active") return false;
+
+    if (vault.vault_type === "principal_private") {
+      return Boolean(tenantId && principalId && agentId && workspaceId)
+        && vault.tenant_id === tenantId
+        && vault.principal_id === principalId
+        && vault.agent_id === agentId
+        && vault.workspace_id === workspaceId;
+    }
+    if (vault.vault_type === "principal_passport") {
+      return Boolean(tenantId && principalId && allowPassport === true)
+        && vault.tenant_id === tenantId
+        && vault.principal_id === principalId;
+    }
+
+    if (workspaceId && this.#selectAnyMount.get(vault.vault_id, workspaceId)) {
       return true;
     }
 
@@ -265,6 +473,41 @@ export class VaultRegistry {
       return Boolean(callerWorkspaceVault?.project_id) && callerWorkspaceVault.project_id === vault.project_id;
     }
     return false;
+  }
+
+  /**
+   * PH-MEMOS-5 (design §5.1, §5.2, DEC-MEMOS-49): the mechanism behind
+   * API-009's new access_context amendment -- nine new call sites in
+   * apps/msp-server's memory-handlers.mjs, one per msp_memory_* tool, each
+   * calling this method directly with the vault row it already has (never
+   * a second SELECT). Returns a three-way outcome
+   * contracts/vault-scope-guard.mjs's assertAccessContext() consumes:
+   *   - null: vault is not a principal type -- access_context is neither
+   *     required nor checked, the legacy tools' existing behavior.
+   *   - 'access_context_required': vault IS a principal type and
+   *     accessContext is absent entirely.
+   *   - 'access_context_denied': accessContext was present but
+   *     #isVaultRowAccessibleTo(vault, ...) returned false -- a tuple
+   *     mismatch, an erased vault, or a principal_passport target missing
+   *     allow_passport: true are all this SAME answer, deliberately (no
+   *     new oracle a caller could use to distinguish them).
+   *   - 'ok': accessContext matched.
+   */
+  classifyPrincipalAccess(vault, accessContext) {
+    if (!vault || (vault.vault_type !== "principal_private" && vault.vault_type !== "principal_passport")) {
+      return null;
+    }
+    if (accessContext === undefined || accessContext === null || typeof accessContext !== "object") {
+      return "access_context_required";
+    }
+    const outcome = this.#isVaultRowAccessibleTo(vault, {
+      tenantId: accessContext.tenant_id ?? null,
+      principalId: accessContext.principal_id ?? null,
+      agentId: accessContext.agent_id ?? null,
+      workspaceId: accessContext.workspace_id ?? null,
+      allowPassport: accessContext.allow_passport === true,
+    });
+    return outcome ? "ok" : "access_context_denied";
   }
 
   /**
@@ -285,6 +528,13 @@ export class VaultRegistry {
     const vault = this.getVaultById(vaultId);
     if (!vault) {
       throw new MspRuntimeError(`mountVault: unknown vault_id "${vaultId}".`, "not_found");
+    }
+    // PH-MEMOS-5 (design §5.2, DEC-MEMOS-39): the JS-layer half of the
+    // never-mountable rule, ahead of #insertMount -- 0011's vault_mounts
+    // triggers are the DB-layer half; either alone already refuses every
+    // code path this design specifies, deliberate defense in depth.
+    if (vault.vault_type === "principal_private" || vault.vault_type === "principal_passport") {
+      throw new MspRuntimeError("mountVault: principal vaults are never mountable.", "vault_scope_denied");
     }
 
     const run = this.#db.transaction(() => {

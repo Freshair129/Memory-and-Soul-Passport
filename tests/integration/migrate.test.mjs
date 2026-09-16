@@ -97,7 +97,7 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(10);
+    expect(result.appliedCount).toBe(12);
     const tables = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN " +
@@ -136,7 +136,7 @@ describe("db/migrate (AC-03)", () => {
     runMigrations(db, migrationsDir);
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(0);
-    expect(second.currentVersion).toBe(10);
+    expect(second.currentVersion).toBe(12);
   });
 
   // TASK-MEMOS-002 stage 1: 0008_thread_memory.sql is a real, non-directive
@@ -149,8 +149,8 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(10);
-    expect(result.currentVersion).toBe(10);
+    expect(result.appliedCount).toBe(12);
+    expect(result.currentVersion).toBe(12);
     expect(db.pragma("foreign_key_check")).toEqual([]);
     const threadTables = db
       .prepare(
@@ -176,8 +176,8 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(10);
-    expect(result.currentVersion).toBe(10);
+    expect(result.appliedCount).toBe(12);
+    expect(result.currentVersion).toBe(12);
     expect(db.pragma("foreign_key_check")).toEqual([]);
     const agentTables = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('thread_agents','grant_nonces')")
@@ -194,7 +194,9 @@ describe("db/migrate (AC-03)", () => {
     const migrationFileNamesThrough0008 = readdirSync(rootMigrationsDir)
       .filter((name) => /^\d{4}_.*\.sql$/.test(name))
       .filter((name) => !name.startsWith("0009_"))
-      .filter((name) => !name.startsWith("0010_"));
+      .filter((name) => !name.startsWith("0010_"))
+      .filter((name) => !name.startsWith("0011_"))
+      .filter((name) => !name.startsWith("0012_"));
     expect(migrationFileNamesThrough0008).toHaveLength(8);
     const filesThrough0008 = Object.fromEntries(migrationFileNamesThrough0008.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]));
     const migrationsDir0009 = setupMigrationsDir(filesThrough0008);
@@ -250,8 +252,8 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(10);
-    expect(result.currentVersion).toBe(10);
+    expect(result.appliedCount).toBe(12);
+    expect(result.currentVersion).toBe(12);
     expect(db.pragma("foreign_key_check")).toEqual([]);
     const erasureTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'erasure_receipts'").all();
     expect(erasureTables).toHaveLength(1);
@@ -265,7 +267,9 @@ describe("db/migrate (AC-03)", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNamesThrough0009 = readdirSync(rootMigrationsDir)
       .filter((name) => /^\d{4}_.*\.sql$/.test(name))
-      .filter((name) => !name.startsWith("0010_"));
+      .filter((name) => !name.startsWith("0010_"))
+      .filter((name) => !name.startsWith("0011_"))
+      .filter((name) => !name.startsWith("0012_"));
     expect(migrationFileNamesThrough0009).toHaveLength(9);
     const filesThrough0009 = Object.fromEntries(migrationFileNamesThrough0009.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]));
     const migrationsDir0010 = setupMigrationsDir(filesThrough0009);
@@ -334,13 +338,210 @@ describe("db/migrate (AC-03)", () => {
     expect(() => db0010.prepare("DELETE FROM erasure_receipts WHERE erasure_receipt_id = ?").run("receipt-0010")).toThrow(/never be deleted/i);
   });
 
+  // PH-MEMOS-5 (design v0.9.1b §12.4, BL-MEMOS-060/067): 0011_principal_vaults.sql
+  // rebuilds `vaults` on a database that is NOT empty -- every migration
+  // since 0002 provisions vaults, so a populated `vaults` (plus its four
+  // real child tables: vault_mounts, entities, promotions, links) is the
+  // expected case, not an edge case. Both a fresh database and one already
+  // populated through 0010 must apply 0011 cleanly.
+  it("0011_principal_vaults.sql applies cleanly on a fresh database: widened CHECK, new indexes, provision_epoch present", () => {
+    const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
+    const db = freshDb();
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(12);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+
+    const vaultCols = db.prepare("PRAGMA table_info(vaults)").all().map((col) => col.name);
+    expect(vaultCols).toEqual(
+      expect.arrayContaining(["tenant_id", "principal_id", "decay_policy", "provision_epoch", "status"]),
+    );
+    // No principal_hmac column: round 3's own removal (design §12.4) --
+    // the epoch scheme is found by probing vault_id's own PRIMARY KEY
+    // directly, never by a lookup keyed on any stored, owner-keyed column.
+    expect(vaultCols).not.toContain("principal_hmac");
+
+    // A direct INSERT/UPDATE producing an unexpected vaults.status value
+    // outside ('active', 'erased') is refused by the widened CHECK.
+    expect(() =>
+      db.prepare(
+        "INSERT INTO vaults (vault_id, vault_type, project_id, status, decay_policy, provision_epoch, created_at) VALUES (?,?,?,?,?,?,?)",
+      ).run("vault-bad-status", "shared", "project-bad-status", "pending", "ebbinghaus", 0, "2026-01-01T00:00:00.000Z"),
+    ).toThrow();
+  });
+
+  it("0011_principal_vaults.sql applies cleanly on a database already populated through 0010: pre-existing rows survive, vault_mounts/entities/promotions/links REFERENCES vaults still name vaults (not vaults_old), every pre-0011 row backfills provision_epoch = 0", () => {
+    const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
+    const migrationFileNamesThrough0010 = readdirSync(rootMigrationsDir)
+      .filter((name) => /^\d{4}_.*\.sql$/.test(name))
+      .filter((name) => !name.startsWith("0011_"))
+      .filter((name) => !name.startsWith("0012_"));
+    expect(migrationFileNamesThrough0010).toHaveLength(10);
+    const filesThrough0010 = Object.fromEntries(
+      migrationFileNamesThrough0010.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
+    );
+    const migrationsDir0011 = setupMigrationsDir(filesThrough0010);
+    const db0011 = freshDb();
+
+    const first0011 = runMigrations(db0011, migrationsDir0011);
+    expect(first0011.appliedCount).toBe(10);
+
+    // Populate real rows through the 0001-0010 schema before 0011 ever
+    // runs: a shared vault (legacy), a mounted workspace_private vault, an
+    // entity, a promotion and a link -- exercising all four real child
+    // tables 0011's own header comment names.
+    const nowIso = "2026-01-01T00:00:00.000Z";
+    db0011.prepare("INSERT INTO vaults (vault_id, vault_type, project_id, status, created_at) VALUES (?, 'shared', 'project-precedes-0011', 'active', ?)").run(
+      "vault-shared-precedes-0011",
+      nowIso,
+    );
+    db0011.prepare("INSERT INTO vaults (vault_id, vault_type, workspace_id, project_id, status, created_at) VALUES (?, 'workspace_private', 'workspace-precedes-0011', 'project-precedes-0011', 'active', ?)").run(
+      "vault-workspace-precedes-0011",
+      nowIso,
+    );
+    db0011.prepare(
+      "INSERT INTO vault_mounts (mount_id, vault_id, workspace_id, mount_alias, access_mode, status, mounted_at) VALUES (?,?,?,?,'read','mounted',?)",
+    ).run("mount-precedes-0011", "vault-workspace-precedes-0011", "workspace-precedes-0011", "primary", nowIso);
+    db0011.prepare(
+      `INSERT INTO entities
+        (entity_id, vault_id, category, key, body_json, current_version, valid_from, recorded_at,
+         lifecycle_state, decay_score, access_count, source_hash, created_at, updated_at)
+       VALUES (?, ?, 'note', 'pre-0011', '{}', 1, ?, ?, 'active', 1.0, 0, ?, ?, ?)`,
+    ).run("entity-precedes-0011", "vault-workspace-precedes-0011", nowIso, nowIso, "a".repeat(64), nowIso, nowIso);
+    db0011.prepare(
+      "INSERT INTO promotions (promotion_ref, vault_id, idempotency_key, source_memory_ref, target_scope, target_ref, policy_decision, source_hash, recorded_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    ).run("promotion-precedes-0011", "vault-workspace-precedes-0011", "key-precedes-0011", "msp:proof/x", "global_private", "entity-precedes-0011", "allow", "a".repeat(64), nowIso);
+    db0011.prepare(
+      `INSERT INTO entities
+        (entity_id, vault_id, category, key, body_json, current_version, valid_from, recorded_at,
+         lifecycle_state, decay_score, access_count, source_hash, created_at, updated_at)
+       VALUES (?, ?, 'note', 'pre-0011-b', '{}', 1, ?, ?, 'active', 1.0, 0, ?, ?, ?)`,
+    ).run("entity-precedes-0011-b", "vault-workspace-precedes-0011", nowIso, nowIso, "b".repeat(64), nowIso, nowIso);
+    db0011.prepare(
+      "INSERT INTO links (link_id, vault_id, from_entity_id, to_entity_id, link_type, confidence, valid_from, recorded_at, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    ).run("link-precedes-0011", "vault-workspace-precedes-0011", "entity-precedes-0011", "entity-precedes-0011-b", "relates_to", 1.0, nowIso, nowIso, nowIso);
+
+    writeFileSync(path.join(migrationsDir0011, "0011_principal_vaults.sql"), readFileSync(path.join(rootMigrationsDir, "0011_principal_vaults.sql"), "utf8"), "utf8");
+    const second0011 = runMigrations(db0011, migrationsDir0011);
+    expect(second0011.appliedCount).toBe(1);
+    expect(second0011.currentVersion).toBe(11);
+    expect(db0011.pragma("foreign_key_check")).toEqual([]);
+
+    // Every pre-existing row survives, byte-for-byte, and provision_epoch
+    // backfills to 0 for every pre-0011 row (round 2's INSERT ... SELECT
+    // carries the new column).
+    const sharedRow = db0011.prepare("SELECT status, provision_epoch, tenant_id, principal_id FROM vaults WHERE vault_id = ?").get("vault-shared-precedes-0011");
+    expect(sharedRow).toEqual({ status: "active", provision_epoch: 0, tenant_id: null, principal_id: null });
+    const workspaceRow = db0011.prepare("SELECT status, provision_epoch, decay_policy FROM vaults WHERE vault_id = ?").get("vault-workspace-precedes-0011");
+    expect(workspaceRow).toEqual({ status: "active", provision_epoch: 0, decay_policy: "ebbinghaus" });
+    expect(db0011.prepare("SELECT entity_id FROM entities WHERE entity_id = ?").get("entity-precedes-0011")).toBeTruthy();
+    expect(db0011.prepare("SELECT promotion_ref FROM promotions WHERE promotion_ref = ?").get("promotion-precedes-0011")).toBeTruthy();
+    expect(db0011.prepare("SELECT link_id FROM links WHERE link_id = ?").get("link-precedes-0011")).toBeTruthy();
+    expect(db0011.prepare("SELECT mount_id FROM vault_mounts WHERE mount_id = ?").get("mount-precedes-0011")).toBeTruthy();
+
+    // vault_mounts.vault_id / entities.vault_id / promotions.vault_id /
+    // links.vault_id REFERENCES vaults (vault_id) still name `vaults`, not
+    // a dropped `vaults_old` -- the exact "rename away" mistake
+    // docs/MIGRATION.md documents. Confirmed by reading each child table's
+    // own foreign_key_list, not merely by the absence of a foreign_key_check
+    // violation (which would also be silent about a target that resolves
+    // to nothing at all).
+    for (const child of ["vault_mounts", "entities", "promotions", "links"]) {
+      const foreignKeys = db0011.pragma(`foreign_key_list(${child})`);
+      const vaultForeignKey = foreignKeys.find((fk) => fk.from === "vault_id");
+      expect(vaultForeignKey?.table, `${child}.vault_id must still reference "vaults"`).toBe("vaults");
+    }
+    expect(db0011.prepare("SELECT name FROM sqlite_schema WHERE name = 'vaults_old'").all()).toEqual([]);
+
+    // A legacy project_id backfill attempted against a principal-type row
+    // is refused by trg_vaults_update_guard's branch (a) type predicate --
+    // exercised end to end with a real principal_private row below.
+    const principalVaultId = "vault-principal-precedes-0011-test";
+    db0011.prepare(
+      "INSERT INTO vaults (vault_id, vault_type, tenant_id, principal_id, agent_id, workspace_id, decay_policy, status, provision_epoch, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    ).run(principalVaultId, "principal_private", "tenant-1", "principal-1", "agent-1", "workspace-1", "ebbinghaus", "active", 0, nowIso);
+    expect(() =>
+      db0011.prepare("UPDATE vaults SET project_id = ? WHERE vault_id = ?").run("some-project", principalVaultId),
+    ).toThrow(/vaults rows may only backfill project_id/);
+
+    // A direct INSERT INTO vault_mounts naming a principal_private vault_id
+    // is refused before any application code runs.
+    expect(() =>
+      db0011.prepare(
+        "INSERT INTO vault_mounts (mount_id, vault_id, workspace_id, mount_alias, access_mode, status, mounted_at) VALUES (?,?,?,?,'read','mounted',?)",
+      ).run("mount-principal-refused", principalVaultId, "workspace-1", "alias", nowIso),
+    ).toThrow(/never be mountable|never mountable/);
+
+    // The active -> erased transition (principal_id blanked) succeeds, and
+    // an UPDATE that also blanks tenant_id/agent_id/workspace_id alongside
+    // principal_id succeeds too -- the widened branch (b), not merely its
+    // text.
+    db0011.prepare("UPDATE vaults SET status = 'erased', principal_id = NULL WHERE vault_id = ?").run(principalVaultId);
+    const erasedRow = db0011.prepare("SELECT status, principal_id, tenant_id, agent_id, workspace_id FROM vaults WHERE vault_id = ?").get(principalVaultId);
+    expect(erasedRow.status).toBe("erased");
+    expect(erasedRow.principal_id).toBeNull();
+    expect(erasedRow.tenant_id).toBe("tenant-1");
+
+    const principalVaultId2 = "vault-principal-precedes-0011-test-2";
+    db0011.prepare(
+      "INSERT INTO vaults (vault_id, vault_type, tenant_id, principal_id, agent_id, workspace_id, decay_policy, status, provision_epoch, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    ).run(principalVaultId2, "principal_private", "tenant-2", "principal-2", "agent-2", "workspace-2", "ebbinghaus", "active", 0, nowIso);
+    db0011.prepare(
+      "UPDATE vaults SET status = 'erased', principal_id = NULL, tenant_id = NULL, agent_id = NULL, workspace_id = NULL WHERE vault_id = ?",
+    ).run(principalVaultId2);
+    const widenedErasedRow = db0011.prepare("SELECT status, principal_id, tenant_id, agent_id, workspace_id FROM vaults WHERE vault_id = ?").get(principalVaultId2);
+    expect(widenedErasedRow).toEqual({ status: "erased", principal_id: null, tenant_id: null, agent_id: null, workspace_id: null });
+
+    // A direct DELETE FROM vaults WHERE vault_id = ? against ANY row --
+    // active, erased, legacy or principal-type -- is refused: the
+    // statement THROWS (RAISE(ABORT, 'vaults rows may never be deleted')),
+    // asserted by catching that throw, not by reading a `changes` count
+    // the throw never returns. Run once against the erased principal_private
+    // row specifically.
+    expect(() => db0011.prepare("DELETE FROM vaults WHERE vault_id = ?").run(principalVaultId)).toThrow(/vaults rows may never be deleted/);
+    expect(() => db0011.prepare("DELETE FROM vaults WHERE vault_id = ?").run("vault-shared-precedes-0011")).toThrow(/vaults rows may never be deleted/);
+  });
+
+  // PH-MEMOS-5 (design v0.9.1b §12.4.1, BL-MEMOS-064/067): additive-only,
+  // no foreign-keys=off directive needed -- contexts is not referenced by
+  // any other table's foreign key.
+  it("0012_contexts_access_scope.sql applies cleanly on top of 0011, additive nullable columns, no rebuild", () => {
+    const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
+    const db = freshDb();
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(12);
+    expect(db.pragma("foreign_key_check")).toEqual([]);
+
+    const contextCols = db.prepare("PRAGMA table_info(contexts)").all().map((col) => col.name);
+    expect(contextCols).toEqual(expect.arrayContaining(["tenant_id", "principal_id"]));
+
+    const nowIso = "2026-01-01T00:00:00.000Z";
+    // A legacy (both columns null) row is unaffected.
+    db.prepare(
+      "INSERT INTO contexts (context_id, cache_id, workspace_id, agent_id, refs_json, source_hash, policy_decision, recorded_at) VALUES (?,?,?,?,?,?,?,?)",
+    ).run("context-legacy-0012", "cache-legacy-0012", "workspace-1", "agent-1", "{}", "a".repeat(64), "allow", nowIso);
+    const legacyRow = db.prepare("SELECT tenant_id, principal_id FROM contexts WHERE context_id = ?").get("context-legacy-0012");
+    expect(legacyRow).toEqual({ tenant_id: null, principal_id: null });
+
+    // A scoped (both columns non-null) row can be written directly.
+    db.prepare(
+      "INSERT INTO contexts (context_id, cache_id, workspace_id, agent_id, tenant_id, principal_id, refs_json, source_hash, policy_decision, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+    ).run("context-scoped-0012", "cache-scoped-0012", "workspace-1", "agent-1", "tenant-1", "principal-1", "{}", "b".repeat(64), "allow", nowIso);
+    const scopedRow = db.prepare("SELECT tenant_id, principal_id FROM contexts WHERE context_id = ?").get("context-scoped-0012");
+    expect(scopedRow).toEqual({ tenant_id: "tenant-1", principal_id: "principal-1" });
+
+    const indexRows = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'idx_contexts_tenant_principal'").all();
+    expect(indexRows).toHaveLength(1);
+  });
+
   it("0008_thread_memory.sql applies cleanly on a database already populated through 0007: pre-existing rows survive, zero foreign_key_check violations", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir)
       .filter((name) => /^\d{4}_.*\.sql$/.test(name))
       .filter((name) => !name.startsWith("0008_"))
       .filter((name) => !name.startsWith("0009_"))
-      .filter((name) => !name.startsWith("0010_"));
+      .filter((name) => !name.startsWith("0010_"))
+      .filter((name) => !name.startsWith("0011_"))
+      .filter((name) => !name.startsWith("0012_"));
     expect(migrationFileNames).toHaveLength(7);
     const files = Object.fromEntries(migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]));
     const migrationsDir = setupMigrationsDir(files);
@@ -801,7 +1002,7 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
   it("the real root migrations 0001-0007, copied into a temp directory, apply with no directive classification error -- none of their leading comment blocks mentions msp-migration", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
-    expect(migrationFileNames).toHaveLength(10);
+    expect(migrationFileNames).toHaveLength(12);
 
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
@@ -810,8 +1011,8 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
     const db = freshDb();
 
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(10);
-    expect(result.currentVersion).toBe(10);
+    expect(result.appliedCount).toBe(12);
+    expect(result.currentVersion).toBe(12);
   });
 
   it("idempotency: a second runMigrations over the same directory applies 0 migrations and leaves foreign_keys at 1", () => {
@@ -1037,7 +1238,7 @@ describe("db/migrate structural foreign-key check on the plain path (RKOI follow
   it("applies the real root migrations 0001-0007 cleanly under the new plain-path structural check, then a follow-on plain migration 0008 too -- an ordinary follow-on migration is not rejected", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
-    expect(migrationFileNames).toHaveLength(10);
+    expect(migrationFileNames).toHaveLength(12);
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
     );
@@ -1045,16 +1246,16 @@ describe("db/migrate structural foreign-key check on the plain path (RKOI follow
     const db = freshDb();
 
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(10);
+    expect(result.appliedCount).toBe(12);
 
     writeFileSync(
-      path.join(migrationsDir, "0011_trivial_followup.sql"),
+      path.join(migrationsDir, "0013_trivial_followup.sql"),
       "CREATE TABLE trivial_followup (id INTEGER PRIMARY KEY);",
       "utf8",
     );
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(1);
-    expect(second.currentVersion).toBe(11);
+    expect(second.currentVersion).toBe(13);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_followup'").all()).toHaveLength(1);
   });
 
@@ -1745,7 +1946,7 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
   it("applies the real root migrations 0001-0007 -- including the real entities_fts virtual table and its shadow tables -- then a follow-on plain migration and a follow-on directive migration too, under the new type-aware check", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
-    expect(migrationFileNames).toHaveLength(10);
+    expect(migrationFileNames).toHaveLength(12);
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
     );
@@ -1753,7 +1954,7 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
     const db = freshDb();
 
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(10);
+    expect(result.appliedCount).toBe(12);
 
     // entities_fts is a real FTS5 virtual table with real shadow tables --
     // confirm at least one shadow table is present and typed correctly by
@@ -1764,20 +1965,20 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
     const shadowEntries = tableList.filter((row) => row.name.startsWith("entities_fts_") && row.type === "shadow");
     expect(shadowEntries.length).toBeGreaterThan(0);
 
-    writeFileSync(path.join(migrationsDir, "0011_trivial_plain_followup.sql"), "CREATE TABLE trivial_plain_followup (id INTEGER PRIMARY KEY);", "utf8");
+    writeFileSync(path.join(migrationsDir, "0013_trivial_plain_followup.sql"), "CREATE TABLE trivial_plain_followup (id INTEGER PRIMARY KEY);", "utf8");
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(1);
-    expect(second.currentVersion).toBe(11);
+    expect(second.currentVersion).toBe(13);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_plain_followup'").all()).toHaveLength(1);
 
     writeFileSync(
-      path.join(migrationsDir, "0012_trivial_directive_followup.sql"),
+      path.join(migrationsDir, "0014_trivial_directive_followup.sql"),
       withDirective("CREATE TABLE trivial_directive_followup (id INTEGER PRIMARY KEY);"),
       "utf8",
     );
     const third = runMigrations(db, migrationsDir);
     expect(third.appliedCount).toBe(1);
-    expect(third.currentVersion).toBe(12);
+    expect(third.currentVersion).toBe(14);
     expect(db.prepare("SELECT name FROM sqlite_schema WHERE name = 'trivial_directive_followup'").all()).toHaveLength(1);
   });
 });
