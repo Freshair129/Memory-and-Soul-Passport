@@ -123,7 +123,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     );
   }
 
-  function checkAccess(vault, args, toolName, { nonceRequired = false, entityId = args.entity_id ?? args.from_entity_id } = {}) {
+  function checkAccess(vault, args, toolName, { nonceRequired = false, entityId = null } = {}) {
     if (vault.vault_type === "shared" || vault.vault_type === "workspace_private") return null;
     const { access, ...input } = args;
     if (vault.vault_type === "global_private") {
@@ -294,7 +294,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     async msp_memory_history(args = {}) {
       const entityId = requireString(args.entity_id, "entity_id");
       const current = requireEntityById(entityId);
-      checkAccess(vaultRegistry.getVaultById(current.vault_id), args, "msp_memory_history");
+      checkAccess(vaultRegistry.getVaultById(current.vault_id), args, "msp_memory_history", { entityId });
 
       const historyDesc = entityStore.history({ vaultId: current.vault_id, category: current.category, key: current.key });
       // API-009 SS4.4: "history is returned in ascending version order ...
@@ -343,7 +343,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
       const entityId = requireString(args.entity_id, "entity_id");
       const reason = requireString(args.reason, "reason");
       const current = requireEntityById(entityId);
-      const grant = checkAccess(vaultRegistry.getVaultById(current.vault_id), args, "msp_memory_forget", { nonceRequired: true });
+      const grant = checkAccess(vaultRegistry.getVaultById(current.vault_id), args, "msp_memory_forget", { nonceRequired: true, entityId });
       const actor = resolveActor(args);
 
       const forgotten = db.transaction(() => {
@@ -453,7 +453,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     async msp_memory_links_list(args = {}) {
       const entityId = requireString(args.entity_id, "entity_id");
       const linksListEntity = requireEntityById(entityId);
-      checkAccess(vaultRegistry.getVaultById(linksListEntity.vault_id), args, "msp_memory_links_list");
+      checkAccess(vaultRegistry.getVaultById(linksListEntity.vault_id), args, "msp_memory_links_list", { entityId });
       const direction = ["outgoing", "incoming", "both"].includes(args.direction) ? args.direction : "both";
 
       const links = linksStore.list({ entityId, direction });
@@ -489,7 +489,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
       const actor = resolveActor(args);
 
       const fromEntity = requireEntityById(fromEntityId);
-      const fromGrant = checkAccess(vaultRegistry.getVaultById(fromEntity.vault_id), args, "msp_memory_links_create", { nonceRequired: true });
+      const fromGrant = checkAccess(vaultRegistry.getVaultById(fromEntity.vault_id), args, "msp_memory_links_create", { nonceRequired: true, entityId: fromEntityId });
       const toEntity = requireEntityById(toEntityId);
       const toGrant = checkAccess(vaultRegistry.getVaultById(toEntity.vault_id), args, "msp_memory_links_create", { nonceRequired: true, entityId: toEntityId });
       const grant = fromGrant ?? toGrant;

@@ -3,7 +3,7 @@ title: "API Contract: Persistent-Memory MSP Runtime (msp_memory_*)"
 doc_id: "API-009-PERSISTENT-MEMORY-CONTRACT"
 status: "draft"
 version: "0.3.0+draft"
-updated: "2026-09-16"
+updated: "2026-09-17"
 owner: "Boss (CEO)"
 source_of_truth: true
 prd_system: "SYSTEM-05::Agent-Team-Management-System"
@@ -456,7 +456,7 @@ Nonce-protected writes (`upsert`, `forget`, `links_create`, and non-dry-run
 `decay_tick`) consume a verified grant nonce in the same transaction as the
 mutation. Read-only tools and `decay_tick` with `dry_run: true` do not consume
 nonces. The nonce schema amendment for the tenantless global partition is
-tracked separately and remains a ship dependency until approved.
+approved in `MEMOS-008-NONCE-SCHEMA-AMENDMENT.md` and implemented by migration 0013.
 
 `msp_memory_promote` is excluded from principal-vault classification but
 participates in the global-private gate above. `msp_vault_mount` continues to
@@ -467,16 +467,12 @@ return the same `not_found` as an unknown vault for principal vault ids.
 | Code | Meaning | Recovery |
 |---|---|---|
 | `validation_failed` | Request failed `contracts/` schema or namespace validation | Fix the request shape; the runtime rejects before touching `domain/` |
-| `not_found` | No entity/link matches the request | Confirm `vault_id`/`category`/`key`/`entity_id` |
-| `vault_scope_denied` | Caller's mounted vault does not include the requested `vault_id` | Mount the vault via `msp_vault_mount` first, or use an authorized vault |
+| `not_found` | Unknown target or any principal grant/ownership/replay failure; these paths are indistinguishable | Use an authorized target and fresh signed request |
+| `vault_scope_denied` | Global grant refusal or authorized link endpoints belong to different vaults; endpoint IDs are not disclosed | Use a matching grant and endpoints in one vault; mounts do not bypass agent checks |
 | `conflict` | A concurrent write raced this request under the same `(vault_id, category, key)` | Retry with the latest `current_version` |
 | `gks_provider_unconfigured` | Shared-scope knowledge/memory promotion was requested | Not recoverable in v1; shared promotion is an explicit, documented exclusion until a GKS provider exists |
 | `db_unavailable` | SQLite connection or migration state is invalid | Operator action required; see `docs/operations/runbooks/RUNBOOK-Persistent-Memory-Runtime.md` |
-| `grant_signature_invalid` | Principal grant is missing, malformed, signed for another operation, or has an invalid claim type | Present a valid signed `access` envelope |
-| `grant_expired` | The grant is outside the accepted expiry window | Mint a fresh grant |
-| `grant_payload_mismatch` | The grant was signed for a different request body or owner tuple | Sign the exact request body and tuple |
-| `grant_unconfigured` | No service key is configured for a present grant | Configure the MSP grant key |
-| `grant_nonce_required` / `grant_replayed` | A nonce is missing or already consumed on a nonce-protected write | Supply a fresh nonce and retry |
+| `grant_nonce_required` / `grant_replayed` | Missing or consumed nonce on an authorized global write; principal variants collapse to not_found | Supply a fresh nonce and retry |
 | `access_context_required` / `access_context_denied` | Historical codes retained for compatibility; no current API-009 tool emits them | Use signed `access` |
 
 ## 6. Security

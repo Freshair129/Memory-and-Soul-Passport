@@ -3,7 +3,7 @@ doc_id: "API-010-VAULT-RESOLVE-CONTRACT"
 version: "0.2.0b"
 status: "beta"
 created_at: "2026-09-16T00:00:00+07:00,KIN"
-last_update: "2026-09-16T00:00:00+07:00,KIN"
+last_update: "2026-09-17T02:50:00+07:00,RWANG"
 ---
 
 # API-010 Vault Resolve Contract (`msp_vault_resolve`)
@@ -179,18 +179,16 @@ writeShared,policyVersion}` only) — this is the concrete mechanism behind
 | `grant_payload_mismatch` | A grant hash or its owner tuple does not match this request |
 | `grant_unconfigured` | A present grant cannot be verified because no service key is configured |
 | `grant_nonce_required` / `grant_replayed` | The principal resolve grant has no usable nonce or its nonce was already consumed |
-| `identity_hmac_unconfigured` | No `MSP_IDENTITY_HMAC_KEY` configured. This tool is refused **entirely** without one, not only for principal-vault-touching calls — every well-formed call resolves and journals a `principal_private` vault unconditionally (§4), and that journal receipt's own actor pseudonym needs the key. A deployment must configure `MSP_IDENTITY_HMAC_KEY` before enabling this tool for any caller, including a caller that only wants the legacy fields |
-| `vault_provision_conflict` | A concurrent `msp_vault_resolve` call is provisioning the identical `(tenant_id, principal_id, agent_id, workspace_id)` or `(tenant_id, principal_id)` tuple's first-ever generation (`SQLITE_BUSY_SNAPSHOT` on the losing `INSERT`) — retry the whole call; the retry's own fresh transaction sees the winner's committed row |
+| `identity_hmac_unconfigured` | A signed principal resolve needs an identity key for its receipt actor. Unsigned legacy resolution requires neither an identity key nor a service key. |
+| `vault_provision_conflict` | Defensive unique/snapshot race or exhausted random-ID collision retries. Normal concurrent resolve is serialized with BEGIN IMMEDIATE and returns the winning row to both callers. Retry the whole request with a fresh nonce after a refusal. |
 
-No `access_context_required`/`access_context_denied` here — those two codes
-are specific to API-009's `msp_memory_*` amendment
-(`docs/API-009-Persistent-Memory-Contract.md` §4.10); a `msp_vault_resolve`
-call's `access_context` is the thing being resolved *from*, not a claim
-being checked *against* an already-resolved vault.
+Neither API-009 nor API-010 emits the historical unsigned-scope error codes.
+API-009 collapses principal grant failures to `not_found`; this resolver
+retains the typed grant failures listed above.
 
 ## 6. Idempotency and concurrency
 
-Two calls with the identical `(tenant_id, principal_id, agent_id,
+Two authorized calls with fresh nonces and the identical `(tenant_id, principal_id, agent_id,
 workspace_id)` always return the identical `principalPrivateVaultId`. A
 call that needs to newly provision both the episodic vault and (when
 gated) the passport vault does so inside one outer transaction — a failure
@@ -199,14 +197,14 @@ including the `vault_provision_conflict` failure above: that transaction
 rolls back in full and the error propagates unremapped; this tool never
 internally retries a `vault_provision_conflict`. Re-provisioning a tuple
 whose only prior row is erased mints a genuinely different `vault_id`,
-found by probing that id's own existence, never colliding with or
+with a fresh random UUID and bounded primary-key collision retry, never
 resurrecting the erased row, and unaffected by whether
 `MSP_IDENTITY_HMAC_KEY` was rotated between the original provision and the
 re-engagement.
 
 ## 7. Journal receipt
 
-Every `msp_vault_resolve` call — resolving an existing vault or
+Every signed principal `msp_vault_resolve` call — resolving an existing vault or
 provisioning a new one — writes one `journal` row: `actor:
 "principal_hmac:" + principalHmac` (a per-call pseudonym,
 `HMAC-SHA256(MSP_IDENTITY_HMAC_KEY, String(tenant_id.length) + ":" +
@@ -215,6 +213,11 @@ the resolved episodic `vault_id`, `payload_json: { tenant_id, agent_id,
 workspace_id, provisioned_episodic, provisioned_passport,
 passport_requested }`. No raw `principal_id`, no `business_id`, no other
 provenance field ever appears in this receipt.
+
+Unsigned legacy calls still append a receipt, but use actor `unauthenticated`,
+NULL `ref` and workspace, NULL tenant/agent/workspace payload fields, and
+false provisioned/passport-requested booleans. Caller identity and request
+flags cannot turn that receipt into a principal-identity oracle.
 
 ## 8. Compatibility
 
