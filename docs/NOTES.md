@@ -1,7 +1,7 @@
 ---
-version: "0.2.9b"
+version: "0.2.10b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-14T11:00:00+07:00,JANUS"
+last_update: "2026-09-17T02:27:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -89,7 +89,17 @@ Before publish, `gh repo view Freshair129/msp` resolved to `Freshair129/cognitiv
 
 The 2026-08-30 QA (GHOST) audit surfaced five findings. Three were closed the same day as test-only work (commit `3767738`: the GKS-bridge unconfigured case, a real `msp_memory_forget` attack case, an `msp_memory_links_list` proof, and the `msp_memory_upsert` attacker direction). The remaining two cannot be closed by adding tests, because the behavior they describe is what the current wire contract actually specifies — closing them changes the contract. They are recorded here so they stay visible until a design decision addresses them.
 
-### Context tools perform no caller-ownership check
+### Legacy context tools retain the historical ownership gap
+
+MEMOS-008 design v0.9.9b §5.0.7 now scopes new context rows by stored
+`tenant_id` and `principal_id`. Scoped diff/audit/replay require a signed
+grant with matching claims, bound to the exact tool and request. Denied
+rows follow the unknown-row path before cache/injection checks; scoped
+diffs refuse `include_payload` even with a valid grant. Context writes
+still record unsigned scope claims and are not evidence of authenticated
+ownership. Existing rows with both scope columns NULL retain the behavior
+below, including ignoring grants. The historical gap is therefore narrowed,
+not closed for legacy rows. See `tests/security/context-tools-ownership.security.mjs`.
 
 `msp_context_diff`, `msp_context_audit`, and `msp_context_replay` resolve any `context_id` by primary key and answer with that context's data regardless of who asks. The `actor` string on the request is journaled, never authorized against the stored context's `workspace_id`/`agent_id`.
 
@@ -491,6 +501,7 @@ anyway.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.10b | 2026-09-17 | beta | Distinguish signed scoped context reads from the retained legacy ownership gap. | working-tree | RWANG |
 | 0.2.9b | 2026-09-14 | beta | Fixed a pre-existing migration-runner race (RKOI review): two processes cold-starting `runMigrations` against the same fresh database file could have the loser throw a raw `SqliteError` instead of a typed one. `runMigrations` now serializes the whole read-pending-then-apply sequence behind a real cross-process lock (`BEGIN IMMEDIATE` on a dedicated `<dbPath>.migrate-lock` file); a losing process waits and re-reads fresh state, or refuses with the new `migration_concurrent_conflict:` prefix only if waiting is genuinely impossible. Also fixed a related `connection.mjs` race switching a brand-new file to WAL mode. See `docs/MIGRATION.md`'s "Concurrent cold start" section and `tests/integration/migrate-concurrent.test.mjs` (real multi-process coverage, 20-iteration non-flakiness loop). | working-tree | JANUS |
 | 0.2.8b | 2026-09-15 | beta | JANUS CI canary for the V8 `JSON.parse` non-first-key corruption bisected in 0.2.4b/0.2.3b above: `tests/contract/engine-json-parse-canary.test.mjs` runs the exact repro on module load, always logs `node=<version> v8=<version> affected=true|false` (picked up automatically by `test:vitest`/`test:contract`, no `package.json` script change needed since the file already lives under `tests/contract/`), and, only when the running engine is affected, asserts `containsEscapedObjectKey` and `parseThreadServiceKeyring` are both still refusing/decoding correctly against the exact trigger shape -- never fails CI just for running on an affected engine (verified: passes with `affected: true` on this workspace's Node 24.19.0, passes with `affected: false` on Node 22.23.2 via `npx -y node@22`, and fails when either mitigation is deliberately broken in a scratch copy, reverting cleanly). `.github/workflows/test.yml` keeps the `["22", "24"]` matrix unchanged and adds a step that captures the canary's console line into `$GITHUB_STEP_SUMMARY` per leg, `if: always()`, with no network dependency; YAML validated locally with PyYAML. See "CI engine canary" above for why `engines.node` stays `>=22`. | working-tree | JANUS |
 | 0.2.7b | 2026-09-15 | beta | RKOI stage-2 revision round 2 (APPROVED at `4d0df3c`, 0 critical; these are the owner-requested non-blocking follow-ups): `recordDelivery`'s internal `appendMessage` call now passes `scope.workspaceId`/the stored pending row's `workspace_id`, closing the last three journal entries (a resolved-path OUTBOUND message, a drain's OUTBOUND message, `reconcile_skipped`) that still recorded `workspace_id = tenant`; the legacy-data audit query gained `entity_history.body_json` (returned by `msp_memory_history`) and `state.value_json`, and this file and `docs/MIGRATION.md` now say plainly that the server's `write()` refusal is not a complete guarantee for legacy rows already corrupted into a key needing no escape; `ThreadMemoryStore#consumeNonce` now validates `grantExpiresAt` is a finite integer within +/-10 years of the server clock, refusing a raw, untyped `RangeError` from `1e20` or a negative value with the same typed `validation_failed` instead; added a NOTES line documenting the scanner's ~13x-line-size memory cost and `readline`'s lack of a line cap as an accepted, undocumented-no-longer resource bound. See "Accepted resource bound, not fixed" and the legacy-data audit section below, and the task's own final report for the finding-to-test map. | working-tree | KIN |
