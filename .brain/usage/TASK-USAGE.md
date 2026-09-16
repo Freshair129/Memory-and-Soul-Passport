@@ -12,7 +12,7 @@ A segment whose status is `open` was still running when the ledger was generated
 
 | Segments | Requests | Input (total) | input_tokens | Cache write | Cache read | Output |
 |---:|---:|---:|---:|---:|---:|---:|
-| 103 | 4,721 | 2,085,837,790 | 10,708 | 44,214,216 | 2,041,612,866 | 4,741,219 |
+| 127 | 6,373 | 2,510,974,984 | 14,018 | 50,088,960 | 2,460,872,006 | 6,044,333 |
 
 ## Per task id
 
@@ -41,8 +41,19 @@ A segment whose status is `open` was still running when the ledger was generated
 | BL-MEMOS-047 | 4 | 2026-09-14T08:30:49+07:00 | 2026-09-14T10:59:38+07:00 | 134 | 34,450,868 | 92,346 |
 | BL-MEMOS-048 | 2 | 2026-09-14T03:55:34+07:00 | 2026-09-14T12:31:37+07:00 | 216 | 73,813,147 | 156,874 |
 | BL-MEMOS-049 | 11 | 2026-09-14T03:55:34+07:00 | 2026-09-14T12:31:37+07:00 | 1,338 | 610,668,601 | 943,421 |
+| BL-MEMOS-050 | 2 | 2026-09-14T14:11:04+07:00 | 2026-09-14T17:23:19+07:00 | 455 | 162,292,622 | 376,575 |
+| BL-MEMOS-050..057 | 7 | 2026-09-14T12:44:42+07:00 | 2026-09-14T19:23:05+07:00 | 310 | 68,633,307 | 290,306 |
+| BL-MEMOS-050..059 | 4 | 2026-09-14T15:20:01+07:00 | 2026-09-16T12:38:15+07:00 | 226 | 40,095,483 | 145,538 |
+| BL-MEMOS-051 | 2 | 2026-09-14T14:11:04+07:00 | 2026-09-14T17:23:19+07:00 | 455 | 162,292,622 | 376,575 |
+| BL-MEMOS-053 | 2 | 2026-09-14T14:11:04+07:00 | 2026-09-14T17:23:19+07:00 | 455 | 162,292,622 | 376,575 |
+| BL-MEMOS-054 | 2 | 2026-09-14T14:11:04+07:00 | 2026-09-14T17:23:19+07:00 | 455 | 162,292,622 | 376,575 |
+| BL-MEMOS-055 | 2 | 2026-09-14T14:11:04+07:00 | 2026-09-14T17:23:19+07:00 | 455 | 162,292,622 | 376,575 |
+| BL-MEMOS-056 | 1 | 2026-09-14T16:14:35+07:00 | 2026-09-14T17:23:19+07:00 | 333 | 125,901,786 | 255,092 |
+| BL-MEMOS-057 | 5 | 2026-09-14T17:24:07+07:00 | 2026-09-14T18:48:39+07:00 | 458 | 61,505,656 | 294,014 |
+| BL-MEMOS-058 | 2 | 2026-09-14T14:46:41+07:00 | 2026-09-14T17:23:19+07:00 | 485 | 164,200,167 | 345,638 |
+| BL-MEMOS-059 | 2 | 2026-09-14T14:46:41+07:00 | 2026-09-14T17:23:19+07:00 | 485 | 164,200,167 | 345,638 |
 | BL-MEMOS-080 | 4 | 2026-09-14T10:22:18+07:00 | 2026-09-14T11:30:46+07:00 | 299 | 42,013,734 | 215,733 |
-| BL-MEMOS-087 | 3 | 2026-09-14T03:58:32+07:00 | 2026-09-14T08:48:45+07:00 | 49 | 18,785,049 | 76,512 |
+| BL-MEMOS-087 | 5 | 2026-09-14T03:58:32+07:00 | 2026-09-16T12:24:19+07:00 | 118 | 28,924,010 | 132,597 |
 | BL-MEMOS-102 | 2 | 2026-09-14T00:29:57+07:00 | 2026-09-14T02:22:25+07:00 | 437 | 252,069,710 | 295,076 |
 | BL-MEMOS-108 | 1 | 2026-09-14T00:29:57+07:00 | 2026-09-14T01:30:43+07:00 | 274 | 222,020,711 | 188,540 |
 | BL-MEMOS-109 | 1 | 2026-09-14T00:29:57+07:00 | 2026-09-14T01:30:43+07:00 | 274 | 222,020,711 | 188,540 |
@@ -51,7 +62,8 @@ A segment whose status is `open` was still running when the ledger was generated
 | OPS-MEMOS-000 | 2 | 2026-09-13T14:53:06+07:00 | 2026-09-13T14:53:06+07:00 | 0 | 0 | 0 |
 | OPS-MEMOS-001 | 2 | 2026-09-13T18:28:15+07:00 | 2026-09-13T23:00:09+07:00 | 26 | 4,190,696 | 17,365 |
 | OPS-MEMOS-002 | 1 | 2026-09-13T23:46:44+07:00 | 2026-09-14T00:32:28+07:00 | 30 | 25,130,965 | 62,342 |
-| OPS-MEMOS-003 | 5 | 2026-09-14T08:56:28+07:00 | 2026-09-14T12:39:47+07:00 | 75 | 43,826,363 | 76,855 |
+| OPS-MEMOS-003 | 6 | 2026-09-14T08:56:28+07:00 | 2026-09-14T19:25:56+07:00 | 183 | 123,781,794 | 193,468 |
+| OPS-MEMOS-004 | 4 | 2026-09-14T16:06:18+07:00 | 2026-09-16T12:38:15+07:00 | 56 | 7,730,565 | 36,961 |
 
 ## Per segment
 
@@ -159,4 +171,28 @@ A segment whose status is `open` was still running when the ledger was generated
 | 100 | OPS-MEMOS-003 | coordinator | 35 | Verify reported PR opening: none found on GitHub | done | 2026-09-14T11:40:03+07:00 | 2026-09-14T11:41:02+07:00 | 0m59s | 4 | 2,465,143 | 8 | 4,698 | 2,460,437 | 1,986 |
 | 101 | OPS-MEMOS-003 | coordinator | 36 | Diagnose WSL bash error; point to Git Bash | done | 2026-09-14T12:22:09+07:00 | 2026-09-14T12:22:34+07:00 | 0m25s | 2 | 1,238,183 | 4 | 1,497 | 1,236,682 | 806 |
 | 102 | OPS-MEMOS-003 | coordinator | 37 | PRs #20-#26 opened by owner; CI and mergeability check | done | 2026-09-14T12:25:14+07:00 | 2026-09-14T12:33:34+07:00 | 8m21s | 11 | 6,929,309 | 26 | 15,575 | 6,913,708 | 6,746 |
-| 103 | OPS-MEMOS-003 | coordinator | 38 | Fix PRs: #23/#24 bodies and ready; #26 doc version renumber (9d18119); ledger push | done | 2026-09-14T12:37:48+07:00 | 2026-09-14T12:39:47+07:00 | 2m00s | 7 | 4,482,066 | 14 | 9,716 | 4,472,336 | 6,885 |
+| 103 | OPS-MEMOS-003 | coordinator | 38 | Fix PRs: #23/#24 bodies and ready; #26 doc version renumber (9d18119); ledger push | done | 2026-09-14T12:37:48+07:00 | 2026-09-14T12:41:11+07:00 | 3m23s | 11 | 7,074,234 | 24 | 14,335 | 7,059,875 | 8,776 |
+| 104 | BL-MEMOS-050..057 | coordinator | 39 | Merge all 7 PRs to main; start PH-MEMOS-4 spec on new branches | open | 2026-09-14T12:44:42+07:00 | 2026-09-14T13:06:59+07:00 | 22m17s | 21 | 13,840,506 | 44 | 18,895 | 13,821,567 | 11,421 |
+| 105 | OPS-MEMOS-003 | coordinator | 40 | Merge PRs 20-26 to main (retarget nested PRs, resolve migrate-branch doc conflicts) | done | 2026-09-14T14:08:35+07:00 | 2026-09-14T19:25:56+07:00 | 5h17m | 104 | 77,363,263 | 208 | 1,562,837 | 75,800,218 | 114,722 |
+| 106 | BL-MEMOS-050, BL-MEMOS-051, BL-MEMOS-053, BL-MEMOS-054, BL-MEMOS-055 | ather `aaa2f08` | 1 | PH-MEMOS-4 lifecycle + erasure spec (design v0.5.0b, e9e8534) | done | 2026-09-14T14:11:04+07:00 | 2026-09-14T14:32:37+07:00 | 21m33s | 122 | 36,390,836 | 244 | 403,119 | 35,987,473 | 121,483 |
+| 107 | BL-MEMOS-050..057 | rkoi `a2bbf67` | 1 | PH-MEMOS-4 spec review, round 1 (4 critical: leave rejoin loophole, GROUP erasure/export leak, erasure gaps) | done | 2026-09-14T14:33:42+07:00 | 2026-09-14T14:44:34+07:00 | 10m52s | 31 | 3,965,446 | 62 | 180,129 | 3,785,255 | 53,489 |
+| 108 | BL-MEMOS-050..057, BL-MEMOS-058, BL-MEMOS-059 | ather `ab00e39` | 1 | PH-MEMOS-4 spec revision round 2 (design v0.5.1b, 92539a2) | done | 2026-09-14T14:46:41+07:00 | 2026-09-14T15:02:06+07:00 | 15m24s | 152 | 38,298,381 | 304 | 343,209 | 37,954,868 | 90,546 |
+| 109 | BL-MEMOS-050..057 | rkoi `a451f43` | 1 | PH-MEMOS-4 spec review, round 2 (2 critical: guard fix still broken, UNKNOWN-speaker leak) | done | 2026-09-14T15:02:48+07:00 | 2026-09-14T15:18:24+07:00 | 15m36s | 54 | 6,165,759 | 108 | 177,621 | 5,988,030 | 75,009 |
+| 110 | BL-MEMOS-050..059 | ather `a579a11` | 1 | PH-MEMOS-4 spec revision round 3 (design v0.5.2b, 3c4b4d7) | done | 2026-09-14T15:20:01+07:00 | 2026-09-14T15:32:21+07:00 | 12m20s | 95 | 19,256,626 | 190 | 284,866 | 18,971,570 | 79,762 |
+| 111 | BL-MEMOS-050..057 | rkoi `a4ffd63` | 1 | PH-MEMOS-4 spec review, round 3 (1 critical: ADR decision paragraphs stale, npm test 144/104/293 green) | done | 2026-09-14T15:32:56+07:00 | 2026-09-14T15:54:38+07:00 | 21m42s | 52 | 6,363,215 | 104 | 368,483 | 5,994,628 | 59,841 |
+| 112 | BL-MEMOS-050..059 | ather `afc1dfe` | 1 | PH-MEMOS-4 spec revision round 4 (design v0.5.3b, 4d0d81d) | done | 2026-09-14T15:55:12+07:00 | 2026-09-14T16:04:28+07:00 | 9m16s | 101 | 15,624,026 | 202 | 216,929 | 15,406,895 | 52,798 |
+| 113 | OPS-MEMOS-004 | coordinator `ac51e06` | 1 | Sync msp-client-js lockfile version drift (main, PR #27) | done | 2026-09-14T16:06:18+07:00 | 2026-09-14T16:11:21+07:00 | 5m04s | 19 | 1,674,927 | 38 | 125,328 | 1,549,561 | 22,328 |
+| 114 | BL-MEMOS-050, BL-MEMOS-051, BL-MEMOS-053, BL-MEMOS-054, BL-MEMOS-055, BL-MEMOS-056, BL-MEMOS-058, BL-MEMOS-059 | kin `a631814` | 1 | Implement PH-MEMOS-4 lifecycle and erasure (fcd6af1) | done | 2026-09-14T16:14:35+07:00 | 2026-09-14T17:23:19+07:00 | 1h08m | 333 | 125,901,786 | 666 | 643,926 | 125,257,194 | 255,092 |
+| 115 | BL-MEMOS-057 | rkoi `a353cc3` | 1 | PH-MEMOS-4 code review, round 1 (0 critical, 3 required + 4 recommended) | done | 2026-09-14T17:24:07+07:00 | 2026-09-14T17:45:41+07:00 | 21m34s | 82 | 13,061,291 | 164 | 244,575 | 12,816,552 | 100,439 |
+| 116 | BL-MEMOS-057 | kin `a6476ed` | 1 | PH-MEMOS-4 revision: journal replay, DEC-34 positive tests, retention 5-table assertions, plus 4 recommended (892ae1d) | done | 2026-09-14T17:46:29+07:00 | 2026-09-14T18:16:00+07:00 | 29m30s | 175 | 31,955,304 | 350 | 528,019 | 31,426,935 | 91,610 |
+| 117 | BL-MEMOS-057 | rkoi `a223117` | 1 | PH-MEMOS-4 code review, round 2 closure check (0 critical, 5 warnings: replay nonce gap real) | done | 2026-09-14T18:12:38+07:00 | 2026-09-14T18:23:16+07:00 | 10m37s | 62 | 5,171,471 | 124 | 120,550 | 5,050,797 | 42,272 |
+| 118 | BL-MEMOS-057 | kin `a212ff3` | 1 | PH-MEMOS-4: consume nonce on erasure replay, fix 4 doc warnings (740e9d9) | done | 2026-09-14T18:23:46+07:00 | 2026-09-14T18:37:40+07:00 | 13m54s | 122 | 10,702,112 | 244 | 138,042 | 10,563,826 | 49,137 |
+| 119 | BL-MEMOS-057 | rkoi `a0a9aa4` | 1 | PH-MEMOS-4 confirm nonce fix (APPROVED, ready to merge, 740e9d9) | done | 2026-09-14T18:38:04+07:00 | 2026-09-14T18:48:39+07:00 | 10m34s | 17 | 615,478 | 34 | 78,854 | 536,590 | 10,556 |
+| 120 | BL-MEMOS-050..057 | coordinator | 42 | Commit spec round 4; gitignore worktrees fix+PR (#28); fold RKOI carry-forwards; dispatch KIN implementation | done | 2026-09-14T19:23:05+07:00 | 2026-09-14T19:23:05+07:00 | 0m00s | 0 | 0 | 0 | 0 | 0 | 0 |
+| 121 | BL-MEMOS-050..057 | coordinator | 41 | Commit PH-MEMOS-4 spec; dispatch RKOI review | done | 2026-09-14T19:25:56+07:00 | 2026-09-14T19:23:05+07:00 | -3m-52s | 0 | 0 | 0 | 0 | 0 | 0 |
+| 122 | BL-MEMOS-050..059 | coordinator | 43 | PH-MEMOS-4 fully approved; PR body prepared, not yet opened | done | 2026-09-14T19:25:57+07:00 | 2026-09-14T23:52:01+07:00 | 4h26m | 0 | 0 | 0 | 0 | 0 | 0 |
+| 123 | OPS-MEMOS-004 | coordinator | 44 | Merge PR #27 (lockfile sync) | done | 2026-09-14T23:52:01+07:00 | 2026-09-15T00:01:59+07:00 | 9m58s | 4 | 475,109 | 8 | 74,397 | 400,704 | 1,024 |
+| 124 | OPS-MEMOS-004 | coordinator | 45 | Merge PR #28 (gitignore worktrees) | done | 2026-09-15T00:01:59+07:00 | 2026-09-15T00:19:34+07:00 | 17m34s | 3 | 365,698 | 6 | 1,093 | 364,599 | 631 |
+| 125 | BL-MEMOS-087 | coordinator | 46 | Owner confirms DEC-MEMOS-22..35; record in ADR/design/plan (ATHER), commit b511fc8 | done | 2026-09-15T00:19:34+07:00 | 2026-09-16T12:24:19+07:00 | 36h04m | 12 | 1,624,685 | 26 | 25,826 | 1,598,833 | 7,183 |
+| 126 | BL-MEMOS-087 | ather `a2b47af` | 1 | Record owner confirmation of DEC-MEMOS-22..35 across ADR/design/plan | done | 2026-09-15T00:20:32+07:00 | 2026-09-15T00:28:14+07:00 | 7m42s | 57 | 8,514,276 | 114 | 196,831 | 8,317,331 | 48,902 |
+| 127 | BL-MEMOS-050..059, OPS-MEMOS-004 | coordinator | 47 | Open and merge PRs #29/#30; lockfile carry to 0.2.6; ledger | done | 2026-09-16T12:24:19+07:00 | 2026-09-16T12:38:15+07:00 | 13m55s | 30 | 5,214,831 | 60 | 136,596 | 5,078,175 | 12,978 |

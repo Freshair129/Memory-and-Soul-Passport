@@ -517,6 +517,184 @@
           "label": "Revise migration lock fix: derived counts, hung-holder wording, typed lock-open error (ea1b5f2)"
         }
       }
+    },
+    "aaa2f08bc21c19281": {
+      "actor": "ather",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050",
+            "BL-MEMOS-051",
+            "BL-MEMOS-053",
+            "BL-MEMOS-054",
+            "BL-MEMOS-055"
+          ],
+          "label": "PH-MEMOS-4 lifecycle + erasure spec (design v0.5.0b, e9e8534)"
+        }
+      }
+    },
+    "a2bbf673a11dfa932": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050..057"
+          ],
+          "label": "PH-MEMOS-4 spec review, round 1 (4 critical: leave rejoin loophole, GROUP erasure/export leak, erasure gaps)"
+        }
+      }
+    },
+    "ab00e39629761f7b9": {
+      "actor": "ather",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050..057",
+            "BL-MEMOS-058",
+            "BL-MEMOS-059"
+          ],
+          "label": "PH-MEMOS-4 spec revision round 2 (design v0.5.1b, 92539a2)"
+        }
+      }
+    },
+    "a451f43ddc8d0c1ac": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050..057"
+          ],
+          "label": "PH-MEMOS-4 spec review, round 2 (2 critical: guard fix still broken, UNKNOWN-speaker leak)"
+        }
+      }
+    },
+    "a579a112e147650ff": {
+      "actor": "ather",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050..059"
+          ],
+          "label": "PH-MEMOS-4 spec revision round 3 (design v0.5.2b, 3c4b4d7)"
+        }
+      }
+    },
+    "a4ffd638fe267b0b7": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050..057"
+          ],
+          "label": "PH-MEMOS-4 spec review, round 3 (1 critical: ADR decision paragraphs stale, npm test 144/104/293 green)"
+        }
+      }
+    },
+    "afc1dfeb35fe0aed3": {
+      "actor": "ather",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050..059"
+          ],
+          "label": "PH-MEMOS-4 spec revision round 4 (design v0.5.3b, 4d0d81d)"
+        }
+      }
+    },
+    "ac51e0649aa843727": {
+      "actor": "coordinator",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "OPS-MEMOS-004"
+          ],
+          "label": "Sync msp-client-js lockfile version drift (main, PR #27)"
+        }
+      }
+    },
+    "a63181406e1138f79": {
+      "actor": "kin",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-050",
+            "BL-MEMOS-051",
+            "BL-MEMOS-053",
+            "BL-MEMOS-054",
+            "BL-MEMOS-055",
+            "BL-MEMOS-056",
+            "BL-MEMOS-058",
+            "BL-MEMOS-059"
+          ],
+          "label": "Implement PH-MEMOS-4 lifecycle and erasure (fcd6af1)"
+        }
+      }
+    },
+    "a353cc3faea23d868": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-057"
+          ],
+          "label": "PH-MEMOS-4 code review, round 1 (0 critical, 3 required + 4 recommended)"
+        }
+      }
+    },
+    "a6476ed8f5a2b9cbb": {
+      "actor": "kin",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-057"
+          ],
+          "label": "PH-MEMOS-4 revision: journal replay, DEC-34 positive tests, retention 5-table assertions, plus 4 recommended (892ae1d)"
+        }
+      }
+    },
+    "a223117c7b9a18662": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-057"
+          ],
+          "label": "PH-MEMOS-4 code review, round 2 closure check (0 critical, 5 warnings: replay nonce gap real)"
+        }
+      }
+    },
+    "a212ff31525986ccf": {
+      "actor": "kin",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-057"
+          ],
+          "label": "PH-MEMOS-4: consume nonce on erasure replay, fix 4 doc warnings (740e9d9)"
+        }
+      }
+    },
+    "a0a9aa4d9f36cc6f9": {
+      "actor": "rkoi",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-057"
+          ],
+          "label": "PH-MEMOS-4 confirm nonce fix (APPROVED, ready to merge, 740e9d9)"
+        }
+      }
+    },
+    "a2b47af15aee5ddee": {
+      "actor": "ather",
+      "segments": {
+        "1": {
+          "task_ids": [
+            "BL-MEMOS-087"
+          ],
+          "label": "Record owner confirmation of DEC-MEMOS-22..35 across ADR/design/plan"
+        }
+      }
     }
   },
   "coordinator": {
@@ -752,6 +930,62 @@
         "OPS-MEMOS-003"
       ],
       "label": "Fix PRs: #23/#24 bodies and ready; #26 doc version renumber (9d18119); ledger push"
+    },
+    "39": {
+      "task_ids": [
+        "BL-MEMOS-050..057"
+      ],
+      "label": "Merge all 7 PRs to main; start PH-MEMOS-4 spec on new branches",
+      "status": "open"
+    },
+    "40": {
+      "task_ids": [
+        "OPS-MEMOS-003"
+      ],
+      "label": "Merge PRs 20-26 to main (retarget nested PRs, resolve migrate-branch doc conflicts)"
+    },
+    "41": {
+      "task_ids": [
+        "BL-MEMOS-050..057"
+      ],
+      "label": "Commit PH-MEMOS-4 spec; dispatch RKOI review"
+    },
+    "42": {
+      "task_ids": [
+        "BL-MEMOS-050..057"
+      ],
+      "label": "Commit spec round 4; gitignore worktrees fix+PR (#28); fold RKOI carry-forwards; dispatch KIN implementation"
+    },
+    "43": {
+      "task_ids": [
+        "BL-MEMOS-050..059"
+      ],
+      "label": "PH-MEMOS-4 fully approved; PR body prepared, not yet opened"
+    },
+    "44": {
+      "task_ids": [
+        "OPS-MEMOS-004"
+      ],
+      "label": "Merge PR #27 (lockfile sync)"
+    },
+    "45": {
+      "task_ids": [
+        "OPS-MEMOS-004"
+      ],
+      "label": "Merge PR #28 (gitignore worktrees)"
+    },
+    "46": {
+      "task_ids": [
+        "BL-MEMOS-087"
+      ],
+      "label": "Owner confirms DEC-MEMOS-22..35; record in ADR/design/plan (ATHER), commit b511fc8"
+    },
+    "47": {
+      "task_ids": [
+        "BL-MEMOS-050..059",
+        "OPS-MEMOS-004"
+      ],
+      "label": "Open and merge PRs #29/#30; lockfile carry to 0.2.6; ledger"
     }
   }
 }
