@@ -950,6 +950,12 @@
         "BL-MEMOS-050..059"
       ],
       "label": "PH-MEMOS-4 fully approved; PR body prepared, not yet opened"
+    },
+    "44": {
+      "task_ids": [
+        "OPS-MEMOS-004"
+      ],
+      "label": "Merge PRs 27/28; record owner confirmation of DEC-MEMOS-22..35 (ATHER); open and merge PRs 29/30 for PH-MEMOS-4"
     }
   }
 }
