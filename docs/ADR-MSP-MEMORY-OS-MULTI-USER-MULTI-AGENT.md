@@ -1,7 +1,7 @@
 ---
-version: "0.1.23b"
+version: "0.1.25b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-16T23:58:00+07:00,ATHER"
+last_update: "2026-09-17T00:15:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -33,7 +33,19 @@ on 2026-09-16** ("ตามนั้น"), the same way `22..35` were confirmed 
 deliverable — not a PH-MEMOS-5 decision, and does not reopen or block
 PH-MEMOS-5's own confirmation status — was confirmed by the owner in the
 same 2026-09-16 answer**, checklist item 53 now checked, the same status
-`36..52` carry. **All fifty-three decisions are confirmed by the owner.**
+`36..52` carry. **All fifty-three decisions were confirmed by the owner as
+of 2026-09-16's answer.** **REOPENED, same day, by RKOI's first PH-MEMOS-5
+code review round and an independent Fable review of the same commit
+(vault-isolation existence oracle, plus the `msp_vault_resolve`
+journal-receipt leak, see both revision notes above): `DEC-MEMOS-44`,
+`DEC-MEMOS-49` and `DEC-MEMOS-50` are revised and no longer stand as
+owner-confirmed text — the confirmation above covered a version of all
+three that these findings show was wrong — and `DEC-MEMOS-54`/`55` are
+adopted defaults, not yet put to the owner. Checklist items 44, 49, 50, 54
+and 55 are unchecked below pending re-confirmation; `PH-MEMOS-5`'s own
+`GATE-MEMOS-5` (plan) is reopened with them, since `BL-MEMOS-060..063`/`066`
+must implement the corrected vocabulary and the keyed `vault_id`
+derivation, not what RKOI's round-4/5 docs review previously approved.**
 The `scrypt` work factor named in decision 53 is confirmed as specified:
 `BL-MEMOS-076` measures real wall-clock cost first and tunes from the
 measurement, so `N=16384, r=8, p=1` is confirmed as a starting point, not
@@ -576,6 +588,218 @@ migration numbers are assigned in merge order, never pre-bound) is
 prose is corrected to the concrete number this revision actually assigns
 (`0011`, `DEC-MEMOS-37`), the same way `BL-MEMOS-060`'s own row in the
 plan has always phrased it.
+
+## Revision note — RKOI PH-MEMOS-5 code review round 1, CRITICAL — vault-isolation existence oracle (2026-09-16)
+
+RKOI's first code-level review round of KIN's PH-MEMOS-5 implementation
+(worktree `feat/memos-008-principal-vaults`) found a gap in the **approved
+spec itself**, not an implementation error: `access_context` is checked
+*after* the vault/entity lookup on every one of the nine `msp_memory_*`
+call sites `DEC-MEMOS-49` specifies, and `domain/vault-registry.mjs`'s
+`stableId(...)`/`domain/entity-store.mjs`'s `computeEntityId(...)` are
+unkeyed hashes of the owner tuple / `(vault_id, category, key)` — so a
+caller who never resolves a real vault and sends no `access_context` at all
+can still tell a real principal's vault or entity apart from a nonexistent
+one, by the difference between `not_found` (`requireKnownVault`/
+`requireEntityById`) and `access_context_required`/`access_context_denied`
+(the new `assertAccessContext` call sites `DEC-MEMOS-49` added).
+`RSK-MEMOS-09`'s own "accepted for stage 1: zuri-ai's ids are random and
+unguessable" premise is withdrawn as a defense here and does not extend to
+this case — principal vault/entity ids are neither random nor unguessable;
+they are deterministic functions of `tenant_id`/`principal_id`/`agent_id`/
+`workspace_id`/`category`/`key`, several of which (a LINE user id, for
+instance) are often already known to an attacker.
+
+Two structural fixes were weighed; one is adopted in place below.
+
+**(b), a keyed `vault_id` derivation, is rejected outright, not merely
+disfavored.** `DEC-MEMOS-50`'s own derive-then-probe scheme (round 3, this
+same document) exists *because* the provisioning path must never read
+`MSP_IDENTITY_HMAC_KEY`: three earlier mechanisms (a `principal_id`-keyed
+lookup, then a `principal_hmac`-keyed lookup) already broke on erasure and
+on key rotation for exactly this reason, and RKOI's own round-2/round-3
+findings against this document are the record of it. A keyed `vault_id`
+would need that same key available to the *provisioning* probe to find the
+next epoch — reopening the identical rotation failure `DEC-MEMOS-50` was
+rewritten three times to close, for a mechanism RKOI already approved and
+directed not be changed. No extraordinary argument survives this: (b) is
+rejected.
+
+**(a), literally as first proposed ("an absent vault/entity answers the
+same as a denied one"), is also rejected, not adopted with modification.**
+Tracing it through the legacy contract shows why: `access_context` is
+optional and *ignored* for a legacy vault (`DEC-MEMOS-43`), so "absent
+`access_context` leaves legacy behavior unchanged" is a promise that holds
+per caller, not per lookup — a legacy caller never sends `access_context`
+at all and must keep getting today's `not_found` for a nonexistent id and
+today's success for an existing one. The lookup runs before the target's
+vault type is known, so the server cannot decide, case by case, whether a
+failed lookup "would have been" legacy (must stay `not_found`) or principal
+(may become `access_context_required`-shaped) — collapsing *toward* the
+`access_context_required`/`access_context_denied` shape is therefore itself
+a regression against the legacy promise: every legacy caller's existing
+`not_found` on a bad id would start reading as `access_context_required`
+some of the time, for an id that was never a principal vault at all.
+
+**Adopted: the inversion — an existing-but-unauthorized principal vault or
+entity answers exactly `not_found`, byte-for-byte the same class and
+message a nonexistent one already produces for that same caller-supplied
+id.** This is the only direction of the collapse the legacy-preservation
+constraint permits: `not_found` is already every legacy caller's answer for
+a bad id, so extending it to also cover "exists, but you may not see it"
+adds no new legacy-facing behavior, where the reverse direction breaks an
+existing one. Concretely: `AccessContextRequiredError`/
+`AccessContextDeniedError` and the `access_context_required`/
+`access_context_denied` codes `DEC-MEMOS-44`/`49` introduced are retired as
+*producible* wire outcomes — no tool in this design raises them any longer.
+The classes stay declared in `contracts/errors.mjs`, unused — the same
+"still reserved, still not raised anywhere" posture the design's own §14
+already accepts for `PrincipalErasedError` — not deleted, in case a future
+surface with genuinely unguessable ids can use them without this exposure.
+This finding reopens and revises `DEC-MEMOS-44` and `DEC-MEMOS-49` below
+(now marked **REOPENED, pending owner re-confirmation** — they are not
+among the decisions the owner's 2026-09-16 "ตามนั้น" confirmed, since that
+confirmation predates this finding) and adds `DEC-MEMOS-54`, which extends
+the identical fix to `msp_vault_mount` (a `principal_private`/
+`principal_passport` `vault_id` is now indistinguishable from an unknown
+one, not merely refused with a different code — `DEC-MEMOS-39` corrected in
+place) and to `msp_context_diff`/`msp_context_audit`/`msp_context_replay`
+(for consistency of the `access_context` vocabulary; `context_id` is a
+random `randomUUID()`, not derivable from any identifier, so this second
+application closes a structural inconsistency — an authorization failure
+throwing where an unknown id silently returns a "not found"-shaped success
+— rather than a comparably severe guessable-id exposure). Full
+specification: `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.4b §5.1,
+§5.2, §5.4, §14, §15, §19.
+
+**Stated plainly, what this fix does not close**: a caller co-located on
+this stdio-only trust boundary can still observe a timing difference
+between a `SELECT` that finds nothing and one that finds a row and compares
+a tuple against it — this design does not claim constant-time comparison
+anywhere, here or elsewhere, and this residual is accepted on the same
+stdio-only-boundary reasoning `RSK-MEMOS-05`/`RSK-MEMOS-11` already rely on,
+not eliminated by this revision. `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md`'s
+`RSK-MEMOS-09` is corrected in place to state explicitly that its own "ids
+are random and unguessable" acceptance is scoped to the stage-1 API-011 ids
+it was written about and does not, and never did, extend to the PH-MEMOS-5
+principal-vault/entity ids this finding concerns; a new risk,
+`RSK-MEMOS-15`, records the accepted timing residual above.
+
+## Revision note — RKOI/Fable joint review, CRITICAL — keyed `vault_id` derivation (2026-09-16)
+
+An independent Fable review of the same PH-MEMOS-5 commit, folded in
+alongside RKOI, found one new critical and two gaps the revision note
+above did not close, all three tracing to the same root cause the prior
+note only partly addressed: **`vault_id` is a keyless hash, so it is not
+merely an online oracle problem — the id itself encodes `principal_id`,
+recoverable by anyone who obtains a real `vault_id` at all, with no server
+contact needed.** This reopens the prior note's rejection of option (b).
+
+**New CRITICAL — `msp_vault_resolve`'s journal receipt leaks the raw
+principal id.** `vault-resolve-handler.mjs:145-159` HMACs the journal
+`actor` correctly (`"principal_hmac:" + computePrincipalHmac(...)`) but
+writes `ref: result.principalPrivateVault.vault_id` — a keyless hash whose
+preimage, before this revision, was exactly `(tenant_id, principal_id,
+agent_id, workspace_id, provision_epoch)` — alongside a plaintext payload
+carrying three of those five fields. Proved live: a resolved
+`principal_id: "line-user-000042"` recovered from `ref` on the first
+dictionary match against the payload's other fields. HMAC-ing `actor`
+while `ref` stays keyless over the identical tuple is self-cancelling —
+this falsifies design §15's own "no raw person id appears anywhere in a
+journal payload" invariant, and the receipt is reachable in-band through
+`msp_context_audit` (a separate fix, KIN's).
+
+**Confirmed, not a new finding: `msp_vault_mount` is the second existence
+oracle the prior revision note's own `DEC-MEMOS-54` already closes** — a
+known principal `vault_id` there answered `vault_scope_denied`, an unknown
+one `not_found`; that fix stands, restated here only because Fable's
+review named it independently and it must stay in step with everything
+below.
+
+**Offline derivability itself survives any wire-level fix, stated
+plainly.** Because `stableId` is keyless, anyone who already knows a
+tuple derives `vault_id` with no server contact at all, and anyone who
+reads a receipt (before the fix above) inverts it. The not-found collapse
+closes the *online* oracle (probing a computed id against a live server);
+it does nothing about a caller who already has a real `vault_id` through
+some other channel. This also affects the entity-id-only tools
+(`msp_memory_history`/`forget`/`links_list`, and `msp_memory_links_create`
+on both endpoints) exactly as already specified — they resolve the entity
+before the check — and `links_create`'s own pre-existing cross-vault
+refusal message discloses both real `vault_id` values
+(`memory-handlers.mjs:457-458`), a second, narrower leak of the same kind.
+
+**Re-examined on the merits: option (b), keyed `vault_id` derivation, is
+now partially adopted — not the mechanism the prior revision note
+correctly rejected, a narrower one that satisfies every constraint that
+mechanism violated.** The prior note's rejection was accurate against
+what it described: keying the *lookup* — recomputing or comparing a
+hash to find an existing row — breaks under erasure (round 1) and key
+rotation (round 2), which is exactly why `DEC-MEMOS-50` round 3 replaced
+both with a plaintext-column lookup for active rows and an
+existence-probe for minting new ones. **Neither of those two mechanisms
+needs `vault_id`'s own preimage to be unkeyed — only the *lookup*
+mechanism needs to be key-independent, and round 3's lookup already is,
+for a reason this note did not previously separate out:**
+
+- The "does an active vault already exist for this tuple" question is
+  answered by a **plaintext** `WHERE tenant_id = ? AND principal_id = ? AND
+  agent_id = ? AND workspace_id = ? AND status = 'active'` query — it never
+  computes or compares a `vault_id` at all, so it cannot care whether
+  `vault_id`'s own preimage is keyed.
+- The "what is the next unused epoch" question is answered by probing
+  candidate `vault_id`s for existence (`SELECT 1 FROM vaults WHERE
+  vault_id = ?`), using the tuple **this call** already has in plaintext —
+  never a stored or historical value. Recomputing that candidate with a
+  keyed `principal_id` component, using whichever key is current *right
+  now*, needs nothing that must survive erasure (this call's own
+  `principal_id` is never read back from a blanked row) and nothing that
+  must survive rotation (a re-engagement after rotation computes a
+  *different* candidate than the original key would have, which cannot
+  collide with the original row's `vault_id` — no epoch-increment is even
+  required to avoid the collision rounds 1/2 hit).
+
+**Adopted**: `vault-resolve-handler.mjs` (the handler, never
+`domain/vault-registry.mjs`) computes `HMAC-SHA256(MSP_IDENTITY_HMAC_KEY,
+"vault-id:" + principal_id)` and passes that, not raw `principal_id`, as
+the `stableId(...)` preimage component `provisionPrincipalPrivateVault`/
+`PassportVault` use — `VaultRegistry` itself still reads no crypto/env
+dependency, receiving an opaque string, the identical pattern the journal
+actor pseudonym already establishes. This closes §5.1's oracle at its
+source (a caller without `MSP_IDENTITY_HMAC_KEY` cannot compute a
+candidate `vault_id` for any guessed `principal_id` at all — there is no
+id to probe with, online or offline) and, as a direct, verified
+consequence, closes the journal-receipt leak above (`ref`'s preimage no
+longer contains recoverable `principal_id`). No new column, no new
+migration — `0011` is unchanged; the active-row lookup, the epoch probe,
+`VaultProvisionConflictError` handling and `PROVISION_EPOCH_PROBE_LIMIT`
+are all mechanically unchanged. `DEC-MEMOS-50` is revised in place a fifth
+time below. The not-found collapse (`DEC-MEMOS-44`/`49`/`54`) is **retained**,
+not superseded — it is what protects a caller who already possesses a real
+`vault_id`/`entity_id` some other way (a leak, or their own legitimate
+resolve) from learning anything more by omitting or mismatching
+`access_context`. `msp_memory_links_create`'s message is corrected to stop
+naming the two real `vault_id` values (`DEC-MEMOS-55`, new).
+
+**What an attacker can still learn after both fixes, stated plainly**:
+(1) a caller who compromises `MSP_IDENTITY_HMAC_KEY` can still invert a
+keyed `vault_id` for its `principal_id`, the same posture `DEC-MEMOS-53`
+already accepts for `erasure_receipts` — a fast HMAC, not `erasure_receipts`'s
+slower `scrypt`, since `vault_id` is on the hot path of every request and
+a slow KDF there is not a viable tradeoff; (2) `tenant_id`/`agent_id`/
+`workspace_id` stay plaintext in `vault_id`'s preimage, unchanged — only
+`principal_id` is keyed, consistent with this document's own established
+distinction that it is the one person identifier these ids carry; (3) the
+stdio-only timing residual `RSK-MEMOS-15` already names is unaffected;
+(4) `msp_vault_resolve` provisions `workspace_private`/`shared`/
+`global_private` unconditionally, before any `allow_*` flag, and
+`global_private`'s own `vault_id` stays an unkeyed hash of `agent_id`
+alone, fully ungated for reads/writes once known — both **stated, not
+fixed, here**, pre-existing and out of PH-MEMOS-5's scope
+(`RSK-MEMOS-16`, new; `RSK-MEMOS-12` corrected to name all four vault
+types this unsigned call provisions, not only the two principal ones).
+Full specification: `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.5b
+§5.2, §5.3, §5.5, §15, §19; `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` §3, §7.
 
 ## Context
 
@@ -1120,20 +1344,39 @@ RKOI-review-response round below, were confirmed by the owner on
     one vault before this amendment's logic ever runs. — *confirmed by the
     owner, 2026-09-16.* (design §5.1).
 44. **DEC-MEMOS-44, error-code vocabulary for the amendment — corrected
-    (RKOI PH-MEMOS-5 review round 1, CRITICAL 1).** `vault_scope_denied`
+    (RKOI PH-MEMOS-5 review round 1, CRITICAL 1); REOPENED and revised a
+    second time (RKOI PH-MEMOS-5 code review round 1, CRITICAL,
+    2026-09-16 — the vault-isolation existence oracle, see the revision
+    note above), pending owner re-confirmation.** `vault_scope_denied`
     is **not** broadened by this amendment — the prior text's "broadened
     additively" claim is withdrawn, since none of the nine `msp_memory_*`
     tools ever produced `vault_scope_denied` in the first place (they
     perform no caller-ownership check on a legacy vault; confirmed by
-    reading `memory-handlers.mjs`'s own header comment). Two genuinely new
-    codes, both produced exclusively by the new `assertAccessContext`
-    call sites (`DEC-MEMOS-49`): `access_context_required` (the field is
-    absent on a principal-vault-type request) and `access_context_denied`
-    (the field is present but wrong — tuple mismatch, or a passport target
-    missing `allow_passport: true`; deliberately the same code for both
-    sub-cases, so a caller cannot learn "wrong principal" from "right
-    principal, no passport grant," mirroring `DEC-MEMOS-33`'s no-new-
-    oracle reasoning). — *confirmed by the owner, 2026-09-16.* (design §5.1).
+    reading `memory-handlers.mjs`'s own header comment). **The "two
+    genuinely new codes" text this paragraph previously carried
+    (`access_context_required`/`access_context_denied`, both produced by
+    the new `assertAccessContext` call sites) is withdrawn as an error
+    vocabulary for these nine tools — it is exactly the oracle the
+    revision note above closes.** A `vault_id`/`entity_id` computed
+    offline (both are unkeyed hashes — `domain/ids.mjs#stableId` for
+    `vault_id`, `domain/entity-store.mjs#computeEntityId` for
+    `entity_id`) let a caller distinguish "this principal vault/entity
+    exists" from "it does not" using only the difference between
+    `not_found` and `access_context_required`/`access_context_denied`,
+    with no `access_context` needed at all. **Corrected vocabulary**: an
+    `access_context` outcome other than `null`/`'ok'` from
+    `classifyPrincipalAccess` (§5.2) — whether the field is absent
+    entirely or present but wrong — now produces exactly `not_found`, the
+    identical `MemoryNotFoundError` class and message template the same
+    tool already raises for that same caller-supplied `vault_id`/
+    `entity_id` when it does not exist at all; the two are byte-identical
+    in every observable except timing (see the revision note above).
+    `AccessContextRequiredError`/`AccessContextDeniedError` and the
+    `access_context_required`/`access_context_denied` codes stay declared
+    in `contracts/errors.mjs` — unused, the same "still reserved, never
+    raised" posture already accepted for `PrincipalErasedError` — but no
+    tool in this design produces them any longer. — *pending owner
+    re-confirmation, 2026-09-16.* (design §5.1, §14).
 45. **DEC-MEMOS-45, `msp_memory_decay_tick`'s `pinned` field.** The
     response gains `pinned: boolean`, read from the target vault's own
     `decay_policy` column — `true` only for `principal_passport`. When
@@ -1197,16 +1440,39 @@ RKOI-review-response round below, were confirmed by the owner on
     since erasure blanks only `principal_id`, previously matched and read
     `'ok'`). The public `isVaultAccessibleTo(vaultId, ctx)` (`mountVault`'s
     sole caller) becomes a thin `SELECT`-then-delegate wrapper around the
-    same private helper. `contracts/vault-scope-guard.mjs` gains a new
-    export, `assertAccessContext(outcome, message)`, throwing one of two
-    new error classes (`AccessContextRequiredError`/
-    `AccessContextDeniedError`, same shape as `VaultScopeDeniedError`).
-    `assertVaultScope`'s own signature and its one existing call site
-    (`msp_memory_links_create`'s endpoint-consistency check) are
-    unchanged. Neither the new domain method's DB read nor the new
-    contracts guard together widen `msp-contracts`' own "no `.prepare(`/
-    `.exec(`/`.pragma(` anywhere" structural proof. — *confirmed by the
-    owner, 2026-09-16.* (design §5.1, §5.2).
+    same private helper. `assertVaultScope`'s own signature and its one
+    existing call site (`msp_memory_links_create`'s endpoint-consistency
+    check) are unchanged. Neither `classifyPrincipalAccess`'s DB read nor
+    the contracts-layer translation of its outcome (below) together widen
+    `msp-contracts`' own "no `.prepare(`/`.exec(`/`.pragma(` anywhere"
+    structural proof.
+
+    **REOPENED and revised a third time (RKOI PH-MEMOS-5 code review
+    round 1, CRITICAL, 2026-09-16 — the vault-isolation existence oracle,
+    see the revision note above), pending owner re-confirmation.**
+    `classifyPrincipalAccess(vault, accessContext)`'s own three-way return
+    contract is unchanged by this correction — it still returns
+    `null`/`'access_context_required'`/`'access_context_denied'`/`'ok'`,
+    and is still called with the row the tool's own
+    `requireKnownVault`/`getVaultById` lookup already has, no second
+    `SELECT`. **What changes is the contracts-layer translation of that
+    outcome into a wire error at all nine call sites, and at
+    `msp_memory_links_create`'s tenth (case 3): `contracts/vault-scope-
+    guard.mjs`'s `assertAccessContext(outcome, message)` export, and the
+    two error classes it threw (`AccessContextRequiredError`/
+    `AccessContextDeniedError`), are no longer called from any of these
+    call sites.** A non-`null`/non-`'ok'` outcome now raises the identical
+    `MemoryNotFoundError` — same class, same message text — the calling
+    tool's own `requireKnownVault`/`requireEntityById` already raises for
+    that same caller-supplied `vault_id`/`entity_id` when it does not
+    exist; every one of these nine (ten, counting `links_create`'s own
+    case 3) call sites constructs that message itself, from the same
+    string template its own existing not-found path uses, rather than
+    calling a generic `assertAccessContext`. `assertAccessContext` and its
+    two error classes stay defined in `contracts/vault-scope-guard.mjs`/
+    `contracts/errors.mjs` — unused by this design, not deleted (see
+    `DEC-MEMOS-44`'s revised paragraph for why). — *pending owner
+    re-confirmation, 2026-09-16.* (design §5.1, §5.2).
 50. **DEC-MEMOS-50, new (RKOI PH-MEMOS-5 review round 1, CRITICAL 2;
     revised in place a second time, RKOI PH-MEMOS-5 review round 2,
     CRITICAL 1/2; revised in place a third time, RKOI PH-MEMOS-5 review
@@ -1261,14 +1527,43 @@ RKOI-review-response round below, were confirmed by the owner on
     remaining rotation gap (cross-rotation journal-actor continuity, never
     a crash) is stated in design §6.2 and carried as `RSK-MEMOS-13`.
     **Revised in place a fourth time (RKOI PH-MEMOS-5 review round 4,
-    CRITICAL): the mechanism above is unchanged and approved — but
+    CRITICAL): the mechanism above then unchanged and approved — but
     blanking only `principal_id` on erase leaves the derive-then-probe
     `vault_id`'s preimage with exactly one unknown component, recoverable
     by brute force at a measured, quantified cost (`RSK-MEMOS-14`, design
     §5.2); `0011`'s `trg_vaults_update_guard` branch (b) is widened to
     permit, never require, PH-MEMOS-6 also blanking `tenant_id`/`agent_id`/
-    `workspace_id` on that same transition.** — *confirmed by the owner,
-    2026-09-16.* (design §5.2, §5.3, §6.2, §12.4).
+    `workspace_id` on that same transition.**
+
+    **REOPENED and revised a fifth time (RKOI/Fable joint review,
+    CRITICAL, 2026-09-16 — see the revision note above), pending owner
+    re-confirmation: `vault_id`'s `principal_id` component is now keyed.**
+    `HMAC-SHA256(MSP_IDENTITY_HMAC_KEY, "vault-id:" + principal_id)`,
+    computed in `vault-resolve-handler.mjs` (never `domain/vault-
+    registry.mjs`, which still reads no crypto/env dependency), replaces
+    raw `principal_id` as the `stableId(...)` preimage component. This is
+    not a return to round 1/2's rejected mechanisms: the active-row lookup
+    stays the plaintext `tenant_id`/`principal_id`/`agent_id`/
+    `workspace_id`/`status='active'` `WHERE` clause (never recomputes or
+    compares `vault_id`), and the epoch-existence probe is mechanically
+    identical to round 3's own scheme — only the content fed into the
+    candidate's `stableId` computation changes, using whichever key is
+    current at the moment of *this* call, never a value read back from a
+    stored or erased row. No new column, no new migration — `0011` is
+    unaffected. Closes `RSK-MEMOS-14`'s own measured brute-force exposure
+    for its actual subject (`principal_id` is the only person identifier
+    the preimage carries; `tenant_id`/`agent_id`/`workspace_id` stay
+    plaintext, unchanged) and, verified as a direct consequence, closes
+    the `msp_vault_resolve` journal-receipt leak the joint review found
+    (`DEC-MEMOS-55`, new) — the receipt's `ref` is this same `vault_id`,
+    so a reader without `MSP_IDENTITY_HMAC_KEY` can no longer dictionary-
+    attack it for `principal_id` even with the payload's other three
+    tuple fields in hand. A with-key attacker can still invert it — the
+    same posture `DEC-MEMOS-53` already accepts for `erasure_receipts`,
+    deliberately a fast HMAC here rather than that decision's slower
+    `scrypt`, since `vault_id` sits on the hot path of every request. —
+    *pending owner re-confirmation, 2026-09-16.* (design §5.2, §5.3, §6.2,
+    §12.4).
 51. **DEC-MEMOS-51, new (RKOI PH-MEMOS-5 review round 1, CRITICAL 3 and
     WARNING 2) — `msp_context_resolve`'s write path, and
     `msp_vault_resolve`'s `MSP_IDENTITY_HMAC_KEY` requirement, both
@@ -1358,6 +1653,87 @@ RKOI-review-response round below, were confirmed by the owner on
     `hmacPrincipal` pseudonym or to room-ref hashing was raised alongside
     this decision but not adopted here, and stays open (design §19).*
     (design §12.5).
+54. **DEC-MEMOS-54, new (RKOI PH-MEMOS-5 code review round 1, CRITICAL,
+    2026-09-16 — the vault-isolation existence oracle; see the revision
+    note above and `DEC-MEMOS-44`/`49`'s revised paragraphs) — the
+    existence-indistinguishability fix extends to every other path that
+    can leak a principal vault's or a scoped context row's existence, not
+    only the nine `msp_memory_*` tools.** `msp_vault_mount`
+    (`apps/msp-server/src/transport/handlers/vault-handlers.mjs`): a
+    `principal_private`/`principal_passport` `vault_id`, known or not, is
+    now indistinguishable from an unknown one — both the handler's own
+    pre-check and `VaultRegistry#mountVault`'s internal check answer the
+    identical `not_found`/`MspRuntimeError` message
+    (`mountVault: unknown vault_id "<id>".`) a truly nonexistent `vault_id`
+    already gets, never `vault_scope_denied`. This closes a stronger,
+    zero-effort version of the same oracle: `msp_vault_mount` requires no
+    `access_context` at all (it is API-006-governed, not API-009), so
+    before this fix any caller could learn whether a computed principal
+    `vault_id` existed for the cost of one mount call naming any
+    `workspace_id`/`mount_alias`. `DEC-MEMOS-39` is corrected in place:
+    "never-mountable enforcement" is no longer "refused with
+    `vault_scope_denied`" — it is "principal vaults are not nameable
+    through this tool at all," which subsumes the never-mountable
+    guarantee rather than weakening it. `vault_scope_denied` keeps its
+    existing meaning, unchanged, for every legacy (mountable) vault type —
+    this correction narrows what `vault_scope_denied` covers, it does not
+    remove the code. `msp_context_diff`/`msp_context_audit`/
+    `msp_context_replay` (`apps/msp-server/src/transport/handlers/
+    context-handlers.mjs`): the identical collapse, applied for vocabulary
+    consistency rather than a comparably severe exposure — `context_id` is
+    a server-minted `randomUUID()`, not a deterministic function of any
+    caller-known identifier, so it cannot be computed offline the way
+    `vault_id`/`entity_id` can, and this path's exposure is scoped to a
+    caller that has already observed a real `context_id` some other way.
+    `msp_context_diff` now raises the same `not_found`
+    (`Unknown base_context_id/target_context_id "<id>".`) for a
+    found-but-access-context-denied row that it already raises for a
+    genuinely unknown one, rather than `access_context_required`/
+    `access_context_denied`. `msp_context_audit`/`msp_context_replay`
+    (which never threw for an unknown `context_id` to begin with — both
+    already answer with a quiet, non-throwing "not found"-shaped success,
+    `replayable: false`/`hash_valid: false` for audit,
+    `context_reproducible: false` with a `context_not_found` diagnostic
+    for replay) now route a found-but-access-context-denied row through
+    that identical no-throw path instead of throwing
+    `access_context_required`/`access_context_denied` — the row is treated
+    as if it had not been found for the rest of that call, never used.
+    `msp_vault_resolve` and `msp_memory_promote` were checked and need no
+    change: `msp_vault_resolve` performs no existence-gated authorization
+    check at all (it is unsigned and self-asserted by design,
+    `DEC-MEMOS-40`, and always resolves/provisions on a well-formed call —
+    its own, separate, already-accepted exposure is the unbounded
+    row-creation primitive `RSK-MEMOS-12` names, unaffected by this
+    decision); `msp_memory_promote` reads no source vault at all
+    (`DEC-MEMOS-52`), so it was never a producer of this oracle either.
+    **What this decision does not close, stated plainly**: a caller
+    co-located on this stdio-only trust boundary can still observe a
+    timing difference between a lookup that finds nothing and one that
+    finds a row and then compares a tuple against it — this codebase does
+    not claim constant-time comparison anywhere, and this residual is
+    accepted on the same basis `RSK-MEMOS-05`/`RSK-MEMOS-11` already rely
+    on for a co-located, stdio-only caller, not eliminated by this
+    decision; tracked as `RSK-MEMOS-15`. — *pending owner confirmation,
+    2026-09-16.* (design §5.1, §5.2, §5.4).
+55. **DEC-MEMOS-55, new (RKOI/Fable joint review, CRITICAL, 2026-09-16 —
+    see the revision note above) — the `msp_vault_resolve` journal-receipt
+    leak, and `msp_memory_links_create`'s vault-id-bearing refusal
+    message, both corrected.** `msp_vault_resolve`'s journal entry
+    (`actor: "principal_hmac:" + ...`; `ref: principalPrivateVault.vault_id`;
+    plaintext `{tenant_id, agent_id, workspace_id, ...}` payload) is closed
+    as a direct, verified consequence of `DEC-MEMOS-50`'s fifth revision,
+    not by changing `ref`/payload shape — both stay exactly as specified,
+    since a separate random receipt id or an excised payload tuple were
+    considered and rejected as redundant once `vault_id` itself is keyed,
+    at a real cost to an operator's ability to correlate a journal entry
+    to the vault it resolved. `msp_memory_links_create`'s pre-existing
+    cross-vault `assertVaultScope` refusal (unchanged mechanism, case 3 of
+    `DEC-MEMOS-43`'s branch set) stops interpolating the two actual
+    `vault_id` values into its message — a caller naming two `entity_id`s
+    in different vaults learns only that they differ, closing a narrow
+    residual for a caller who already holds one real `entity_id` and
+    guesses another. — *pending owner confirmation, 2026-09-16.* (design
+    §5.3, §5.1).
 
 ### The multi-user model
 
@@ -2134,19 +2510,21 @@ numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-
 - [x] 41. `msp_vault_resolve`'s response is additive-only; legacy fields unchanged in shape and casing, new principal-vault fields camelCase and safely dropped by the shipped, unmodified client (DEC-MEMOS-41).
 - [x] 42. `allow_passport` absent or not exactly `true` is a safe default (no passport vault provisioned or returned); the episodic vault resolves on every well-formed call with no gating flag (DEC-MEMOS-42).
 - [x] 43. API-009's `access_context` is one flat, snake_case object reusing `msp_vault_resolve`'s own field names, mandatory only for a principal-vault-type target; entity-id-only tools resolve entity → vault first, and `links_create` needs no independent second check (DEC-MEMOS-43).
-- [x] 44. `vault_scope_denied` is **not** broadened by this amendment — none of the nine `msp_memory_*` tools ever produced it; two new codes, `access_context_required` and `access_context_denied`, produced exclusively by the new `assertAccessContext` call sites (DEC-MEMOS-44, corrected RKOI PH-MEMOS-5 review round 1).
+- [ ] 44. **REOPENED (RKOI PH-MEMOS-5 code review round 1, CRITICAL, 2026-09-16 — vault-isolation existence oracle), pending owner re-confirmation.** `vault_scope_denied` is **not** broadened by this amendment — none of the nine `msp_memory_*` tools ever produced it. `access_context_required`/`access_context_denied` are retired as producible codes for these tools: any non-`ok` outcome now answers `not_found`, byte-identical to a nonexistent `vault_id`/`entity_id` (DEC-MEMOS-44, revised a second time).
 - [x] 45. `msp_memory_decay_tick` gains a `pinned` response field; a `principal_passport` vault always reports zero transitions regardless of `dry_run` (DEC-MEMOS-45).
 - [x] 46. Scoped `contexts` rows add nullable `tenant_id`/`principal_id` via a plain `ALTER TABLE`, both-or-neither enforced at the contracts layer; `include_payload` is refused unconditionally for a scoped row on `msp_context_diff` only — `audit`/`replay` expose no payload field (DEC-MEMOS-46, corrected RKOI PH-MEMOS-5 review round 1).
 - [x] 47. The live edit to `docs/API-009-Persistent-Memory-Contract.md` is deferred to `BL-MEMOS-063`'s own implementation-time commit, not part of this design pass (DEC-MEMOS-47).
 - [x] 48. New cross-repo item `BL-MEMOS-113`: zuri-ai's `validateVaultSet` must be updated to read and forward the new principal-vault response fields before they are usable in production, deferred to PH-MEMOS-8 (DEC-MEMOS-48).
-- [x] 49. The `access_context` gate is nine new call sites in `memory-handlers.mjs` via a new `classifyPrincipalAccess`/`assertAccessContext` mechanism built on one row-taking branch set (`#isVaultRowAccessibleTo`) that refuses an erased vault's `status` before any tuple comparison, never a reuse of `assertVaultScope`'s existing call site, which stays unchanged (DEC-MEMOS-49, revised in place, RKOI PH-MEMOS-5 review round 2).
-- [x] 50. Principal-vault re-provisioning after erasure mints a new `provision_epoch`-derived `vault_id`, found by probing the id's own existence (no stored, owner-keyed lookup column — immune to both erasure and `MSP_IDENTITY_HMAC_KEY` rotation), never colliding with or reactivating an erased row's own PK; a genuine concurrent provisioning race is caught and refused `vault_provision_conflict` on `SQLITE_BUSY_SNAPSHOT` by an actual `try`/`catch` in code, with no internal retry. **This mechanism is approved and unchanged** — but erasure today blanks only `principal_id`, so the erased row's own `vault_id` (an unkeyed hash of the raw tuple) is recoverable at a measured cost, accepted for this phase and tracked as `RSK-MEMOS-14`; `0011`'s update-guard trigger is widened to *permit* (not require) PH-MEMOS-6 blanking `tenant_id`/`agent_id`/`workspace_id` too (DEC-MEMOS-50, revised in place a fourth time, RKOI PH-MEMOS-5 review round 4).
+- [ ] 49. **REOPENED (RKOI PH-MEMOS-5 code review round 1, CRITICAL, 2026-09-16 — vault-isolation existence oracle), pending owner re-confirmation.** The `access_context` gate is nine new call sites in `memory-handlers.mjs` (plus `links_create`'s tenth) via `classifyPrincipalAccess` built on one row-taking branch set (`#isVaultRowAccessibleTo`) that refuses an erased vault's `status` before any tuple comparison, never a reuse of `assertVaultScope`'s existing call site, which stays unchanged. `classifyPrincipalAccess`'s own three-way outcome is unchanged, but its contracts-layer translation no longer calls `assertAccessContext`/throws `AccessContextRequiredError`/`AccessContextDeniedError` — a non-`ok` outcome now raises the tool's own existing `not_found` (DEC-MEMOS-49, revised a third time).
+- [ ] 54. **New (RKOI PH-MEMOS-5 code review round 1, 2026-09-16), pending owner confirmation.** The same not-found collapse extends to `msp_vault_mount` (a principal `vault_id` is indistinguishable from unknown — `DEC-MEMOS-39` corrected in place) and to `msp_context_diff`/`audit`/`replay` (vocabulary consistency; `context_id` is a random UUID, not offline-guessable); the residual timing side channel is accepted, not closed, and tracked as `RSK-MEMOS-15` (DEC-MEMOS-54).
+- [ ] 50. **REOPENED (RKOI/Fable joint review, CRITICAL, 2026-09-16), pending owner re-confirmation.** Principal-vault re-provisioning after erasure mints a new `provision_epoch`-derived `vault_id`, found by probing the id's own existence, never colliding with or reactivating an erased row's own PK; a genuine concurrent provisioning race is caught and refused `vault_provision_conflict` on `SQLITE_BUSY_SNAPSHOT` by an actual `try`/`catch` in code, with no internal retry — **all mechanically unchanged.** `vault_id`'s `principal_id` component is now `HMAC-SHA256(MSP_IDENTITY_HMAC_KEY, "vault-id:" + principal_id)`, computed in the handler, not `domain/vault-registry.mjs` — closing `RSK-MEMOS-14`'s measured brute-force exposure at its source (a with-key attacker can still invert it, unchanged posture from `DEC-MEMOS-53`); `tenant_id`/`agent_id`/`workspace_id` stay plaintext (DEC-MEMOS-50, revised a fifth time).
+- [ ] 55. **New (RKOI/Fable joint review, CRITICAL, 2026-09-16), pending owner confirmation.** `msp_vault_resolve`'s journal receipt no longer leaks `principal_id` via its keyless `ref`, closed as a direct consequence of decision 50's revision, not by changing `ref`/payload shape; `msp_memory_links_create`'s cross-vault refusal message no longer names the two real `vault_id` values (DEC-MEMOS-55).
 - [x] 51. `msp_context_resolve` gains a real, specified `access_context` write path; `MSP_IDENTITY_HMAC_KEY` is mandatory for `msp_vault_resolve` as a whole, not a principal-vault-specific subset (DEC-MEMOS-51).
 - [x] 52. `msp_memory_promote` is explicitly excluded from the `access_context` branch set; the "no special-casing" claim about its eligibility is withdrawn as false about its actual mechanics (DEC-MEMOS-52).
 - [x] 53. `erasure_receipts` stops storing the raw `principal_id` — a keyed-then-slow-derived `principal_hmac` plus `identity_key_version` replace it, the row stays permanent and immutable, a new migration (`0013`) rebuilds the table itself with no `foreign-keys=off` directive needed, and an explicit rotation procedure is specified for the two new `MSP_IDENTITY_HMAC_KEY_VERSION`/`MSP_IDENTITY_HMAC_KEYRING` env vars (DEC-MEMOS-53, PH-MEMOS-6 — supersedes only `DEC-MEMOS-28`'s storage half). The `scrypt` work factor is confirmed as a measured starting point, tuned by `BL-MEMOS-076`, not frozen.
 
 Overturning any row above reopens the corresponding section of
-`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.2b named in its
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.5b named in its
 mapping table (§3.1).
 
 ## Evidence and implementation map
