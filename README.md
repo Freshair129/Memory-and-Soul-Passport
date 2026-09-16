@@ -70,6 +70,29 @@ npm start
 
 The server uses JSON-RPC 2.0 messages separated by newlines on stdin/stdout. It implements `initialize`, `notifications/initialized`, and `tools/call`; tool discovery is intentionally static and there is no `tools/list`.
 
+### `MSP_IDENTITY_HMAC_KEY` (principal vaults / API-010 `msp_vault_resolve`)
+
+PH-MEMOS-5 makes `MSP_IDENTITY_HMAC_KEY` a hard deployment prerequisite for
+`msp_vault_resolve` as a whole, not only for calls that touch a principal
+vault: every well-formed `msp_vault_resolve` call resolves and journals a
+`principal_private` ("episodic") vault unconditionally, and that journal
+receipt's own `principal_hmac` actor pseudonym needs the key. A deployment
+that omits it answers **every** `msp_vault_resolve` call — including a
+legacy-fields-only-looking one — with `identity_hmac_unconfigured`, before
+any resolution logic runs. This is the same key API-011's thread-memory
+surface already requires (`MSP_THREAD_SERVICE_KEY` is the separate
+grant-signing secret); set it once for both:
+
+```powershell
+$env:MSP_IDENTITY_HMAC_KEY = '<a real secret, at least 32 characters>'
+```
+
+`VaultRegistry` itself never reads this key or computes this hash — both
+stay the `msp_vault_resolve` handler's own responsibility (see
+[`docs/API-010-Vault-Resolve-Contract.md`](docs/API-010-Vault-Resolve-Contract.md)).
+A deployment that never calls `msp_vault_resolve` does not need this key
+for any other tool in this runtime's surface.
+
 ## GenesisRAG17 relay
 
 MSP is Tier 2 in the isolated `genesisrag17.v1` pipeline. It owns runtime
@@ -99,6 +122,7 @@ See [docs/NOTES.md](docs/NOTES.md) for extraction evidence and known gaps, and [
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.3.0b | 2026-09-16 | beta | PH-MEMOS-5: principal vaults (`principal_private`/`principal_passport`, `migrations/0011`), API-010 `msp_vault_resolve`, the API-009 `access_context` amendment on all nine `msp_memory_*` tools, scoped `contexts` receipts (`migrations/0012`), and the multi-agent vault rules. `MSP_IDENTITY_HMAC_KEY` is now a hard deployment prerequisite for `msp_vault_resolve`. | working-tree | KIN |
 | 0.2.2b | 2026-09-12 | beta | Toolchain section: Node `>=22` for `better-sqlite3` 13 (N-API), why 11.x/12.x must not return, and the second-process rule that `close()` now enforces. | working-tree | Claude Opus 5 |
 | 0.2.0b | 2026-09-08 | beta | Added the authenticated GenesisRAG17 relay boundary, nine-tool ownership summary, pinned zuri-ai acceptance pointer, ADR and isolated local runbook. | working-tree | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |
