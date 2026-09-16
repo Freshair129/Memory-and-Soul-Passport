@@ -73,14 +73,21 @@ test("AC-01: msp_memory_links_create rejects a link whose two endpoints belong t
     const entityA = await upsert(call, vaultA, "entity-a");
     const entityB = await upsert(call, vaultB, "entity-b");
 
+    const crossVaultRefusal = (error) => {
+      assert.match(error.message, /different vaults/i);
+      assert.equal(error.message.includes(vaultA), false, 'must not disclose the first real vault ID');
+      assert.equal(error.message.includes(vaultB), false, 'must not disclose the second real vault ID');
+      return true;
+    };
+
     await assert.rejects(
       call("msp_memory_links_create", { from_entity_id: entityA, to_entity_id: entityB, link_type: "relates_to" }),
-      /vault_scope_denied|different vaults/i,
+      crossVaultRefusal,
       "FAIL-CLOSED VIOLATION: a cross-vault link was accepted",
     );
     await assert.rejects(
       call("msp_memory_links_create", { from_entity_id: entityB, to_entity_id: entityA, link_type: "relates_to" }),
-      /vault_scope_denied|different vaults/i,
+      crossVaultRefusal,
     );
 
     // No row was written by the rejected attempts.

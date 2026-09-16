@@ -1,5 +1,5 @@
 ---
-version: "0.1.1b"
+version: "0.1.2b"
 created_at: "2026-09-17T00:00:00+07:00,LUNA"
 last_update: "2026-09-17T00:00:00+07:00,LUNA"
 status: "beta"
@@ -53,7 +53,7 @@ phase-5 behavior is reported as `FAIL` with that contract gap.
 | BL080 | `docs/MIGRATION.md` shadow-table policy | PASS in this branch | None; documentation-only hardening |
 | BL081 | `tests/integration/migrate.test.mjs` visible rtree skip | PASS in this branch | None; runner test is explicit when rtree is unavailable |
 | BL082 | `docs/MIGRATION.md` exact line-1 short circuit and integration test | PASS in this branch | None |
-| BL083 thread surface | 24 real-process matrix legs, four directed boundary refusals, plus real summary commit | Executable | Run result is recorded in the command output; the unsigned legacy vault row remains a separate phase-5 blocker on this baseline |
+| BL083 thread surface | 24 real-process matrix legs, four directed boundary refusals, plus real summary commit | PASS locally | Combined run: 31 PASS, 0 FAIL, 6 dependent NOT_RUN; unsigned legacy resolver now passes |
 | BL083 consolidation | No approved callable tool/schema exists in the baseline; no name is guessed | NOT_RUN | BL070/BL071/BL072 must publish the Phase 6 contract and implementation |
 | BL083 vault erasure | Thread erase and Phase 6 vault erase are separate surfaces | NOT_RUN | BL073/BL074 and the Phase 6 erasure suite |
 | BL084 | Gate A re-baseline | NOT_RUN | Requires complete BL083, including Phase 6 rows |
@@ -68,9 +68,14 @@ cases. The vault-erasure row stays separate because a green thread-erasure call
 cannot prove entity/history/embedding/FTS/vault-row disposition. This table is
 the handoff to Phase 6 and does not close BL083–088.
 
+The integrated run is recorded in `.tmp/final-phase7.log`. BL076 receipt
+pseudonymization is included, but it does not implement full vault erasure
+and therefore does not close the six remaining release dependencies.
+
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.2b | 2026-09-17 | beta | Record the combined 31-pass result and preserve six Phase 6/release dependencies. | working-tree | RWANG |
 | 0.1.1b | 2026-09-17 | beta | Added deterministic summary timing and directed cross-tenant, cross-principal, cross-agent, and cross-workspace denial cases; the Phase 6 dependency rows remain NOT_RUN until their approved contract exists. | working-tree | LUNA |
 | 0.1.0b | 2026-09-17 | beta | Added the real-process Phase 7 acceptance harness, explicit 24-leg matrix, latest phase-5 unsigned legacy vault proof, and dependency evidence table that keeps Phase 6 consolidation/vault-erasure cases as NOT_RUN until their approved contract exists. | working-tree | LUNA |

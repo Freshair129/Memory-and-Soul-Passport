@@ -2,7 +2,7 @@
 title: "API Contract: Persistent-Memory MSP Runtime (msp_memory_*)"
 doc_id: "API-009-PERSISTENT-MEMORY-CONTRACT"
 status: "draft"
-version: "0.3.0+draft"
+version: "0.3.1+draft"
 updated: "2026-09-17"
 owner: "Boss (CEO)"
 source_of_truth: true
@@ -446,8 +446,8 @@ as an unknown target. Legacy `shared` and `workspace_private` targets ignore
 For `global_private`, the grant carries only `agentId` (plus the common
 claims); `tenantId`, `principalId`, `workspaceId`, and `allowPassport` are
 ignored if present. Verification uses the global/default key even if an
-extra tenant claim is supplied. A present grant whose `agentId` does not
-match the target is always `vault_scope_denied`. The optional
+extra tenant claim is supplied. A present invalid grant or a grant whose
+`agentId` does not match the target is always `vault_scope_denied`. The optional
 `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED=1` setting makes a valid matching grant
 mandatory for the nine memory tools, `msp_memory_promote`, and the agent
 branch of `msp_vault_status`; the default remains off.
@@ -466,7 +466,8 @@ return the same `not_found` as an unknown vault for principal vault ids.
 
 | Code | Meaning | Recovery |
 |---|---|---|
-| `validation_failed` | Request failed `contracts/` schema or namespace validation | Fix the request shape; the runtime rejects before touching `domain/` |
+| `validation_failed` | Category contains a literal space | Use a category without spaces; rejection occurs before mutation |
+| `invalid_request` | Legacy request-shape validation failed | Fix the request shape |
 | `not_found` | Unknown target or any principal grant/ownership/replay failure; these paths are indistinguishable | Use an authorized target and fresh signed request |
 | `vault_scope_denied` | Global grant refusal or authorized link endpoints belong to different vaults; endpoint IDs are not disclosed | Use a matching grant and endpoints in one vault; mounts do not bypass agent checks |
 | `conflict` | A concurrent write raced this request under the same `(vault_id, category, key)` | Retry with the latest `current_version` |
@@ -559,6 +560,7 @@ independently verified before any real multi-agent use of
 
 | Version | Date | Summary |
 |---|---|---|
+| 0.3.1+draft | 2026-09-17 | Clarify approved present-invalid global grant refusal and distinguish category validation from legacy request-shape errors. |
 | 0.3.0+draft | 2026-09-17 | PH-MEMOS-5 alignment with design §5.0: replaced the unsigned API-009 `access_context` path with signed top-level `access`, added target-specific grant claims, nonce/replay semantics, the global-private gate, and the pinned decay response. |
 | 0.2.0+draft | 2026-09-16 | PH-MEMOS-5 (`BL-MEMOS-063`, `DEC-MEMOS-47`): added the `access_context` amendment (§4.10) — optional on all nine `msp_memory_*` tools, mandatory when the target vault is one of the two new `principal_private`/`principal_passport` types API-010's `msp_vault_resolve` mints; two new error codes, `access_context_required`/`access_context_denied` (§5); `msp_memory_decay_tick` gains a `pinned` response field (§4.7) reflecting the target vault's own `decay_policy`. `vault_scope_denied` is unchanged, not broadened. `msp_memory_promote` (API-006) is explicitly out of this amendment's scope. |
 | 0.1.3+draft | 2026-09-15 | RKOI ruling (merge-blocking, TASK-MEMOS-002 stage 2): added §6's transport-level escaped-object-key refusal, which applies to every tool in this contract (any inbound request whose object keys contain a JSON escape sequence, at any nesting depth, is refused before parsing). Defends against a real V8 `JSON.parse` engine bug; see `docs/NOTES.md`. |

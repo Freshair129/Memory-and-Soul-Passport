@@ -46,7 +46,7 @@ it.each([false, true])('global gate=%s protects all nine memory tools, promotion
     await expect(call('msp_memory_promote', signed('msp_memory_promote', shared))).rejects.toMatchObject({ code: 'gks_provider_unconfigured' });
     for (const category of ['two words', ' padded', 'padded ']) {
       const input = { ...upsert, category };
-      await expect(call('msp_memory_upsert', signed('msp_memory_upsert', input))).rejects.toThrow('category must not contain spaces');
+      await expect(call('msp_memory_upsert', signed('msp_memory_upsert', input))).rejects.toMatchObject({ code: 'validation_failed', message: 'category must not contain spaces.' });
     }
     // Read grants consume no nonce; a literal retry still succeeds.
     const read = signed('msp_memory_list', { vault_id: vaultId });

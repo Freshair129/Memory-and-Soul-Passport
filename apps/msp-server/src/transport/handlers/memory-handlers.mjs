@@ -198,7 +198,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
       const vault = requireKnownVault(vaultId);
       const grant = checkAccess(vault, args, "msp_memory_upsert", { nonceRequired: true });
       if (typeof args.category !== "string" || !args.category.trim()) throw new ValidationError("category is required.");
-      if (args.category.includes(" ")) throw new ValidationError("category must not contain spaces.");
+      if (args.category.includes(" ")) throw new ValidationError("category must not contain spaces.", "validation_failed");
       const category = args.category.trim();
       const key = requireString(args.key, "key");
       const bodyJson = args.body_json && typeof args.body_json === "object" && !Array.isArray(args.body_json) ? args.body_json : {};

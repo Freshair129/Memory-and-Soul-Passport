@@ -48,7 +48,7 @@ describe("AC-01: migration 0004_retrieval.sql applies idempotently", () => {
   it("applies cleanly as migration version 4, alongside the prior three (and WP-16/WP-17's 0005/0006 that now follow it)", () => {
     const db = freshDb();
     const rows = db.prepare("SELECT version, name FROM schema_migrations ORDER BY version").all();
-    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14]);
+    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
     expect(rows[3].name).toBe("0004_retrieval.sql");
     expect(db.pragma("user_version", { simple: true })).toBe(14);
   });

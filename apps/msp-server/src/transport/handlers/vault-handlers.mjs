@@ -21,7 +21,7 @@ function optionalString(value) {
 }
 
 function rejectControlCharacters(value, label) {
-  if (/[\u0000-\u001F]/.test(value)) throw new ValidationError(`${label} must not contain control characters.`);
+  if (/[\u0000-\u001F]/.test(value)) throw new ValidationError(`${label} must not contain control characters.`, "validation_failed");
 }
 
 export function createVaultHandlers({ vaultRegistry, journal, keyFor, globalPrivateGrantRequired = false, now = Date.now }) {

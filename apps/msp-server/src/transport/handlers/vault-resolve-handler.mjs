@@ -13,7 +13,7 @@ import {
 import { requireGrantNonce, verifyVaultGrant } from "@freshair129/msp-contracts/vault-grant-guard";
 
 function requireString(value, label) {
-  if (typeof value !== "string" || !value.trim()) throw new ValidationError(`${label} is required.`);
+  if (typeof value !== "string" || !value.trim()) throw new ValidationError(`${label} is required.`, "validation_failed");
   return value.trim();
 }
 
@@ -31,7 +31,7 @@ export function createVaultResolveHandler({ db, vaultRegistry, journal, identity
       const accessContext = args.access_context && typeof args.access_context === "object" && !Array.isArray(args.access_context)
         ? args.access_context
         : null;
-      if (!accessContext) throw new ValidationError("access_context is required and must be an object.");
+      if (!accessContext) throw new ValidationError("access_context is required and must be an object.", "validation_failed");
       const tenantId = requireString(accessContext.tenant_id, "tenant_id");
       const principalId = requireString(accessContext.principal_id, "principal_id");
       const agentId = requireString(accessContext.agent_id, "agent_id");
@@ -41,7 +41,7 @@ export function createVaultResolveHandler({ db, vaultRegistry, journal, identity
       const authorization = args.authorization && typeof args.authorization === "object" && !Array.isArray(args.authorization)
         ? args.authorization
         : null;
-      if (!authorization) throw new ValidationError("authorization is required and must be an object.");
+      if (!authorization) throw new ValidationError("authorization is required and must be an object.", "validation_failed");
       if (authorization.allowed !== true) {
         throw new MspRuntimeError("vault_scope_denied: authorization.allowed must be exactly true.", "vault_scope_denied");
       }

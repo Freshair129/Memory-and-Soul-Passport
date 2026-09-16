@@ -44,7 +44,7 @@ describe("WP-14 AC-01: migration 0003_vault_scoping.sql", () => {
     expect(second.currentVersion).toBe(14);
 
     const rows = db.prepare("SELECT version, name FROM schema_migrations ORDER BY version").all();
-    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14]);
+    expect(rows.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
     expect(rows[2].name).toBe("0003_vault_scoping.sql");
     expect(rows[3].name).toBe("0004_retrieval.sql");
     expect(rows[4].name).toBe("0005_decay_lifecycle.sql");

@@ -45,3 +45,19 @@ tests in the same change as handlers/domain/migrations, and add explicit
 security cases for every branch in §5.0.16: grant refusal collapse, grant
 nonce rollback/replay, context ordering, global-private gating, random-id
 collision retry, and migration invariants.
+
+## Final review: typed validation mismatch
+
+Symptom: an embedded NUL in mount scope was refused with `invalid_request`
+instead of the `validation_failed` required by §5.0.4/§5.0.13. A direct
+ToolRegistry probe reproduced the code difference; the error message itself
+was correct. The same inherited default affected category-space rejection
+and the new resolver's shape checks.
+
+Root cause: contracts `ValidationError` defaults to `invalid_request`; the
+new handlers reused it without an explicit code. Existing tests matched only
+the message and therefore could not detect drift in the typed contract.
+
+Prevention: pass `validation_failed` only at the normative new call sites,
+retain all other existing validation semantics, and assert both code and
+message in `memos-validation-errors.test.mjs` and the global-grant suite.

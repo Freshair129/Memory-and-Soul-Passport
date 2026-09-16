@@ -1,7 +1,7 @@
 ---
-version: "0.1.0b"
+version: "0.2.0b"
 created_at: "2026-09-17T02:09:12+07:00,RWANG,bfe7c9d"
-last_update: "2026-09-17T02:09:12+07:00,RWANG"
+last_update: "2026-09-17T03:00:00+07:00,RWANG"
 status: under review
 attributes:
   domain: mission-state-protocol
@@ -11,7 +11,8 @@ attributes:
 
 # MEMOS-008 implementation review
 
-Verdict: IN PROGRESS. No PR, release, or deployment gate is claimed passed.
+Verdict: approved-scope implementation reviewed; final local suites PASS.
+Full Phase 6 and release remain OPEN. No production deployment is claimed.
 Complexity C-3; risk HIGH (authorization, replay protection, schema changes).
 
 ## Authority and integration baseline
@@ -28,25 +29,26 @@ Phases 6 and 7. The sole phase 5 normative source is design v0.9.9b section
 Original branches and worktrees are retained. The primary main checkout was
 not edited or switched.
 
-The additional nonce schema amendment is CANDIDATE, awaiting owner approval:
-`docs/MEMOS-008-NONCE-SCHEMA-AMENDMENT.md`. No implementation or completion
-claim may rely on that amendment being approved until the answer is recorded.
+The owner approved nonce amendment v0.1.1b on 2026-09-17 with "ลุย".
+Migration 0013 and the consistent global refusal rule implement it.
+The separate Phase 6 candidate v0.3.0b has been presented for approval;
+BL070-075 remain documentation-only until that answer is received.
 
 ## Review checklist
 
 | Normative area | Required evidence | Current state |
 |---|---|---|
-| 5.0.1-3 principal vaults | Random opaque IDs, idempotent active lookup, immediate race, forced collision/retry, erasure/re-provision isolation | PENDING |
-| 5.0.4 mount ID | Control-character collision rejected without changing legacy stable IDs | PENDING |
-| 5.0.5 grants | Shared verifier, exact operation/body/tuple binding, claim types, keyring, signed resolution; unsigned legacy compatibility | PENDING |
-| 5.0.6 memory | All nine tools, private/passport ownership, exact not-found collapse, endpoint ordering, pinned decay, legacy grant ignored | PENDING |
-| 5.0.7 contexts | Unsigned scoped write, signed scoped read, unknown-row equivalence before cache/injection checks, sequential diff authorization, no scoped payload | 17/17 real-stdio tests PASS; final combined re-run pending |
-| 5.0.8 nonces | Shared table, bounded pruning, no read nonce, atomic write/nonce rollback, cross-surface replay protection | PENDING; global schema amendment awaits approval |
-| 5.0.9-10 global private | Three surfaces, default-off flag, present mismatch refusal independent of mounts, unconfigured GKS fail-closed | PENDING |
-| 5.0.11 entity IDs | Uniform category-space refusal, key spaces preserved, data audit | PENDING local audit; deployed audit not applicable per owner |
-| 5.0.12 migrations | Fresh/populated graph, immutable 0001-0010, principal table constraints, contexts scope columns | PENDING |
-| 5.0.13-15 contracts/deployment | Error shapes, client env propagation, trust boundary and caller compatibility stated accurately | PENDING |
-| 5.0.16-17 closure | Full relevant suites, independent review, exact code revision and scoped diff | PENDING |
+| 5.0.1-3 principal vaults | Random opaque IDs, idempotent active lookup, immediate race, forced collision/retry, erasure/re-provision isolation | PASS locally; see evidence below |
+| 5.0.4 mount ID | Control-character collision rejected without changing legacy stable IDs | PASS locally; see evidence below |
+| 5.0.5 grants | Shared verifier, exact operation/body/tuple binding, claim types, keyring, signed resolution; unsigned legacy compatibility | PASS locally; see evidence below |
+| 5.0.6 memory | All nine tools, private/passport ownership, exact not-found collapse, endpoint ordering, pinned decay, legacy grant ignored | PASS locally; see evidence below |
+| 5.0.7 contexts | Unsigned scoped write, signed scoped read, unknown-row equivalence before cache/injection checks, sequential diff authorization, no scoped payload | 17/17 real-stdio tests PASS; included in combined security run |
+| 5.0.8 nonces | Shared table, bounded pruning, no read nonce, atomic write/nonce rollback, cross-surface replay protection | PASS locally; see evidence below |
+| 5.0.9-10 global private | Three surfaces, default-off flag, present mismatch refusal independent of mounts, unconfigured GKS fail-closed | PASS locally; see evidence below |
+| 5.0.11 entity IDs | Uniform category-space refusal, key spaces preserved, data audit | PASS locally; see evidence below |
+| 5.0.12 migrations | Fresh/populated graph, immutable 0001-0010, principal table constraints, contexts scope columns | PASS locally; see evidence below |
+| 5.0.13-15 contracts/deployment | Error shapes, client env propagation, trust boundary and caller compatibility stated accurately | PASS locally; see evidence below |
+| 5.0.16-17 closure | Full relevant suites, independent review, exact code revision and scoped diff | Local suites PASS; independent review limits stated below |
 
 ## Evidence recorded so far
 
@@ -58,8 +60,7 @@ claim may rely on that amendment being approved until the answer is recorded.
 - New consumer regression initially failed 2/2 with
   `identity_hmac_unconfigured`, reproducing the unsigned legacy resolution
   defect against the actual zuri-ai caller.
-- Dependency boundaries: 12/12 passed during implementation. Re-run required
-  against the final combined diff.
+- Dependency boundaries: 12/12 PASS in the final combined Vitest suite.
 - Direct context-handler probe used the real SQLite migration graph,
   `Journal`, and shared verifier: unsigned scoped write succeeds; an unsigned
   read is hidden; a correct signed read succeeds; denied cache route throws
@@ -72,30 +73,72 @@ claim may rely on that amendment being approved until the answer is recorded.
   expiry-1, expiry, expiry+1 and the 65-second window boundary (1/1 test).
 - Cross-repository suite passed 4/4 against the immutable consumer extract:
   unsigned legacy vault reads/writes and API-011 caller compatibility.
-  These results were obtained during implementation; final combined checks
-  remain required.
+  The final combined cross-repository run also passed 4/4.
 
 ## Findings during implementation
 
 1. The first shared nonce helper draft introduced a second global nonce table
    and unbounded expiry deletion. Both contradict section 5.0.8 (one table,
    existing bounded prune). Corrected source now uses `grant_nonces` and
-   a 200-row deletion bound; combined regression evidence remains pending.
+   a 200-row deletion bound; the migration/pruning regression passes.
 2. A live helper-level probe signed a global `msp_vault_status` grant using
    only a synthetic tenant-A key, distinct from the synthetic default key.
    Adding `tenantId: 'tenant-A'` made the first verifier draft accept it via
    `keyFor(grant.tenantId)`. Global grants are tenantless in section 5.0.9;
    their key selection must not be redirected by an irrelevant tuple claim.
-   Source now pins global verification to the default key; its regression
-   test remains pending. This is a
+   Source now pins global verification to the default key; both key-selection
+   regression tests pass. This is a
    finding in newly edited local code, not a deployed incident.
 3. Principal mutation replay must collapse to `not_found`, while the nonce
-   domain helper emits `grant_replayed`. Requested transport-level collapse
-   and regression coverage for all four mutation paths.
+   domain helper emits `grant_replayed`. Transport-level collapse is implemented
+   and all four mutation paths pass the replay regression.
 4. Global nonce partition selection must derive from the stored vault type,
-   not an ignored tenant claim on the grant. Requested correction and test.
+   not an ignored tenant claim on the grant. Corrected and regression-tested.
 5. Category validation must inspect the raw input for literal spaces before
    trimming, so leading/trailing spaces cannot evade the uniform rule.
+6. New mount/category/resolver validation inherited the legacy default error
+   code `invalid_request`. Explicit `validation_failed` codes now match the
+   spec; exact-code tests pass without changing legacy validation defaults.
+7. The first combined security run passed 184/185: the shared-promotion
+   fixture still provisioned a principal entity without a signed grant.
+   Correcting only that setup preserved its no-source-read assertion. The
+   complete rerun passed 185/185.
+
+## Final combined evidence and review limits
+
+- Baseline integration: bfe7c9d; principal/context implementation: 2ceb79f,
+  bb57420 and 1c3e340; Phase 7 hardening: 0bcb15d; BL076 integration: ddfdb4a.
+- Vitest: 49 files, 480 passed, 1 conditional engine-canary skip. The two
+  migration-version fixture arrays include migrations 0013 and 0014.
+- Security: 185/185 PASS, 0 skipped, 285.53 seconds, using the complete
+  `tests/security/*.security.mjs` set with `--test-concurrency=4`. The package
+  script remains serial; hosted CI is separate and has not run yet.
+- Cross-repo: 4/4 PASS against the immutable consumer extract below.
+- Client package dry-run PASS; no npm publication or version release.
+- Phase 7 harness: 31 PASS, 0 FAIL, 6 NOT_RUN, expected exit 2. The missing
+  rows cover full Phase 6 consolidation/vault erasure and dependent release
+  gates. Eight of eight real thread summaries were committed in the matrix.
+- Client environment probe PASS for the global flag and receipt keyring/
+  version; an unrelated synthetic credential and test clock were excluded.
+- New migration test proves tenant nonce preservation, NULL uniqueness,
+  separate tenant/global partitions, 200-row bounded prune and rollback.
+- New principal boundary test proves all nine refusal paths, all four write
+  replays, unchanged entity rows after replay, and real API-011 nonce reuse
+  refusal from a principal write. Entity-only denials no longer disclose the
+  underlying vault ID. The link error no longer embeds either real vault ID.
+- Two real child processes and connections pass private/passport races over
+  three rounds each; collision and five-retry exhaustion tests pass as well.
+- Migrations 0001-0010 are byte-identical to origin/main. Fresh schema 14 is
+  applied locally; BL076 also has a populated raw-receipt refusal/rollback
+  test, so it never silently drops existing receipt data.
+- Independent Luna/max review found the cross-vault link identifier leak;
+  root corrected it and added an exact non-disclosure regression. Root
+  reviewed the final integrations. Two fleet workers subsequently hit the
+  account usage limit; no second independent final-SHA approval is claimed.
+- Global grants select a tenantless/default key. In tenant-keyring-only mode
+  that selection has no configured key and fails closed; an ignored tenant
+  claim cannot select a tenant key for global access. No key fallback was
+  added to the shipped tenant keyring policy.
 
 ## Cross-repository provenance
 
@@ -113,8 +156,10 @@ No zuri-ai source or caller configuration was changed.
 
 The owner confirmed no deployed MSP database exists and requested a local
 database. Target: `C:/Users/pc/workspace/Memory-and-Soul-Passport/.local/msp.db`.
-The target did not exist when inspected. Initialization and integrity/category
-audit are pending the reviewed migration graph. An empty local database is
+The target did not exist when inspected. Initialization completed at 02:52 ICT
+on 2026-09-17: schema 14, integrity ok, foreign-key violations 0, entities 0,
+categories containing literal spaces 0. Audit: `.tmp/local-db-audit.json`.
+An empty local database is
 not evidence of a deployed data audit or production activation.
 
 ## Parallel phase boundaries
@@ -129,4 +174,5 @@ not evidence of a deployed data audit or production activation.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.0b | 2026-09-17 | under review | Record approved nonce correction, integrated evidence, local database audit and release limits | working-tree | RWANG |
 | 0.1.0b | 2026-09-17 | under review | Record authority, reproducible baseline, acceptance checklist and pending gates | bfe7c9d | RWANG |

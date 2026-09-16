@@ -34,6 +34,7 @@ import { fileURLToPath } from "node:url";
 
 import { MspClient } from "@freshair129/msp-client-js";
 import { createMspStdioCaller } from "@freshair129/msp-client-js";
+import { signThreadRequest } from "@freshair129/msp-contracts/thread-access";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "..", "..");
@@ -234,12 +235,20 @@ test("DEC-MEMOS-52: msp_memory_promote(target_scope=global_private) never reads 
     // prerequisite, DEC-MEMOS-51) -- unlike spawnRuntime() above, which
     // never sets it, since none of this file's other tests call
     // msp_vault_resolve.
-    const call = createMspStdioCaller({
+    const transport = createMspStdioCaller({
       command: process.execPath,
       args: [binPath],
-      env: { ...process.env, MSP_DB_PATH: dbPath, MSP_IDENTITY_HMAC_KEY: "a".repeat(32) },
+      env: { ...process.env, MSP_DB_PATH: dbPath, MSP_IDENTITY_HMAC_KEY: "a".repeat(32), MSP_THREAD_SERVICE_KEY: "a".repeat(32) },
       timeoutMs: 10_000,
     });
+    const call = (name, input) => {
+      const scope = input.access_context;
+      return transport(name, scope ? signThreadRequest(name, input, {
+        tenantId: scope.tenant_id, principalId: scope.principal_id,
+        agentId: scope.agent_id, workspaceId: scope.workspace_id,
+      }, "a".repeat(32)) : input);
+    };
+    call.close = () => transport.close();
     try {
       // Provision a real principal_private vault and a real entity inside
       // it, through the real process.

@@ -1,7 +1,7 @@
 ---
-version: "0.2.2b"
+version: "0.3.1b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-12T12:00:00+07:00,Claude Opus 5"
+last_update: "2026-09-17T02:54:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp"
@@ -70,28 +70,37 @@ npm start
 
 The server uses JSON-RPC 2.0 messages separated by newlines on stdin/stdout. It implements `initialize`, `notifications/initialized`, and `tools/call`; tool discovery is intentionally static and there is no `tools/list`.
 
-### `MSP_IDENTITY_HMAC_KEY` (principal vaults / API-010 `msp_vault_resolve`)
+### Signed principal memory and local setup
 
-PH-MEMOS-5 makes `MSP_IDENTITY_HMAC_KEY` a hard deployment prerequisite for
-`msp_vault_resolve` as a whole, not only for calls that touch a principal
-vault: every well-formed `msp_vault_resolve` call resolves and journals a
-`principal_private` ("episodic") vault unconditionally, and that journal
-receipt's own `principal_hmac` actor pseudonym needs the key. A deployment
-that omits it answers **every** `msp_vault_resolve` call — including a
-legacy-fields-only-looking one — with `identity_hmac_unconfigured`, before
-any resolution logic runs. This is the same key API-011's thread-memory
-surface already requires (`MSP_THREAD_SERVICE_KEY` is the separate
-grant-signing secret); set it once for both:
+MEMOS-008 uses signed `access: { grant, signature }` for principal vault
+resolution, all nine principal memory tools, and scoped context reads.
+Unsigned `msp_vault_resolve` still returns legacy vault fields, null
+principal IDs, and requires neither a service nor an identity key.
+Signed principal resolution needs `MSP_THREAD_SERVICE_KEY` (or its tenant
+keyring) and `MSP_IDENTITY_HMAC_KEY` for the receipt actor. API-011 thread
+identity paths also require the identity key. Principal vault IDs are random
+UUIDs, independent of those keys and the owner tuple.
 
-```powershell
-$env:MSP_IDENTITY_HMAC_KEY = '<a real secret, at least 32 characters>'
-```
+`MSP_GLOBAL_PRIVATE_GRANT_REQUIRED=1` requires a matching agent grant for
+global memory and promotion. Status omits the global vault when no grant is
+present. The flag defaults off; a present invalid or wrong-agent grant is
+refused regardless of the flag. Mounts do not bypass that check.
 
-`VaultRegistry` itself never reads this key or computes this hash — both
-stay the `msp_vault_resolve` handler's own responsibility (see
-[`docs/API-010-Vault-Resolve-Contract.md`](docs/API-010-Vault-Resolve-Contract.md)).
-A deployment that never calls `msp_vault_resolve` does not need this key
-for any other tool in this runtime's surface.
+Erasure receipts require `MSP_IDENTITY_HMAC_KEY_VERSION` alongside the active
+identity key. Optional `MSP_IDENTITY_HMAC_KEYRING` retains older receipt keys
+for matching after rotation; it does not authorize thread grants. See
+[receipt evidence and rotation](docs/BL-MEMOS-076-EVIDENCE.md).
+
+The requested local database is initialized at `.local/msp.db` with schema
+14. From an integration checkout, set `MSP_DB_PATH` to its absolute path
+before `npm start`. The runtime is a stdio service. No credentials or
+external service activation are implied by creating the empty database.
+Migration 0013 adds the global nonce partition; 0014 pseudonymizes erasure
+receipts and refuses an existing non-empty raw receipt table.
+
+Full Phase 6 consolidation/passport and Phase 7 release remain gated by
+[the candidate contract](docs/PHASE6-CONSOLIDATION-PASSPORT.md) and complete
+acceptance evidence. Local test passes do not close those gates.
 
 ## GenesisRAG17 relay
 
@@ -122,6 +131,7 @@ See [docs/NOTES.md](docs/NOTES.md) for extraction evidence and known gaps, and [
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.3.1b | 2026-09-17 | beta | Align signed grants, unsigned legacy compatibility, global gate, receipt key versioning and local schema setup; retain Phase 6/release gates. | working-tree | RWANG |
 | 0.3.0b | 2026-09-16 | beta | PH-MEMOS-5: principal vaults (`principal_private`/`principal_passport`, `migrations/0011`), API-010 `msp_vault_resolve`, the API-009 `access_context` amendment on all nine `msp_memory_*` tools, scoped `contexts` receipts (`migrations/0012`), and the multi-agent vault rules. `MSP_IDENTITY_HMAC_KEY` is now a hard deployment prerequisite for `msp_vault_resolve`. | working-tree | KIN |
 | 0.2.2b | 2026-09-12 | beta | Toolchain section: Node `>=22` for `better-sqlite3` 13 (N-API), why 11.x/12.x must not return, and the second-process rule that `close()` now enforces. | working-tree | Claude Opus 5 |
 | 0.2.0b | 2026-09-08 | beta | Added the authenticated GenesisRAG17 relay boundary, nine-tool ownership summary, pinned zuri-ai acceptance pointer, ADR and isolated local runbook. | working-tree | ATHER |

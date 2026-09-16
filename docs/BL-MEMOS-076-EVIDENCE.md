@@ -1,6 +1,6 @@
 ---
 doc_id: "BL-MEMOS-076-EVIDENCE"
-version: "0.1.0b"
+version: "0.1.1b"
 created_at: "2026-09-17T00:00:00+07:00,RWANG"
 last_update: "2026-09-17T00:00:00+07:00,RWANG"
 status: "candidate"
@@ -37,6 +37,28 @@ configured empty `{}` keyring is rejected at startup, matching the shipped
 thread-service keyring convention; the pruning case therefore models removal
 by omitting the optional environment variable.
 
+Root repeated the benchmark on Node 24.19.0 / Intel Core i7-14700KF:
+100,000 SHA-256 candidates averaged 0.001015 ms, 100,000 HMAC-SHA256
+candidates averaged 0.002054 ms, and 20 scrypt derivations averaged
+20.988920 ms. All inputs were synthetic. This shows a measured per-candidate
+cost increase on this host; a small identifier space is still enumerable.
+
+The rotation procedure follows design §12.5:
+
+1. Choose a new, previously unused key-version label and generate a new key.
+2. Keep the previous label/key in the protected `MSP_IDENTITY_HMAC_KEYRING`
+   configuration if old receipts must remain matchable.
+3. Replace the active `MSP_IDENTITY_HMAC_KEY` and its `_VERSION` together,
+   then restart the service. New receipts use only this active pair.
+4. Verify a nonce-fresh idempotent retry against an older receipt while its
+   retired key remains configured. No receipt row is rewritten.
+5. Removing a retired key makes its receipts unmatchable; it does not prove
+   a different principal and does not delete those permanent receipts.
+
+This keyring is only for receipts. Existing room hashes and journal actors
+continue using the active identity key; their pre-existing rotation limits
+remain unchanged. No production rotation was performed for this task.
+
 ## Reproducible local checks
 
 | Check | Result |
@@ -58,4 +80,5 @@ fail-closed precondition uses a transient trigger because SQLite permits
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.1b | 2026-09-17 | candidate | Record SHA/HMAC comparison and the existing specified rotation procedure. | working-tree | RWANG |
 | 0.1.0b | 2026-09-17 | candidate | Recorded local scrypt cost, key rotation/pruning behavior, and BL076 test evidence. | working-tree | RWANG |
