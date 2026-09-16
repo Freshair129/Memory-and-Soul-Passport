@@ -296,6 +296,37 @@ export class VaultRegistry {
   }
 
   /**
+   * PH-MEMOS-5 (design §5.3): a plain existence read, never a mutation --
+   * lets msp_vault_resolve's own handler tell "this call newly provisioned
+   * a vault" apart from "this call found an already-active one" for its
+   * journal receipt's provisioned_episodic/provisioned_passport booleans,
+   * without changing provisionPrincipalPrivateVault/PassportVault's own
+   * RKOI-approved return shape (a plain vault row, matching every other
+   * provision*Vault method in this class) to smuggle that bit through.
+   * Call this BEFORE provisionPrincipalPrivateVault/PassportVault, inside
+   * the SAME outer transaction, so the check-then-provision sequence is
+   * consistent (no race between the read and the provision, since both run
+   * on the same connection inside the same transaction).
+   */
+  hasActivePrincipalPrivateVault({ tenantId, principalId, agentId, workspaceId }) {
+    return Boolean(
+      this.#db
+        .prepare(
+          "SELECT 1 FROM vaults WHERE vault_type = 'principal_private' AND tenant_id = ? AND principal_id = ? AND agent_id = ? AND workspace_id = ? AND status = 'active'",
+        )
+        .get(tenantId, principalId, agentId, workspaceId),
+    );
+  }
+
+  hasActivePrincipalPassportVault({ tenantId, principalId }) {
+    return Boolean(
+      this.#db
+        .prepare("SELECT 1 FROM vaults WHERE vault_type = 'principal_passport' AND tenant_id = ? AND principal_id = ? AND status = 'active'")
+        .get(tenantId, principalId),
+    );
+  }
+
+  /**
    * Shared by both provisionPrincipal*Vault methods above (design §5.2,
    * DEC-MEMOS-50). Run inside this.#db.transaction(...), matching the
    * "lazy, idempotent" shape every existing provision*Vault method already

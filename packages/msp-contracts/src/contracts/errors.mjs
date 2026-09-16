@@ -22,6 +22,12 @@ export {
   ThreadNotFoundError,
   ThreadPayloadTooLargeError,
   ThreadValidationError,
+  // PH-MEMOS-5 (design §5.2/§5.3): raised by domain/vault-registry.mjs's
+  // #provisionPrincipalVault, re-exported here (not defined here) since it
+  // is a domain-layer error -- msp-vault-resolve-handler.mjs and
+  // memory-handlers.mjs import it from this package the same way every
+  // other domain error class already re-exported above is imported.
+  VaultProvisionConflictError,
 } from "@freshair129/msp-core/errors";
 
 import { MspRuntimeError } from "@freshair129/msp-core/errors";
@@ -83,6 +89,39 @@ export class GksProviderInvalidResponseError extends MspRuntimeError {
 export class VaultScopeDeniedError extends MspRuntimeError {
   constructor(message = "vault_scope_denied: caller's mounted vault does not include the requested vault_id.") {
     super(message, "vault_scope_denied");
+  }
+}
+
+/**
+ * PH-MEMOS-5 (design §5.1, DEC-MEMOS-49): the target vault is
+ * principal_private/principal_passport and the request carries no
+ * access_context at all. Produced exclusively by
+ * contracts/vault-scope-guard.mjs's new assertAccessContext(), never by
+ * assertVaultScope -- that function's own signature and meaning are
+ * unchanged by this amendment. Same wire-envelope reasoning as
+ * VaultScopeDeniedError above: only `.message` crosses the JSON-RPC error
+ * envelope, so the literal code string lives in the default message too.
+ */
+export class AccessContextRequiredError extends MspRuntimeError {
+  constructor(message = "access_context_required: this vault requires a matching access_context, and none was sent.") {
+    super(message, "access_context_required");
+  }
+}
+
+/**
+ * PH-MEMOS-5 (design §5.1, §5.2, DEC-MEMOS-49): access_context was present
+ * but did not match the target vault's own owner tuple -- a tuple
+ * mismatch, an erased vault (§12.4 blanks only principal_id on erasure,
+ * never tenant_id/agent_id/workspace_id, so #isVaultRowAccessibleTo's own
+ * status gate is what refuses this case), or a principal_passport target
+ * missing allow_passport: true are all this SAME code, deliberately -- no
+ * new oracle a caller could use to distinguish them (mirrors the existing
+ * "no new oracle" reasoning this codebase already applies to the passport
+ * tuple-vs-allow_passport case).
+ */
+export class AccessContextDeniedError extends MspRuntimeError {
+  constructor(message = "access_context_denied: access_context does not match the target vault's owner tuple.") {
+    super(message, "access_context_denied");
   }
 }
 

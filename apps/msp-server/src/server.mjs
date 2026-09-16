@@ -33,6 +33,7 @@ import { resolveThreadServiceKeyFor } from "./config/thread-service-keyring.mjs"
 import { createThreadGuard } from "./transport/handlers/thread-guard.mjs";
 import { createThreadHandlers } from "./transport/handlers/thread-handlers.mjs";
 import { createVaultHandlers } from "./transport/handlers/vault-handlers.mjs";
+import { createVaultResolveHandler } from "./transport/handlers/vault-resolve-handler.mjs";
 import { createStdioJsonRpcServer } from "./transport/stdio-jsonrpc-server.mjs";
 import { ToolRegistry } from "./transport/tool-registry.mjs";
 
@@ -70,6 +71,16 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const gksProvider = createGksProviderFromEnvironment(env);
 
   const vaultHandlers = createVaultHandlers({ vaultRegistry, journal });
+  // PH-MEMOS-5 (design §5.3, DEC-MEMOS-51): MSP_IDENTITY_HMAC_KEY is
+  // mandatory for msp_vault_resolve as a whole -- read here, not defaulted
+  // to a placeholder; the handler itself refuses identity_hmac_unconfigured
+  // when this is absent or too short, before any resolution logic runs.
+  const vaultResolveHandler = createVaultResolveHandler({
+    db,
+    vaultRegistry,
+    journal,
+    identityHmacKey: env.MSP_IDENTITY_HMAC_KEY ?? null,
+  });
   const contextHandlers = createContextHandlers({ db, journal });
   const lifecycleHandlers = createLifecycleHandlers({ db, entityStore, vaultRegistry, journal, gksProvider });
   const memoryHandlers = createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore });
@@ -119,6 +130,7 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const toolRegistry = new ToolRegistry();
   toolRegistry.register("msp_ping", async () => ({ ok: true, timestamp: new Date().toISOString() }));
   for (const [name, handler] of Object.entries(vaultHandlers)) toolRegistry.register(name, handler);
+  for (const [name, handler] of Object.entries(vaultResolveHandler)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(contextHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(lifecycleHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(memoryHandlers)) toolRegistry.register(name, handler);

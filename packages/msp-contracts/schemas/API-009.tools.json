@@ -4,7 +4,7 @@
   "title": "API-009 Persistent Memory MSP tools",
   "contract": {
     "doc_id": "API-009-PERSISTENT-MEMORY-CONTRACT",
-    "version": "0.1.1+draft",
+    "version": "0.2.0+draft",
     "source": "docs/API-009-Persistent-Memory-Contract.md"
   },
   "$defs": {
@@ -15,6 +15,17 @@
       "properties": {
         "vault_id": { "type": "string", "minLength": 1 },
         "vault_type": { "enum": ["shared", "workspace_private", "global_private"] }
+      }
+    },
+    "accessContext": {
+      "type": "object",
+      "required": ["tenant_id", "principal_id"],
+      "properties": {
+        "tenant_id": { "type": "string", "minLength": 1 },
+        "principal_id": { "type": "string", "minLength": 1 },
+        "agent_id": { "type": "string", "minLength": 1 },
+        "workspace_id": { "type": "string", "minLength": 1 },
+        "allow_passport": { "type": "boolean" }
       }
     }
   },
@@ -33,7 +44,8 @@
           "epistemic_state": { "enum": ["hypothesis", "confirmed", "contested", "deprecated"] },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
           "valid_from": { "type": ["string", "null"], "format": "date-time" },
-          "valid_to": { "type": ["string", "null"], "format": "date-time" }
+          "valid_to": { "type": ["string", "null"], "format": "date-time" },
+          "access_context": { "$ref": "#/$defs/accessContext" }
         }
       }
     },
@@ -48,7 +60,8 @@
           "category": { "type": "string", "minLength": 1 },
           "key": { "type": "string", "minLength": 1 },
           "as_of_valid_at": { "type": ["string", "null"], "format": "date-time" },
-          "as_of_recorded_at": { "type": ["string", "null"], "format": "date-time" }
+          "as_of_recorded_at": { "type": ["string", "null"], "format": "date-time" },
+          "access_context": { "$ref": "#/$defs/accessContext" }
         }
       }
     },
@@ -63,7 +76,8 @@
           "category": { "type": ["string", "null"] },
           "lifecycle_state": { "type": ["string", "null"], "enum": ["active", "decayed", "archived", "forgotten", null] },
           "page_size": { "type": "integer", "minimum": 1 },
-          "page_token": { "type": ["string", "null"] }
+          "page_token": { "type": ["string", "null"] },
+          "access_context": { "$ref": "#/$defs/accessContext" }
         }
       }
     },
@@ -74,7 +88,8 @@
         "additionalProperties": false,
         "required": ["entity_id"],
         "properties": {
-          "entity_id": { "type": "string", "minLength": 1 }
+          "entity_id": { "type": "string", "minLength": 1 },
+          "access_context": { "$ref": "#/$defs/accessContext" }
         }
       }
     },
@@ -86,7 +101,8 @@
         "required": ["entity_id", "reason"],
         "properties": {
           "entity_id": { "type": "string", "minLength": 1 },
-          "reason": { "type": "string", "minLength": 1 }
+          "reason": { "type": "string", "minLength": 1 },
+          "access_context": { "$ref": "#/$defs/accessContext" }
         }
       }
     },
@@ -100,7 +116,8 @@
           "vault_id": { "type": "string", "minLength": 1 },
           "query": { "type": "string", "minLength": 1 },
           "mode": { "enum": ["hybrid", "fts", "vector"] },
-          "limit": { "type": "integer", "minimum": 1 }
+          "limit": { "type": "integer", "minimum": 1 },
+          "access_context": { "$ref": "#/$defs/accessContext" }
         }
       }
     },
@@ -112,7 +129,8 @@
         "required": ["vault_id"],
         "properties": {
           "vault_id": { "type": "string", "minLength": 1 },
-          "dry_run": { "type": "boolean" }
+          "dry_run": { "type": "boolean" },
+          "access_context": { "$ref": "#/$defs/accessContext" }
         }
       }
     },
@@ -124,7 +142,8 @@
         "required": ["entity_id"],
         "properties": {
           "entity_id": { "type": "string", "minLength": 1 },
-          "direction": { "enum": ["outgoing", "incoming", "both"] }
+          "direction": { "enum": ["outgoing", "incoming", "both"] },
+          "access_context": { "$ref": "#/$defs/accessContext" }
         }
       }
     },
@@ -137,7 +156,8 @@
         "properties": {
           "from_entity_id": { "type": "string", "minLength": 1 },
           "to_entity_id": { "type": "string", "minLength": 1 },
-          "link_type": { "type": "string", "minLength": 1 }
+          "link_type": { "type": "string", "minLength": 1 },
+          "access_context": { "$ref": "#/$defs/accessContext" }
         }
       }
     }

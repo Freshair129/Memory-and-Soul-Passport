@@ -37,9 +37,25 @@
 // tools' wire shapes can layer real isVaultAccessibleTo-based
 // vault_scope_denied enforcement on top of this without changing the data
 // scoping already enforced here.
+//
+// PH-MEMOS-5 amendment (design §5.1, BL-MEMOS-063, DEC-MEMOS-49): that
+// "future phase" is this one, but only for the two NEW principal vault
+// types (principal_private/principal_passport) -- the paragraph above is
+// otherwise unchanged and still governs every legacy vault_id. Each tool
+// below gains one new call site, immediately after its own existing
+// requireKnownVault/requireEntityById lookup, via this file's own
+// checkAccessContext() helper (vaultRegistry.classifyPrincipalAccess +
+// contracts/vault-scope-guard.mjs's new assertAccessContext) -- never a
+// reuse of assertVaultScope's own signature/meaning, which stays exactly
+// what it is today (msp_memory_links_create's pre-existing endpoint-
+// consistency check, below, unchanged). A legacy vault_id is completely
+// unaffected: classifyPrincipalAccess returns null for it and
+// checkAccessContext is then a no-op, so the "no caller-ownership check
+// exists for legacy vaults" property this header already documents is
+// unchanged for those three types.
 import { runDecayTick, touch } from "@freshair129/msp-core/decay-engine";
 import { MemoryNotFoundError, ValidationError } from "@freshair129/msp-contracts/errors";
-import { assertVaultScope } from "@freshair129/msp-contracts/vault-scope-guard";
+import { assertAccessContext, assertVaultScope } from "@freshair129/msp-contracts/vault-scope-guard";
 import { vectorToBlob } from "@freshair129/msp-retrieval/vector";
 
 const VALID_SEARCH_MODES = new Set(["hybrid", "fts", "vector"]);
@@ -103,6 +119,20 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     return entity;
   }
 
+  // PH-MEMOS-5 (design §5.1, BL-MEMOS-063, DEC-MEMOS-49): the new call
+  // site every msp_memory_* tool below adds, immediately after that tool's
+  // own existing requireKnownVault/requireEntityById lookup -- always with
+  // the SAME vault row that lookup already fetched, never a second SELECT
+  // (vaultRegistry.classifyPrincipalAccess takes the row directly). A
+  // legacy vault (shared/workspace_private/global_private) returns null
+  // from classifyPrincipalAccess and this is a complete no-op, exactly as
+  // it is today for every one of these nine tools -- this amendment adds
+  // no new refusal for a legacy vault_id.
+  function checkAccessContext(vault, args, toolName) {
+    const outcome = vaultRegistry.classifyPrincipalAccess(vault, args.access_context);
+    assertAccessContext(outcome, `${toolName}: access_context is required for, and must match, this principal vault.`);
+  }
+
   // WP-15 Bounded Scope item 7: computes and stores an embedding for a
   // new/content-changed entity. Never throws and never fails the caller's
   // write -- if the vector leg is unavailable, this is a silent (to the
@@ -127,9 +157,10 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     // API-009 SS4.1. Request: {vault: {vault_id, vault_type}, category, key,
     // body_json, epistemic_state, confidence, valid_from, valid_to}.
     async msp_memory_upsert(args = {}) {
-      const vault = args.vault && typeof args.vault === "object" ? args.vault : {};
-      const vaultId = requireString(vault.vault_id, "vault.vault_id");
-      requireKnownVault(vaultId);
+      const vaultArg = args.vault && typeof args.vault === "object" ? args.vault : {};
+      const vaultId = requireString(vaultArg.vault_id, "vault.vault_id");
+      const vault = requireKnownVault(vaultId);
+      checkAccessContext(vault, args, "msp_memory_upsert");
       const category = requireString(args.category, "category");
       const key = requireString(args.key, "key");
       const bodyJson = args.body_json && typeof args.body_json === "object" && !Array.isArray(args.body_json) ? args.body_json : {};
@@ -170,7 +201,8 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     // API-009 SS4.2. Request: {vault_id, category, key, as_of_valid_at, as_of_recorded_at}.
     async msp_memory_get(args = {}) {
       const vaultId = requireString(args.vault_id, "vault_id");
-      requireKnownVault(vaultId);
+      const vault = requireKnownVault(vaultId);
+      checkAccessContext(vault, args, "msp_memory_get");
       const category = requireString(args.category, "category");
       const key = requireString(args.key, "key");
       const asOfValidAt = optionalString(args.as_of_valid_at);
@@ -197,7 +229,8 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     // API-009 SS4.3. Request: {vault_id, category, lifecycle_state, page_size, page_token}.
     async msp_memory_list(args = {}) {
       const vaultId = requireString(args.vault_id, "vault_id");
-      requireKnownVault(vaultId);
+      const vault = requireKnownVault(vaultId);
+      checkAccessContext(vault, args, "msp_memory_list");
       const category = optionalString(args.category);
       const lifecycleState = optionalString(args.lifecycle_state);
       const pageToken = optionalString(args.page_token);
@@ -220,6 +253,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     async msp_memory_history(args = {}) {
       const entityId = requireString(args.entity_id, "entity_id");
       const current = requireEntityById(entityId);
+      checkAccessContext(vaultRegistry.getVaultById(current.vault_id), args, "msp_memory_history");
 
       const historyDesc = entityStore.history({ vaultId: current.vault_id, category: current.category, key: current.key });
       // API-009 SS4.4: "history is returned in ascending version order ...
@@ -268,6 +302,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
       const entityId = requireString(args.entity_id, "entity_id");
       const reason = requireString(args.reason, "reason");
       const current = requireEntityById(entityId);
+      checkAccessContext(vaultRegistry.getVaultById(current.vault_id), args, "msp_memory_forget");
       const actor = resolveActor(args);
 
       const forgotten = entityStore.forget({
@@ -293,7 +328,8 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     // API-009 SS4.6. Request: {vault_id, query, mode, limit}.
     async msp_memory_search(args = {}) {
       const vaultId = requireString(args.vault_id, "vault_id");
-      requireKnownVault(vaultId);
+      const vault = requireKnownVault(vaultId);
+      checkAccessContext(vault, args, "msp_memory_search");
       const query = requireString(args.query, "query");
       const mode = VALID_SEARCH_MODES.has(args.mode) ? args.mode : "hybrid";
       const limit = typeof args.limit === "number" ? args.limit : undefined;
@@ -331,12 +367,22 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     // caller-ownership check this wire contract cannot support.
     async msp_memory_decay_tick(args = {}) {
       const vaultId = requireString(args.vault_id, "vault_id");
-      requireKnownVault(vaultId);
+      const vault = requireKnownVault(vaultId);
+      checkAccessContext(vault, args, "msp_memory_decay_tick");
       const dryRun = args.dry_run === true;
       const actor = resolveActor(args);
       const now = new Date().toISOString();
 
-      const { evaluated, transitioned } = runDecayTick(db, { vaultId, dryRun, now });
+      // PH-MEMOS-5 (design §5.1, DEC-MEMOS-45): `pinned` reads the target
+      // vault's own decay_policy column directly (never re-derived from
+      // vault_type a second time) -- true only for a principal_passport
+      // vault. When pinned, evaluated is always 0 and transitioned is
+      // always [], REGARDLESS of dry_run: a passport vault's entities
+      // never decay, so there is nothing to evaluate, not merely nothing
+      // to persist -- a distinct statement from dry_run's own "computed
+      // but not persisted" contract, never conflated with it.
+      const pinned = vault.decay_policy === "pinned";
+      const { evaluated, transitioned } = pinned ? { evaluated: 0, transitioned: [] } : runDecayTick(db, { vaultId, dryRun, now });
 
       // API-009 SS6: "every mutating call (... decay_tick with
       // dry_run: false ...) is recorded"; this packet's Bounded Scope item 5
@@ -347,11 +393,11 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
         toolName: "msp_memory_decay_tick",
         ref: null,
         workspaceId: null,
-        payload: { vault_id: vaultId, dry_run: dryRun, evaluated, transitioned_count: transitioned.length },
+        payload: { vault_id: vaultId, dry_run: dryRun, evaluated, transitioned_count: transitioned.length, pinned },
         policyDecision: "allow",
       });
 
-      return { evaluated, transitioned, dry_run: dryRun };
+      return { evaluated, transitioned, dry_run: dryRun, pinned };
     },
 
     // API-009 SS4.8 (WP-17 Bounded Scope item 2). Request: {entity_id, direction}.
@@ -362,7 +408,8 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     // there is no cross-vault link for this query to accidentally surface.
     async msp_memory_links_list(args = {}) {
       const entityId = requireString(args.entity_id, "entity_id");
-      requireEntityById(entityId);
+      const linksListEntity = requireEntityById(entityId);
+      checkAccessContext(vaultRegistry.getVaultById(linksListEntity.vault_id), args, "msp_memory_links_list");
       const direction = ["outgoing", "incoming", "both"].includes(args.direction) ? args.direction : "both";
 
       const links = linksStore.list({ entityId, direction });
@@ -404,6 +451,12 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
         `msp_memory_links_create: from_entity_id and to_entity_id belong to different vaults ` +
           `("${fromEntity.vault_id}" vs "${toEntity.vault_id}"); a link may not cross a vault boundary.`,
       );
+      // PH-MEMOS-5 (design §5.1, case 3): the pre-existing endpoint-
+      // consistency check above already refuses a link whose two endpoints
+      // resolve to DIFFERENT vault_ids -- a link therefore always has
+      // exactly ONE vault to classify, never two. Resolved via
+      // from_entity_id's own vault, unchanged by which endpoint is named.
+      checkAccessContext(vaultRegistry.getVaultById(fromEntity.vault_id), args, "msp_memory_links_create");
 
       const { link, created } = linksStore.create({
         vaultId: fromEntity.vault_id,

@@ -15,6 +15,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { requireNoGksRefs } from "@freshair129/msp-contracts/namespace-guard";
 import { ValidationError } from "@freshair129/msp-contracts/errors";
 import {
+  assertContextAccess,
+  assertPayloadNotRequestedForScopedDiff,
+  assertScopeColumnsConsistent,
+  classifyContextAccess,
+} from "@freshair129/msp-contracts/context-scope-guard";
+import {
   contextAuditRef,
   contextDiffRef,
   contextInjectionRef,
@@ -44,9 +50,14 @@ function stableStringify(value) {
 }
 
 export function createContextHandlers({ db, journal }) {
+  // PH-MEMOS-5 (design §5.4, BL-MEMOS-064): tenant_id/principal_id added to
+  // this statement's own column/placeholder list -- an in-place edit to an
+  // existing statement (unlike §5.2's principal vaults, `contexts` needs
+  // no *new* prepared statement, since it was never a fixed three-legacy-
+  // type insert to begin with). Both are null for a legacy (unscoped) row.
   const insertContext = db.prepare(`
-    INSERT INTO contexts (context_id, cache_id, workspace_id, agent_id, refs_json, source_hash, policy_decision, recorded_at)
-    VALUES (@context_id, @cache_id, @workspace_id, @agent_id, @refs_json, @source_hash, @policy_decision, @recorded_at)
+    INSERT INTO contexts (context_id, cache_id, workspace_id, agent_id, tenant_id, principal_id, refs_json, source_hash, policy_decision, recorded_at)
+    VALUES (@context_id, @cache_id, @workspace_id, @agent_id, @tenant_id, @principal_id, @refs_json, @source_hash, @policy_decision, @recorded_at)
   `);
   const selectContext = db.prepare("SELECT * FROM contexts WHERE context_id = ?");
   const upsertState = db.prepare(`
@@ -73,6 +84,26 @@ export function createContextHandlers({ db, journal }) {
       const agentId = requireString(args.agent_id, "agent_id");
       requireString(args.workspace_root, "workspace_root");
       requireNoGksRefs(args.knowledge_refs ?? [], "knowledge_refs");
+
+      // PH-MEMOS-5 (design §5.4, BL-MEMOS-064): new, optional
+      // access_context field -- {tenant_id, principal_id} both-or-neither,
+      // straight from one object. agent_id/workspace_id/allow_passport are
+      // NOT read here (unchanged from the design's own reasoning): a
+      // contexts row is not itself owned by an agent/workspace tuple the
+      // way a principal_private VAULT is. This is a self-asserted scope,
+      // not verified against an actual vaults row -- the same stdio-only
+      // trust boundary every other unsigned tool in this surface already
+      // accepts.
+      let scopeTenantId = null;
+      let scopePrincipalId = null;
+      if (args.access_context !== undefined && args.access_context !== null) {
+        if (typeof args.access_context !== "object") {
+          throw new ValidationError("access_context must be an object.");
+        }
+        scopeTenantId = requireString(args.access_context.tenant_id, "access_context.tenant_id");
+        scopePrincipalId = requireString(args.access_context.principal_id, "access_context.principal_id");
+      }
+      assertScopeColumnsConsistent(scopeTenantId, scopePrincipalId);
 
       const contextId = contextRef(randomUUID());
       const cacheId = `cache_${randomUUID()}`;
@@ -107,6 +138,8 @@ export function createContextHandlers({ db, journal }) {
         cache_id: cacheId,
         workspace_id: workspaceId,
         agent_id: agentId,
+        tenant_id: scopeTenantId,
+        principal_id: scopePrincipalId,
         refs_json: refsJson,
         source_hash: sourceHash,
         policy_decision: "allow",
@@ -118,7 +151,13 @@ export function createContextHandlers({ db, journal }) {
         toolName: "msp_context_resolve",
         ref: contextId,
         workspaceId,
-        payload: { context_id: contextId, cache_id: cacheId, workspace_id: workspaceId, agent_id: agentId },
+        payload: {
+          context_id: contextId,
+          cache_id: cacheId,
+          workspace_id: workspaceId,
+          agent_id: agentId,
+          scoped: scopeTenantId !== null,
+        },
         policyDecision: "allow",
       });
 
@@ -155,6 +194,27 @@ export function createContextHandlers({ db, journal }) {
       const targetRow = selectContext.get(targetContextId);
       if (!baseRow) throw new ValidationError(`Unknown base_context_id "${baseContextId}".`, "not_found");
       if (!targetRow) throw new ValidationError(`Unknown target_context_id "${targetContextId}".`, "not_found");
+
+      // PH-MEMOS-5 (design §5.4, BL-MEMOS-064): the check applies
+      // INDEPENDENTLY to each named row -- a legacy row (both columns
+      // null) is unaffected; a scoped row requires a matching
+      // access_context. If base and target are scoped to DIFFERENT
+      // principals, no single access_context can match both, so the
+      // mismatch fires naturally on whichever row it does not match -- no
+      // separate cross-principal-diff rule is needed.
+      assertContextAccess(
+        classifyContextAccess(baseRow, args.access_context),
+        "msp_context_diff: access_context is required for, and must match, base_context_id's own scoped context.",
+      );
+      assertContextAccess(
+        classifyContextAccess(targetRow, args.access_context),
+        "msp_context_diff: access_context is required for, and must match, target_context_id's own scoped context.",
+      );
+      // include_payload is refused UNCONDITIONALLY for a scoped row, even
+      // with a correctly-matching access_context (design §5.4) -- defense
+      // in depth, not a fallback for an unauthorized caller.
+      const eitherRowScoped = Boolean(baseRow.tenant_id) || Boolean(targetRow.tenant_id);
+      assertPayloadNotRequestedForScopedDiff(args.include_payload === true, eitherRowScoped);
 
       const baseRefs = JSON.parse(baseRow.refs_json);
       const targetRefs = JSON.parse(targetRow.refs_json);
@@ -195,6 +255,18 @@ export function createContextHandlers({ db, journal }) {
       const injectionId = typeof args.injection_id === "string" && args.injection_id.trim() ? args.injection_id.trim() : null;
 
       const contextRow = selectContext.get(contextId);
+      // PH-MEMOS-5 (design §5.4, BL-MEMOS-064): the identical single-row
+      // check as msp_memory_*'s own principal_private branch (§5.1),
+      // applied to this one context_id. An UNKNOWN context_id is
+      // unaffected -- classifyContextAccess only ever runs against a row
+      // that was actually found, mirroring requireKnownVault's own
+      // existence-first precedent.
+      if (contextRow) {
+        assertContextAccess(
+          classifyContextAccess(contextRow, args.access_context),
+          "msp_context_audit: access_context is required for, and must match, this scoped context.",
+        );
+      }
       const entries = journal.read({ contextId, cacheId, injectionId });
 
       // A real hash check, not a fabricated boolean: recompute the source
@@ -247,6 +319,13 @@ export function createContextHandlers({ db, journal }) {
     async msp_context_replay(args = {}) {
       const contextId = requireString(args.context_id, "context_id");
       const contextRow = selectContext.get(contextId);
+      // PH-MEMOS-5 (design §5.4, BL-MEMOS-064): identical single-row check.
+      if (contextRow) {
+        assertContextAccess(
+          classifyContextAccess(contextRow, args.access_context),
+          "msp_context_replay: access_context is required for, and must match, this scoped context.",
+        );
+      }
 
       // context_reproducible is a real hash comparison against the
       // persisted contexts row (WP-13 Bounded Scope item 5 / AC-05): if the

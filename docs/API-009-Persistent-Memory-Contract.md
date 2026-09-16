@@ -2,8 +2,8 @@
 title: "API Contract: Persistent-Memory MSP Runtime (msp_memory_*)"
 doc_id: "API-009-PERSISTENT-MEMORY-CONTRACT"
 status: "draft"
-version: "0.1.3+draft"
-updated: "2026-09-15"
+version: "0.2.0+draft"
+updated: "2026-09-16"
 owner: "Boss (CEO)"
 source_of_truth: true
 prd_system: "SYSTEM-05::Agent-Team-Management-System"
@@ -134,6 +134,24 @@ type SearchHit = {
   entity: MemoryEntity;
   score: number;
   matched_by: Array<"exact" | "fts" | "vector">;
+};
+
+// PH-MEMOS-5 (v0.2.0+draft): optional on every msp_memory_* tool below,
+// mandatory when the target vault is principal_private/principal_passport
+// (API-010's msp_vault_resolve, docs/API-010-Vault-Resolve-Contract.md,
+// mints these two new vault types). Field names/casing deliberately match
+// msp_vault_resolve's own access_context object field-for-field, so a
+// caller that already builds one for that tool can reuse it verbatim for
+// every msp_memory_* call in the same turn -- extra keys beyond the five
+// below (e.g. msp_vault_resolve's own business_id/instance_id/thread_id/
+// session_id/policy_version/project_id) are accepted and silently ignored,
+// never a validation_failed.
+type AccessContext = {
+  tenant_id: string;
+  principal_id: string;
+  agent_id?: string;        // required only when the target vault is principal_private
+  workspace_id?: string;    // required only when the target vault is principal_private
+  allow_passport?: boolean; // default false; must be true to touch a principal_passport vault
 };
 ```
 
@@ -312,13 +330,22 @@ Response:
   "transitioned": [
     { "entity_id": "string", "from": "active", "to": "decayed" }
   ],
-  "dry_run": false
+  "dry_run": false,
+  "pinned": false
 }
 ```
 
 This tool is caller/cron-triggered only; the runtime has no internal
 scheduler. `dry_run: true` computes and returns the transitions that would
 occur without persisting them.
+
+**`pinned` (PH-MEMOS-5, v0.2.0+draft):** reads the target vault's own
+`decay_policy` -- `true` only for a `principal_passport` vault, `false` for
+every other vault type including `principal_private`. When `pinned: true`,
+`evaluated` is always `0` and `transitioned` is always `[]`, **regardless of
+`dry_run`** -- a passport vault's entities never decay, so there is nothing
+to evaluate, not merely nothing to persist. This is a distinct statement
+from `dry_run`'s own "computed but not persisted" contract.
 
 ### 4.8 `msp_memory_links_list`
 
@@ -355,6 +382,38 @@ Response:
 { "link": { "from_entity_id": "string", "to_entity_id": "string", "link_type": "string" } }
 ```
 
+### 4.10 The `access_context` amendment (PH-MEMOS-5, v0.2.0+draft)
+
+Every tool in §4.1-§4.9 above gains one new, optional request field,
+`access_context: AccessContext` (§3). It is accepted and ignored for a
+`shared`/`workspace_private`/`global_private` target vault, unchanged from
+before this amendment. It is **mandatory** whenever the target vault
+(resolved directly for the vault-identifying tools §4.1/§4.2/§4.3/§4.6/§4.7,
+or via the named entity's own `vault_id` for the entity-id-only tools
+§4.4/§4.5/§4.8, or via `from_entity_id`'s vault for §4.9 under the
+pre-existing same-vault-as-`to_entity_id` refusal) is `principal_private` or
+`principal_passport` — the two new vault types API-010's `msp_vault_resolve`
+(`docs/API-010-Vault-Resolve-Contract.md`) mints. `msp_memory_promote`
+(API-006, `apps/msp-server/src/transport/handlers/lifecycle-handlers.mjs`)
+is explicitly **not** part of this amendment — it never resolves a source
+vault of any kind, so there is no vault for `access_context` to gate.
+
+Two new error codes, produced exclusively by this amendment's own new
+call sites, never by `vault_scope_denied`:
+
+| Code | Meaning |
+|---|---|
+| `access_context_required` | Target vault is `principal_private`/`principal_passport` and the request carries no `access_context` at all |
+| `access_context_denied` | `access_context` present but its `tenant_id`/`principal_id`/`agent_id`/`workspace_id` does not exactly match the target vault's own owner tuple, the target vault is erased, or the target is `principal_passport` and `allow_passport` is not exactly `true` |
+
+`vault_scope_denied` itself is **not** broadened by this amendment — it
+still means exactly what it means today (`msp_vault_mount`'s caller-
+ownership refusal, and `msp_memory_links_create`'s pre-existing endpoint-
+consistency refusal, §4.9), and this amendment adds no third producer.
+Full mechanism, every named call site, and the multi-agent vault rules this
+amendment composes with are specified in
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` §5, §5.1-§5.6.
+
 ## 5. Errors
 
 | Code | Meaning | Recovery |
@@ -365,6 +424,8 @@ Response:
 | `conflict` | A concurrent write raced this request under the same `(vault_id, category, key)` | Retry with the latest `current_version` |
 | `gks_provider_unconfigured` | Shared-scope knowledge/memory promotion was requested | Not recoverable in v1; shared promotion is an explicit, documented exclusion until a GKS provider exists |
 | `db_unavailable` | SQLite connection or migration state is invalid | Operator action required; see `docs/operations/runbooks/RUNBOOK-Persistent-Memory-Runtime.md` |
+| `access_context_required` (PH-MEMOS-5, v0.2.0+draft) | §4.10 | Send a matching `access_context` |
+| `access_context_denied` (PH-MEMOS-5, v0.2.0+draft) | §4.10 | Confirm the caller's own `tenant_id`/`principal_id`/`agent_id`/`workspace_id`/`allow_passport` claim against the actual target vault |
 
 ## 6. Security
 
@@ -450,6 +511,7 @@ independently verified before any real multi-agent use of
 
 | Version | Date | Summary |
 |---|---|---|
+| 0.2.0+draft | 2026-09-16 | PH-MEMOS-5 (`BL-MEMOS-063`, `DEC-MEMOS-47`): added the `access_context` amendment (§4.10) — optional on all nine `msp_memory_*` tools, mandatory when the target vault is one of the two new `principal_private`/`principal_passport` types API-010's `msp_vault_resolve` mints; two new error codes, `access_context_required`/`access_context_denied` (§5); `msp_memory_decay_tick` gains a `pinned` response field (§4.7) reflecting the target vault's own `decay_policy`. `vault_scope_denied` is unchanged, not broadened. `msp_memory_promote` (API-006) is explicitly out of this amendment's scope. |
 | 0.1.3+draft | 2026-09-15 | RKOI ruling (merge-blocking, TASK-MEMOS-002 stage 2): added §6's transport-level escaped-object-key refusal, which applies to every tool in this contract (any inbound request whose object keys contain a JSON escape sequence, at any nesting depth, is refused before parsing). Defends against a real V8 `JSON.parse` engine bug; see `docs/NOTES.md`. |
 | 0.1.2+draft | 2026-09-08 | Added the GenesisRAG17 relay pointer, nine-tool names, machine-schema source, exact ownership boundary and pinned zuri-ai contract/acceptance links. The existing `msp_memory_*` and legacy `msp_*` shapes remain unchanged. |
 | 0.1.1+draft | 2026-08-05 | Owner-approved corrections against the actual `packages/msp-runtime` implementation. §4.1: corrected the no-op-on-unchanged-content behavior (an unchanged-`source_hash` upsert on a non-`forgotten` entity writes no `entity_history` row and does not increment `current_version`, returning `created: false, changed: false`) and documented the `changed: boolean` response field the code already returns; this was previously misdocumented as writing history and incrementing version on every call. §6: added an explicit amendment note that vault-scope enforcement and the `vault_scope_denied` error are NOT implemented in v1 (the schema lacks `entities.vault_id`, and `promotions.idempotency_key` is globally unique rather than vault-scoped, risking cross-agent Global-Private disclosure); implementation is mandated by blocking work packet WP-14 before any real multi-agent use. |
