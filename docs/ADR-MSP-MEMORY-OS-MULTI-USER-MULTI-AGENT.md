@@ -1,7 +1,7 @@
 ---
-version: "0.1.28b"
+version: "0.1.29b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-16T18:00:00+07:00,ATHER"
+last_update: "2026-09-16T21:00:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -67,6 +67,16 @@ requirement, grant claim-set type check, nonce, trust statement,
 Checklist items 40, 44, 49, 50, 51, 54 and 55 stay unchecked; 56 through
 62 are added, unchecked. See the matching revision note before `## Context`
 for the full twelve-point reasoning.
+**REOPENED a fourth time, same day, by RKOI's and Fable's second parallel
+review of consolidated §5.0 (`763b4f4`/`bf84722`) — both confirmed the
+consolidation was right and the mechanics hold when actually run, and both
+still returned NEEDS REVISION (4 critical, 3 warnings between them) on
+issues the mechanics-level testing didn't reach. `DEC-MEMOS-42`/`43`/`46`
+are reopened (previously miscategorized as settled prose outside §5.0 that
+in fact contradicts it); `DEC-MEMOS-63..73` are new — see the matching
+revision note before `## Context` for the full accounting.** Checklist
+items 42, 43 and 46 are newly unchecked below alongside the existing
+pending set; 63 through 73 are added, unchecked.
 The `scrypt` work factor named in decision 53 is confirmed as specified:
 `BL-MEMOS-076` measures real wall-clock cost first and tunes from the
 measurement, so `N=16384, r=8, p=1` is confirmed as a starting point, not
@@ -1140,13 +1150,188 @@ real purpose is preserving `vaults.status`, the one piece of state the
 access gate depends on, matching every sibling append-only table's own
 no-delete convention.
 
-**`DEC-MEMOS-40`/`44`/`49`/`50`/`51`/`54` are each revised in place a
-further time below; `DEC-MEMOS-56`/`57`/`58`/`59`/`60`/`61`/`62` are new.
+**`DEC-MEMOS-40`/`44`/`49`/`50`/`51`/`54`/`55` are each revised in place a
+further time below (`55`'s own revision note, missing from this list in an
+earlier revision, is the "strengthened by round six" language on its own
+checklist row and definition — corrected here, RKOI C4/Fable W6);
+`DEC-MEMOS-56`/`57`/`58`/`59`/`60`/`61`/`62` are new.
 All are reopened, pending the owner's own re-confirmation — none of this
 note's own text stands in for it.** Full specification:
 `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.8b §5.0 (the sole
 normative source as of this revision); `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md`
 v0.1.29b.
+
+## Revision note — RKOI/Fable second parallel review of consolidated §5.0
+(`763b4f4`/`bf84722`), both NEEDS REVISION (RKOI 4 critical, Fable 3),
+consolidation confirmed correct, mechanics confirmed to hold when run
+(2026-09-16)
+
+**Both reviewers agree the consolidation itself was the right move and
+the mechanics hold under the tests each ran**: the race fix (40/40, two
+concurrency modes, 0 errors, exactly one active row every time), the
+`msp_context_audit` ordering byte-identical for unknown and denied with
+and without `cache_id`/`injection_id`, the nonce closing the
+forget-then-replayed-upsert resurrection, the `mountId` rejection at a
+0.10µs median across unknown/principal/legacy ids, and `0011`/`0012`
+applying clean on both a fresh and a populated database. **Both still
+returned NEEDS REVISION** — on issues the mechanics-level testing this
+round ran does not, and structurally cannot, reach: a trailing-call typo
+in code this ADR and the design only ever describe in prose; an
+information-theoretic oracle in how a grant failure is classified, not
+whether verification itself works; two pieces of already-shipped code
+(`isVaultAccessibleTo`, `getVaultStatus`, `runGlobalPrivatePromotion`)
+this phase had not yet actually read before specifying against; and a
+handful of cross-references inside this same document set that had gone
+stale against §5.0 without being caught. Ten settled points:
+
+1. **`.immediate()()` (`DEC-MEMOS-63`, new).** The prior code block's
+   `}).immediate()();` calls the value `.immediate()` returns — in
+   better-sqlite3 13.x, that value is the transaction's own already-
+   resolved result, not a callable. The row commits, then every single
+   call throws `TypeError`. Fixed to `}).immediate();`; RKOI's clean
+   40/40 race result was produced only after this fix.
+2. **One refusal rule, principal-type target (`DEC-MEMOS-64`, new).**
+   RKOI built the prior text's own claim ordering and proved an oracle: a
+   validly signed grant missing only its nonce, against another
+   principal's real vault, answered `grant_nonce_required`; the identical
+   grant against an unknown `vault_id` answered `not_found` — two
+   different answers before authorization ever succeeded. Narrowing
+   required claims by vault type made it worse, leaking
+   private-versus-passport through which claim error fired. Fixed: every
+   grant failure mode on a principal-type target — signature, expiry,
+   payload hash, claims, `grant_unconfigured`, nonce missing or replayed,
+   tuple mismatch, missing `allowPassport` — collapses to the identical
+   `not_found`. Nonce consumption happens only after the whole chain
+   returns `ok`.
+3. **Legacy grants ignored; `global_private` order fixed (`DEC-MEMOS-65`,
+   new).** RKOI ran the real, shipped `VaultRegistry.isVaultAccessibleTo`
+   directly: a `global_private` vault mounted to the caller's workspace
+   answered accessible for a mismatched `agentId`, purely because the
+   method's own mount short-circuit runs before its `global_private`
+   branch; the identical mismatch unmounted fell through to `not_found`,
+   not the `vault_scope_denied` this ADR previously promised
+   unconditionally; and a `shared` vault's access flipped to `not_found`
+   the moment any grant — even a merely present, unevaluated one — was
+   attached, breaking "legacy unaffected." Fixed: a legacy
+   (`shared`/`workspace_private`) target ignores any attached grant
+   outright, present or absent; a `global_private` target's grant is
+   checked against the row's own `agent_id` directly, before and
+   independently of `isVaultAccessibleTo`'s own mount branch. Safe to
+   leave `global_private`'s refusal distinguishable (`vault_scope_denied`,
+   not collapsed): its existence is already public — `vault_id` is an
+   unkeyed hash of `agent_id` alone, and `msp_vault_status` already
+   provisions and returns it on demand for any `agent_id` asked.
+4. **`global_private` gate widened to all three reachable surfaces
+   (`DEC-MEMOS-66`, `BL-MEMOS-114` revised).** Fable read
+   `lifecycle-handlers.mjs:196-197,322,360-362`:
+   `msp_memory_promote`'s `runGlobalPrivatePromotion` writes into
+   `provisionGlobalPrivateVault(agentId)` with `agent_id` straight from
+   the request and no grant of any kind; `msp_vault_status`'s own
+   `getVaultStatus({agentId})` does the identical thing. A deployment
+   turning the gate on would believe cross-agent writes/reads were gated
+   when two of the three reachable surfaces were not. Fixed: the
+   deployment setting, new env var **`MSP_GLOBAL_PRIVATE_GRANT_REQUIRED`**
+   (added to `MSP_RUNTIME_ENV_NAMES` and to zuri-ai's own spawn allowlist
+   on `BL-MEMOS-113`), when on, now requires a matching grant on
+   `msp_memory_*`, `msp_memory_promote`, and `msp_vault_status`'s
+   `agentId` branch alike — still default off, same reason as before
+   (zuri-ai never uses `global_private`; GoVibe's usage is unverified).
+5. **`.immediate()` conditional on the outer call (`DEC-MEMOS-67`,
+   `DEC-MEMOS-63` amended).** Fable measured a legacy-only resolve
+   waiting 439ms behind a concurrent principal provision once the outer
+   `msp_vault_resolve` transaction was made unconditionally `.immediate()`,
+   and a legacy caller receiving a raw `SQLITE_BUSY` it structurally
+   could never have received before this phase — contradicting "legacy
+   fields computed exactly as before." Fable also proved an inner
+   `.immediate()` cannot rescue a deferred outer transaction — the
+   modifier is a no-op on a nested `SAVEPOINT`. Fixed: the outer
+   transaction opens `.immediate()` only when `access` is present and its
+   grant verifies; a legacy-only call keeps its deferred transaction,
+   unchanged. Separately recorded, not fixed by this phase: the legacy
+   `provision*Vault` first-provision path (`msp_workspace_register`,
+   `msp_vault_status`) carries the identical pre-existing deferred-upgrade
+   hazard — filed as a backlog item, tracked alongside `BL-MEMOS-114`/`115`.
+6. **Nonce placement (`DEC-MEMOS-68`, `DEC-MEMOS-58` amended).** Both
+   reviewers proved that consuming a nonce in a transaction separate from
+   the write it guards breaks an honest retry: the guarded write's own
+   transaction rolling back for an unrelated reason still leaves the
+   nonce consumed, refusing the caller's next, only attempt
+   `grant_replayed`. Fixed: the nonce is consumed inside the same write
+   transaction as the mutation, after verification/classification returns
+   `ok`, before the write. Format restated: at least 128 random bits, at
+   most 128 characters, `expires_at` copied from the grant's own
+   `expiresAt`. Home: a new shared `msp-core` function
+   (`domain/grant-nonces.mjs`), since today's only implementation is the
+   private `ThreadRegistry#consumeNonce`. A grant carries one nonce,
+   never cached across calls. On `BL-MEMOS-113`: zuri-ai's shipped signer
+   sends no `nonce` claim for a thread grant either — it must add nonce
+   generation as part of the same code change.
+7. **Forced-collision test, made buildable (`DEC-MEMOS-69`, `DEC-MEMOS-50`
+   companion, new).** RKOI proved the prior text's own test description
+   cannot exercise what it claims: mocking the mint to return an
+   already-active row's own id never reaches `INSERT` at all — the
+   active-row `SELECT` finds it first. Fixed: seed a row for an
+   *unrelated* owner tuple with a known `vault_id`, then mock the mint to
+   return that same id for the tuple under test — the real
+   `SQLITE_CONSTRAINT_PRIMARYKEY` collision fires for real, exercising
+   both the retry branch and, when mocked to always collide, the
+   retries-exhausted branch. `PROVISION_ID_MINT_RETRY_LIMIT = 5` (its
+   value previously existed only in superseded design §5.2) is restated
+   in §5.0; exhausting it throws the typed `VaultProvisionConflictError`,
+   never the raw driver error.
+8. **`category`-space rejection, uniform (`DEC-MEMOS-70`, `BL-MEMOS-115`
+   companion amended).** RKOI proved "at the request-parsing layer"
+   cannot also be "at entity creation only" — creation is known only
+   inside `EntityStore.upsert`, a fact unavailable to request parsing.
+   Fixed: reject a space in `category` on every `msp_memory_upsert` call,
+   uniformly, at request parsing. `BL-MEMOS-115`'s own pre-ship data audit
+   still governs any already-stored row with a space in `category`; if any
+   exist, the audit's own output decides their disposition before ship.
+9. **Trust statement, precision correction (`DEC-MEMOS-71`, `DEC-MEMOS-59`
+   amended).** Fable proved the spawner sets the child's entire
+   environment explicitly (`spawn(..., { env: childEnv })`) — whoever
+   reaches MSP's stdin chose the signing key, so the signature defends
+   only against a party reaching an MSP process it did not itself spawn
+   or configure, not against that process's own choices. RKOI proved
+   `claimsFor` compares principals only when a `serviceKey` and an actual
+   `principalId` argument are both present; otherwise it signs whatever
+   `auth?.actor?.principalId ?? principalId ?? actor` resolves to, with
+   no refusal. Fixed: the vault-grant signer required on `BL-MEMOS-113`
+   must be **stricter** than `claimsFor` as shipped — it refuses outright,
+   mints nothing, whenever there is no authenticated actor at all, rather
+   than falling back to whatever argument the caller passed.
+10. **Shared verifier core is load-bearing (`DEC-MEMOS-72`, `DEC-MEMOS-57`
+    amended).** RKOI proved the *shipped* `verifyThreadGrant` rejects all
+    three of this design's new claim shapes outright — the extraction
+    into a shared, claim-set-agnostic core is not cosmetic, nothing new
+    can verify without it. The string/≤128-char claim type-check is
+    extended to thread grants too: RKOI proved the shipped verifier
+    accepts a thread grant whose `tenantId` is `5` or whose `principalId`
+    is `{x: 1}`, and confirmed zuri-ai's real caller always sends strings.
+    `vault-grant-guard.mjs` and `mintVaultId` join
+    `dependency-boundaries.test.mjs`'s decoupling assertions and §16's own
+    module inventory.
+
+Also fixed, not a new numbered decision: `msp_vault_resolve` gains
+`grant_unconfigured` as its own observable code (no oracle risk at this
+call's own entry point, since every grant check runs ahead of any
+`SELECT`); the grant's own tuple claims must equal the request's
+`access_context` byte-for-byte, closing RKOI's proof that a mismatched
+grant silently resolved a *different* principal's vault; the unauthenticated
+journal row's `payload_json` is specified in full, not left implicit; and
+the withdrawn "gateway signs, worker forwards" framing is removed from
+design §5.0.5's own claim-set bullet, which now points at §5.0.15 instead
+of restating its own version.
+
+**`DEC-MEMOS-42`/`43`/`46` are reopened** — not because their own DDL/
+suppression mechanics were wrong, but because prose outside design §5.0
+still stated them in a form §5.0 now contradicts (self-asserted
+`access_context` instead of a signed grant); see design §5, §8.5, §13,
+§14, §16, §19 for the corrected cross-references. `DEC-MEMOS-63..73` are
+new. All are reopened, pending the owner's own re-confirmation. Full
+specification: `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.9b §5.0
+(the sole normative source); `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md`,
+this same revision.
 
 ## Context
 
@@ -1681,17 +1866,33 @@ RKOI-review-response round below, were confirmed by the owner on
     until it is updated (`BL-MEMOS-113`, decision 48) — confirmed safe by
     reading that function's source, not assumed. — *confirmed by the owner,
     2026-09-16.* (design §5.3).
-42. **DEC-MEMOS-42, `allow_passport` gating is safe by default.**
-    zuri-ai's shipped `authorizationFacts()` does not send `allow_passport`
-    at all; MSP treats its absence, or any value other than the literal
-    `true`, identically to `false` — no passport vault provisioned or
-    returned. The episodic (`principal_private`) vault, by contrast,
-    resolves and is lazily provisioned on every well-formed call, gated
-    by no flag — matching the design's own tier table ("this principal's
-    turns with this agent in this workspace," every turn). — *confirmed
-    by the owner, 2026-09-16.* (design §5.3, §5.5).
-43. **DEC-MEMOS-43, the API-009 `access_context` shape.** One flat,
-    snake_case object (`tenant_id`, `principal_id`, `agent_id`?,
+42. **DEC-MEMOS-42, `allow_passport` gating is safe by default. REOPENED
+    (RKOI C4/Fable W6, 2026-09-16 — prose describing a withdrawn mechanism
+    as current): the request-level `authorization.allow_passport` boolean
+    below is withdrawn.** The current gate is a **grant claim**,
+    `allowPassport` (camelCase, signed, verified against
+    `MSP_THREAD_SERVICE_KEY`/keyring) — not a self-asserted request field
+    zuri-ai's `authorizationFacts()` would send or omit. The episodic
+    (`principal_private`) vault's own resolution rule is unaffected:
+    gated on a valid grant being present at all (design §5.0.5), not on
+    `allowPassport` specifically, and still lazily provisioned per call.
+    Retained verbatim as history, pending owner re-confirmation of the
+    corrected mechanism, not of the text below: zuri-ai's shipped
+    `authorizationFacts()` does not send `allow_passport` at all; MSP
+    treats its absence, or any value other than the literal `true`,
+    identically to `false` — no passport vault provisioned or returned.
+    — *pending owner re-confirmation, 2026-09-16* (design §5.0.5, §5.0.9).
+43. **DEC-MEMOS-43, the API-009 `access_context` shape. REOPENED (RKOI
+    C4/Fable W6, 2026-09-16): the self-asserted, unsigned object below is
+    withdrawn.** The current mechanism is a signed `access: {grant,
+    signature}` field, verified against a vault grant (design §5.0.5), not
+    a flat snake_case object trusted as sent. The two structural findings
+    below survive unchanged: mandatory only for a principal-vault-type
+    target (now determined by the resolved vault's own `vault_type`, not
+    by the field's mere presence); `msp_memory_links_create` still needs
+    no independent second check for its two endpoints. Retained verbatim
+    as history, pending owner re-confirmation of the corrected mechanism:
+    one flat, snake_case object (`tenant_id`, `principal_id`, `agent_id`?,
     `workspace_id`?, `allow_passport`?), reusing `msp_vault_resolve`'s own
     field names so a caller can share one object across both tool
     families; mandatory only when the target vault (or, for
@@ -1701,8 +1902,8 @@ RKOI-review-response round below, were confirmed by the owner on
     vault. `msp_memory_links_create` needs no independent second check
     for its two endpoints — the pre-existing WP-17 same-vault refusal
     (`migrations/0006_links.sql`) already guarantees both endpoints share
-    one vault before this amendment's logic ever runs. — *confirmed by the
-    owner, 2026-09-16.* (design §5.1).
+    one vault before this amendment's logic ever runs. — *pending owner
+    re-confirmation, 2026-09-16* (design §5.0.6).
 44. **DEC-MEMOS-44, error-code vocabulary for the amendment — corrected
     (RKOI PH-MEMOS-5 review round 1, CRITICAL 1); REOPENED and revised a
     second time (RKOI PH-MEMOS-5 code review round 1, CRITICAL,
@@ -1740,17 +1941,30 @@ RKOI-review-response round below, were confirmed by the owner on
     governs `msp_context_audit`'s denied-row case, corrected to route
     through KIN's shipped `bd47594`'s own `cache_id`-dependent branching
     rather than always answering the quiet shape — see decision 54's own
-    revision.** — *pending owner re-confirmation, 2026-09-16.* (design
-    §5.0.6, §5.0.13).
+    revision.** **REOPENED a fourth time (RKOI/Fable second parallel review
+    of `763b4f4`/`bf84722`, 2026-09-16): the collapse rule is widened to
+    name every failure mode explicitly — `grant_unconfigured`, a nonce
+    missing or replayed, and a claim that fails the string/≤128-char
+    type-check all collapse identically, closing RKOI's proof that
+    narrowing required claims by vault type let a caller distinguish
+    `principal_private` from `principal_passport` targets by which claim
+    error fired (`DEC-MEMOS-64`). `vault_scope_denied` is confirmed
+    genuinely broadened exactly once — a present, mismatched grant on a
+    `global_private` target — correcting this entry's own earlier
+    "unbroadened" framing (`DEC-MEMOS-65`).** — *pending owner
+    re-confirmation, 2026-09-16.* (design §5.0.6, §5.0.13).
 45. **DEC-MEMOS-45, `msp_memory_decay_tick`'s `pinned` field.** The
     response gains `pinned: boolean`, read from the target vault's own
     `decay_policy` column — `true` only for `principal_passport`. When
     `true`, `evaluated`/`transitioned` are always `0`/`[]` regardless of
     `dry_run`, a distinct statement from `dry_run`'s own
     computed-but-not-persisted contract, never conflated with it. —
-    *confirmed by the owner, 2026-09-16.* (design §5.1).
+    *confirmed by the owner, 2026-09-16.* (design §5.0.6).
 46. **DEC-MEMOS-46, scoped `contexts` receipts — corrected (RKOI
-    PH-MEMOS-5 review round 1, CRITICAL 3).** `tenant_id`/`principal_id`,
+    PH-MEMOS-5 review round 1, CRITICAL 3). REOPENED, not superseded
+    (RKOI C4/Fable W6, 2026-09-16): the schema/`include_payload` mechanics
+    below still hold; what this entry omits is that the read side now
+    requires a grant.** `tenant_id`/`principal_id`,
     both nullable, added by a plain `ALTER TABLE` (no rebuild —
     `contexts` is not FK-referenced by any other table); both-or-neither
     is enforced at the contracts layer (`context-scope-guard.mjs`), not a
@@ -1758,12 +1972,16 @@ RKOI-review-response round below, were confirmed by the owner on
     precedent for an app-layer-only cross-column invariant.
     `include_payload` — a field `msp_context_diff` alone carries — is
     refused for a scoped row unconditionally on `msp_context_diff`, even
-    given a correctly-matching `access_context` — it is not a second read
+    given a correctly-matching grant — it is not a second read
     path around the entity-level checks decision 43 already adds.
     `msp_context_audit`/`msp_context_replay` need no equivalent
     suppression, since neither exposes any payload field at all (the
-    prior text wrongly named all three tools). — *confirmed by the owner,
-    2026-09-16.* (design §5.4, §12.4.1).
+    prior text wrongly named all three tools). **Not stated here, and
+    genuinely new (`DEC-MEMOS-56`): `msp_context_diff`/`audit`/`replay`
+    each now require a valid vault grant to read a scoped row at all — a
+    self-asserted `access_context` is no longer sufficient on the read
+    side, only on `msp_context_resolve`'s write.** — *pending owner
+    re-confirmation, 2026-09-16* (design §5.0.7, §5.0.12).
 47. **DEC-MEMOS-47, the API-009 contract file's own edit is deferred to
     implementation time.** This design pass fully specifies the
     `access_context` amendment's content (decision 43–45) but does not
@@ -2135,22 +2353,28 @@ RKOI-review-response round below, were confirmed by the owner on
 55. **DEC-MEMOS-55, new (RKOI/Fable joint review, CRITICAL, 2026-09-16 —
     see the revision note above) — the `msp_vault_resolve` journal-receipt
     leak, and `msp_memory_links_create`'s vault-id-bearing refusal
-    message, both corrected.** `msp_vault_resolve`'s journal entry
-    (`actor: "principal_hmac:" + ...`; `ref: principalPrivateVault.vault_id`;
-    plaintext `{tenant_id, agent_id, workspace_id, ...}` payload) is closed
-    as a direct, verified consequence of `DEC-MEMOS-50`'s fifth revision,
-    not by changing `ref`/payload shape — both stay exactly as specified,
-    since a separate random receipt id or an excised payload tuple were
-    considered and rejected as redundant once `vault_id` itself is keyed,
-    at a real cost to an operator's ability to correlate a journal entry
-    to the vault it resolved. `msp_memory_links_create`'s pre-existing
-    cross-vault `assertVaultScope` refusal (unchanged mechanism, case 3 of
+    message, both corrected. REOPENED, corrected a second time (RKOI
+    C4/Fable W6, 2026-09-16): the "once `vault_id` itself is keyed"
+    justification below is withdrawn — `vault_id` is random
+    (`DEC-MEMOS-50`, revised a seventh time), not keyed, as of the same
+    round this decision's own text already claims to postdate.** The
+    receipt is closed unconditionally because a random `vault_id` carries
+    no preimage relationship to `principal_id` for any receipt field to
+    leak in the first place — not "closed while the key stays secret," the
+    framing a keyed id would have required. `msp_vault_resolve`'s journal
+    entry (`actor: "principal_hmac:" + ...`; `ref: principalPrivateVault.vault_id`;
+    plaintext `{tenant_id, agent_id, workspace_id, ...}` payload) keeps
+    its exact shape — a separate random receipt id or an excised payload
+    tuple were both considered and rejected as redundant, at a real cost
+    to an operator's ability to correlate a journal entry to the vault it
+    resolved. `msp_memory_links_create`'s pre-existing cross-vault
+    `assertVaultScope` refusal (unchanged mechanism, case 3 of
     `DEC-MEMOS-43`'s branch set) stops interpolating the two actual
     `vault_id` values into its message — a caller naming two `entity_id`s
     in different vaults learns only that they differ, closing a narrow
     residual for a caller who already holds one real `entity_id` and
-    guesses another. — *pending owner confirmation, 2026-09-16.* (design
-    §5.3, §5.1).
+    guesses another. — *pending owner re-confirmation, 2026-09-16.*
+    (design §5.0.5, §5.0.6).
 56. **DEC-MEMOS-56, new (RKOI/Fable second parallel review, 2026-09-16) —
     grant requirement on the four context tools, decided.** Design §5.4
     was never wired to any grant requirement. `msp_context_resolve`'s
@@ -2514,6 +2738,22 @@ A separate list from `RSK-MEMOS-01` above — these are about the new
   the allowlist itself must be extended to forward both before a
   vault-grant signer or a principal-vault resolve can work at all in this
   deployment's real, signer-is-requester-is-spawner topology.
+- **New, this round (RKOI C4/Fable W6, `DEC-MEMOS-68`/`71`, 2026-09-16) —
+  two further `BL-MEMOS-113` requirements, not separate items.** (1)
+  zuri-ai's shipped grant signer sends no `nonce` claim on a thread grant
+  today either — it must add nonce generation (≥128 random bits, ≤128
+  characters) as part of this same code change, for both thread and vault
+  grants. (2) The vault-grant signer must refuse to mint a grant at all
+  when there is no authenticated actor — `claimsFor`'s own shipped
+  behavior falls back to signing whatever `principalId`/`actor` argument
+  the caller passed when no authenticated actor is present, which is not
+  strict enough for a vault grant (design §5.0.15).
+- **New, this round (RKOI C4/Fable W6, `DEC-MEMOS-66`, 2026-09-16) —
+  `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED` joins `BL-MEMOS-113`'s own env-var
+  forwarding list**, alongside `MSP_THREAD_SERVICE_KEY`/`_KEYRING` and
+  `MSP_IDENTITY_HMAC_KEY` — required only once a deployment turns the
+  `global_private` gate on (`BL-MEMOS-114`, default off); until then this
+  is a no-op for zuri-ai, which never uses `global_private`.
 - **`access_context` on `msp_memory_*` calls remains `BL-MEMOS-106`'s own
   item, unchanged by this ADR** — already tracked in the plan, deferred to
   `PH-MEMOS-8`.
@@ -3061,16 +3301,16 @@ numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-
 - [x] 39. Never-mountable enforcement is two `vault_mounts` triggers plus a JS-layer `mountVault` refusal; a separate `vaults` identity-pin trigger permits only the legacy backfill and the future erasure transition (DEC-MEMOS-39).
 - [ ] 40. **REOPENED (owner-directed course correction plus RKOI/Fable joint review round 2, CRITICAL, 2026-09-16), pending owner re-confirmation.** `msp_vault_resolve`'s *legacy* half stays unsigned, matching zuri-ai's shipped `msp-vault-resolver.js` exactly, on the same stdio-only trust boundary already accepted for API-011 — unchanged. The *principal* half now requires a valid, signed vault grant (reusing API-011's own `verifyThreadGrant` primitive and keyring, a new claim set) before `principalPrivateVaultId`/`principalPassportVaultId` resolve, provision, or return at all; every other `access_context`-gated path (the nine `msp_memory_*` tools on principal vaults, the two scoped context tools) requires the identical grant, never a self-asserted `access_context` alone. Closes the live victim-read Fable proved: resolve a guessed `principal_id`, then read it via `msp_memory_list` with a matching self-asserted `access_context` (DEC-MEMOS-40, revised).
 - [x] 41. `msp_vault_resolve`'s response is additive-only; legacy fields unchanged in shape and casing, new principal-vault fields camelCase and safely dropped by the shipped, unmodified client (DEC-MEMOS-41).
-- [x] 42. `allow_passport` absent or not exactly `true` is a safe default (no passport vault provisioned or returned); the episodic vault resolves on every well-formed call with no gating flag (DEC-MEMOS-42).
-- [x] 43. API-009's `access_context` is one flat, snake_case object reusing `msp_vault_resolve`'s own field names, mandatory only for a principal-vault-type target; entity-id-only tools resolve entity → vault first, and `links_create` needs no independent second check (DEC-MEMOS-43).
+- [ ] 42. **REOPENED (RKOI C4/Fable W6, 2026-09-16), pending owner re-confirmation.** `allowPassport` is a signed **grant claim**, not a self-asserted `authorization.allow_passport` request field — absent or not exactly `true` is still a safe default (no passport vault provisioned or returned); the episodic vault's resolution is gated on a valid grant being present at all, not on this flag specifically (DEC-MEMOS-42, revised).
+- [ ] 43. **REOPENED (RKOI C4/Fable W6, 2026-09-16), pending owner re-confirmation.** API-009 gains a signed `access: {grant, signature}` field verified against a vault grant, not a self-asserted, unsigned `access_context` object — mandatory only for a principal-vault-type target, determined by the resolved vault's own `vault_type`; entity-id-only tools still resolve entity → vault first, and `links_create` still needs no independent second check (DEC-MEMOS-43, revised).
 - [ ] 44. **REOPENED (RKOI PH-MEMOS-5 code review round 1, CRITICAL, 2026-09-16 — vault-isolation existence oracle), pending owner re-confirmation.** `vault_scope_denied` is **not** broadened by this amendment — none of the nine `msp_memory_*` tools ever produced it. `access_context_required`/`access_context_denied` are retired as producible codes for these tools: any non-`ok` outcome now answers `not_found`, byte-identical to a nonexistent `vault_id`/`entity_id` — **with per-endpoint ordering corrected on `msp_memory_links_create` (RKOI/Fable joint review round 2, CRITICAL, 2026-09-16): `from` is fully resolved and authorized before `to` is looked up at all, closing a per-slot leak the naive "resolve both, compare" order left** (DEC-MEMOS-44, revised a third time).
 - [x] 45. `msp_memory_decay_tick` gains a `pinned` response field; a `principal_passport` vault always reports zero transitions regardless of `dry_run` (DEC-MEMOS-45).
-- [x] 46. Scoped `contexts` rows add nullable `tenant_id`/`principal_id` via a plain `ALTER TABLE`, both-or-neither enforced at the contracts layer; `include_payload` is refused unconditionally for a scoped row on `msp_context_diff` only — `audit`/`replay` expose no payload field (DEC-MEMOS-46, corrected RKOI PH-MEMOS-5 review round 1).
+- [ ] 46. **REOPENED (RKOI C4/Fable W6, 2026-09-16), pending owner re-confirmation — schema/suppression mechanics unchanged, read-side grant requirement newly stated.** Scoped `contexts` rows add nullable `tenant_id`/`principal_id` via a plain `ALTER TABLE`, both-or-neither enforced at the contracts layer; `include_payload` is refused unconditionally for a scoped row on `msp_context_diff` only — `audit`/`replay` expose no payload field; `diff`/`audit`/`replay` each now require a valid vault grant to read a scoped row, per `DEC-MEMOS-56` (DEC-MEMOS-46, corrected RKOI PH-MEMOS-5 review round 1).
 - [x] 47. The live edit to `docs/API-009-Persistent-Memory-Contract.md` is deferred to `BL-MEMOS-063`'s own implementation-time commit, not part of this design pass (DEC-MEMOS-47).
 - [x] 48. New cross-repo item `BL-MEMOS-113`: zuri-ai's `validateVaultSet` must be updated to read and forward the new principal-vault response fields before they are usable in production, deferred to PH-MEMOS-8 (DEC-MEMOS-48).
-- [ ] 49. **REOPENED (RKOI PH-MEMOS-5 code review round 1, CRITICAL, 2026-09-16 — vault-isolation existence oracle), pending owner re-confirmation.** The `access_context` gate is nine new call sites in `memory-handlers.mjs` (plus `links_create`'s tenth) via `classifyPrincipalAccess` built on one row-taking branch set (`#isVaultRowAccessibleTo`) that refuses an erased vault's `status` before any tuple comparison, never a reuse of `assertVaultScope`'s existing call site, which stays unchanged. `classifyPrincipalAccess`'s own three-way outcome is unchanged, but its contracts-layer translation no longer calls `assertAccessContext`/throws `AccessContextRequiredError`/`AccessContextDeniedError` — a non-`ok` outcome now raises the tool's own existing `not_found` (DEC-MEMOS-49, revised a third time).
+- [ ] 49. **REOPENED (RKOI PH-MEMOS-5 code review round 1, CRITICAL, 2026-09-16 — vault-isolation existence oracle), pending owner re-confirmation.** The `access_context` gate is nine new call sites in `memory-handlers.mjs` (plus `links_create`'s tenth) via `classifyPrincipalAccess` built on one row-taking branch set (`#isVaultRowAccessibleTo`) that refuses an erased vault's `status` before any tuple comparison, never a reuse of `assertVaultScope`'s existing call site, which stays unchanged. `classifyPrincipalAccess`'s own three-way outcome is unchanged, but its contracts-layer translation no longer calls `assertAccessContext`/throws `AccessContextRequiredError`/`AccessContextDeniedError` — a non-`ok` outcome now raises the tool's own existing `not_found`. **Revised a fourth time (RKOI/Fable second parallel review of `763b4f4`/`bf84722`, 2026-09-16, stale against `DEC-MEMOS-64`/`65`): the collapse now names `grant_unconfigured` and nonce failures explicitly among the failure modes that fold into `not_found`; a legacy target ignores any attached grant outright rather than being evaluated against it; a `global_private` target's grant is checked before, not through, `isVaultAccessibleTo`'s own mount short-circuit** (DEC-MEMOS-49, revised a fourth time).
 - [ ] 54. **New (RKOI PH-MEMOS-5 code review round 1, 2026-09-16), pending owner confirmation.** The same not-found collapse extends to `msp_vault_mount` (a principal `vault_id` is indistinguishable from unknown — `DEC-MEMOS-39` corrected in place, **and the ordering itself corrected a second time, RKOI PH-MEMOS-5 code review round 2, CRITICAL, 2026-09-16: existence-and-type now precedes `access_mode` validity at both the domain and the transport-handler layer, verified against the real, shipped code**) and to `msp_context_diff`/`audit`/`replay` (vocabulary consistency; `context_id` is a random UUID, not offline-guessable — **`msp_context_diff`'s own per-row ordering corrected likewise: `base_context_id` fully clears before `target_context_id` is touched, and `msp_context_audit` is ordered ahead of KIN's already-committed `bd47594` ownership-check fix**); the residual timing side channel is re-pointed at `msp_vault_resolve` itself (measured, not merely accepted) and tracked as `RSK-MEMOS-15` (DEC-MEMOS-54).
-- [ ] 50. **REOPENED and revised a sixth time (RKOI/Fable joint review round 2, CRITICAL, 2026-09-16), pending owner re-confirmation — supersedes the keyed mechanism below in full.** `vault_id` for `principal_private`/`principal_passport` is now **random** (`vaultRef(randomUUID())`), carrying no function of the owner tuple at all, keyed or otherwise — round one's two grounds for rejecting a random id are both now false (keying already broke GoVibe matching; a key rotation already resets `provision_epoch` to `0` for a later generation), and random removes three residuals keying left: a permanent, un-rotatable key-leak inversion; a real `stableId`-preimage NUL-byte-join collision (confirmed at the byte level against the real, shipped `domain/ids.mjs:15` — a literal `0x00`, not the space a plain text read renders it as); and a dictionary not bound to any tenant. Random still wins on the first and third alone, with the NUL-byte point set aside entirely. `provision_epoch`, the epoch-probe loop and `PROVISION_EPOCH_PROBE_LIMIT` are removed from `0011` entirely. The concurrent-race backstop is now primarily the §12.4 partial unique index (`SQLITE_CONSTRAINT_UNIQUE`), proven the live path by RKOI's own key-rotation race probe; mapped to the identical `vault_provision_conflict`, still with no internal retry. `RSK-MEMOS-14` is closed outright, not merely narrowed. **Superseded (round five, retained as provenance): `vault_id`'s `principal_id` component was `HMAC-SHA256(MSP_IDENTITY_HMAC_KEY, "vault-id:" + principal_id)`, computed in the handler — closed `RSK-MEMOS-14`'s brute-force exposure only while the key stayed secret** (DEC-MEMOS-50, revised a sixth time).
+- [ ] 50. **REOPENED and revised a sixth time (RKOI/Fable joint review round 2, CRITICAL, 2026-09-16), pending owner re-confirmation — supersedes the keyed mechanism below in full.** `vault_id` for `principal_private`/`principal_passport` is now **random** (`vaultRef(randomUUID())`), carrying no function of the owner tuple at all, keyed or otherwise — round one's two grounds for rejecting a random id are both now false (keying already broke GoVibe matching; a key rotation already resets `provision_epoch` to `0` for a later generation), and random removes three residuals keying left: a permanent, un-rotatable key-leak inversion; a real `stableId`-preimage NUL-byte-join collision (confirmed at the byte level against the real, shipped `domain/ids.mjs:15` — a literal `0x00`, not the space a plain text read renders it as); and a dictionary not bound to any tenant. Random still wins on the first and third alone, with the NUL-byte point set aside entirely. `provision_epoch`, the epoch-probe loop and `PROVISION_EPOCH_PROBE_LIMIT` are removed from `0011` entirely. The concurrent-race backstop is now primarily the §12.4 partial unique index (`SQLITE_CONSTRAINT_UNIQUE`), proven the live path by RKOI's own key-rotation race probe; mapped to the identical `vault_provision_conflict`, still with no internal retry. `RSK-MEMOS-14` is closed outright, not merely narrowed. **Superseded (round five, retained as provenance): `vault_id`'s `principal_id` component was `HMAC-SHA256(MSP_IDENTITY_HMAC_KEY, "vault-id:" + principal_id)`, computed in the handler — closed `RSK-MEMOS-14`'s brute-force exposure only while the key stayed secret**. **Revised a seventh time (RKOI/Fable second parallel review of `763b4f4`/`bf84722`, 2026-09-16, stale — this row never named the helper's actual current form): `mintVaultId()`, not `vaultRef(randomUUID())` — `vaultRef` lives in `msp-contracts` and cannot be imported into `msp-core` without breaking package layering (`DEC-MEMOS-60`); separately, `#provisionPrincipalVault`'s own transaction wrapper had a trailing `}).immediate()();` that called its own resolved result as a function, throwing on every successful call — fixed to `}).immediate();` (`DEC-MEMOS-63`)** (DEC-MEMOS-50, revised a seventh time).
 - [ ] 55. **New (RKOI/Fable joint review round 1, CRITICAL, 2026-09-16), pending owner confirmation, strengthened by round six above.** `msp_vault_resolve`'s journal receipt no longer leaks `principal_id` via its `ref` — **unconditionally, not merely while `MSP_IDENTITY_HMAC_KEY` stays secret**, since round six removes the preimage relationship rather than keying it — not by changing `ref`/payload shape; `msp_memory_links_create`'s cross-vault refusal message no longer names the two real `vault_id` values, and its own **per-endpoint ordering is corrected** (decision 44, above) so the message's removal is not the only thing closing that leak (DEC-MEMOS-55).
 - [ ] 51. **REOPENED and narrowed (RKOI/Fable second parallel review, 2026-09-16, RKOI W9), pending owner re-confirmation.** `msp_context_resolve` gains a real, specified `access_context` write path (unaffected, stands). `MSP_IDENTITY_HMAC_KEY` is required only for a `msp_vault_resolve` call that actually resolves/provisions the principal half — no longer "mandatory for the whole tool" — since `DEC-MEMOS-40`'s own revision means the principal half no longer resolves unconditionally on every well-formed call (DEC-MEMOS-51, narrowed).
 - [x] 52. `msp_memory_promote` is explicitly excluded from the `access_context` branch set; the "no special-casing" claim about its eligibility is withdrawn as false about its actual mechanics (DEC-MEMOS-52).
@@ -3082,9 +3322,20 @@ numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-
 - [ ] 60. **New (RKOI, RKOI/Fable second parallel review, 2026-09-16), pending owner confirmation.** The id helper is a new `msp-core` primitive, `mintVaultId()` (`vault_<uuid>`), not `vaultRef(randomUUID())` — `vaultRef` lives in `msp-contracts` and importing it into `msp-core` breaks package layering (DEC-MEMOS-60).
 - [ ] 61. **New (both reviewers, RKOI/Fable second parallel review, 2026-09-16), pending owner confirmation.** `mountId`'s NUL-injection gap is fixed now — control-character rejection on `workspace_id`/`mount_alias` at `msp_vault_mount`'s request-parsing layer, no stored-id change (DEC-MEMOS-61).
 - [ ] 62. **New (RKOI, Fable, `BL-MEMOS-114`, RKOI/Fable second parallel review, 2026-09-16), pending owner confirmation.** `global_private` gate: a deployment setting makes a matching grant mandatory, default off (GoVibe's usage unverified, stated as the actual reason); a present-but-mismatched grant is always refused regardless of the setting (DEC-MEMOS-62).
+- [ ] 63. **New (RKOI/Fable second parallel review of `763b4f4`/`bf84722`, 2026-09-16), pending owner confirmation.** `#provisionPrincipalVault`'s trailing `}).immediate()();` called its own already-resolved result as a function, throwing `TypeError` on every successful provision, after the row committed — fixed to `}).immediate();` (DEC-MEMOS-63).
+- [ ] 64. **New, pending owner confirmation.** One refusal rule for a principal-type target on the nine `msp_memory_*` tools: every grant failure mode collapses to the identical `not_found`, closing RKOI's proof that a grant missing only its nonce, against a real vault, answered differently from the identical grant against an unknown `vault_id` (DEC-MEMOS-64).
+- [ ] 65. **New, pending owner confirmation.** A legacy target ignores any attached grant outright; a `global_private` target's grant is checked directly against the row's own `agent_id`, before and independently of `isVaultAccessibleTo`'s own mount short-circuit, closing RKOI's proof that a mounted `global_private` vault let a mismatched grant through (DEC-MEMOS-65).
+- [ ] 66. **New, pending owner confirmation.** `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED`, when on, gates `msp_memory_*`, `msp_memory_promote`, and `msp_vault_status`'s `agentId` branch alike — Fable proved the latter two provision `global_private` ungated today (DEC-MEMOS-66).
+- [ ] 67. **New, pending owner confirmation.** `msp_vault_resolve`'s outer transaction is `.immediate()` only when `access` is present and verified; a legacy-only call keeps its deferred transaction, closing Fable's measured 439ms contention regression (DEC-MEMOS-67).
+- [ ] 68. **New, pending owner confirmation.** A grant's nonce is consumed inside the same write transaction as the mutation it guards, after verification/classification returns `ok`, never in a separate transaction, closing both reviewers' proof that a rolled-back write could strand an honest retry as `grant_replayed` (DEC-MEMOS-68).
+- [ ] 69. **New, pending owner confirmation.** The forced-collision test is rewritten to actually reach the `PRIMARY KEY`-retry and retries-exhausted paths; `PROVISION_ID_MINT_RETRY_LIMIT = 5` is restated in design §5.0, and exhausting it throws the typed `VaultProvisionConflictError`, never the raw driver error (DEC-MEMOS-69).
+- [ ] 70. **New, pending owner confirmation.** The `category`-space rejection applies at request parsing on every `msp_memory_upsert` call uniformly — "creation only" was never coherent, since request parsing cannot distinguish creation from append (DEC-MEMOS-70).
+- [ ] 71. **New, pending owner confirmation.** The trust statement is restated precisely: the spawner sets the child's entire environment, so the signature defends only against a party reaching an MSP process it did not itself spawn/configure; `claimsFor` compares principals only when a `serviceKey` and an actual `principalId` argument are both present — the vault-grant signer on `BL-MEMOS-113` must be stricter, refusing outright with no authenticated actor (DEC-MEMOS-71).
+- [ ] 72. **New, pending owner confirmation.** The shared verifier core is load-bearing, not cosmetic — the shipped `verifyThreadGrant` rejects all three new claim shapes outright; the claim type-check is extended to thread grants too, since the shipped verifier accepts a non-string `tenantId`/`principalId` today (DEC-MEMOS-72).
+- [ ] 73. **New, pending owner confirmation.** `msp_vault_resolve` gains `grant_unconfigured` as its own observable code; the grant's own tuple claims must equal the request's `access_context` byte-for-byte, closing RKOI's proof that a mismatched grant silently resolved a different principal's vault (DEC-MEMOS-73).
 
 Overturning any row above reopens the corresponding section of
-`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.8b §5.0, now the
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.9b §5.0, now the
 sole normative source (see that section's own status line).
 
 ## Evidence and implementation map
@@ -3102,6 +3353,7 @@ sole normative source (see that section's own status line).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.29b | 2026-09-16 | proposed | **Answers RKOI's and Fable's second parallel review of consolidated design §5.0 (`763b4f4`/`bf84722`) — 4 critical/3 warnings between them; both confirmed the consolidation was right and the mechanics hold when actually run, on issues neither round's own testing reached.** `DEC-MEMOS-42`/`43`/`46` reopened — not because their DDL/suppression mechanics were wrong, but because prose outside design §5.0 still stated them in a form §5.0 now contradicts. New `DEC-MEMOS-63..73`: the `}).immediate()();` trailing-call bug fixed; one refusal rule collapsing every principal-target grant failure to `not_found`; a legacy target's grant ignored outright, a `global_private` target's grant checked before its own mount short-circuit; `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED` widening the gate to `msp_memory_promote`/`msp_vault_status`; `.immediate()` made conditional on a present, verified grant; the grant nonce consumed inside the same write transaction as the mutation; the forced-collision test rebuilt to actually reach both retry paths; the `category`-space rejection applied uniformly; the trust statement restated to the spawn boundary and `claimsFor`'s actual conditional comparison; the shared verifier core documented as load-bearing. Checklist items 42, 43, 46 newly unchecked; 63–73 added, unchecked. `DEC-MEMOS-49`/`50` each revised a further time (fourth/seventh) to match; `DEC-MEMOS-55` corrected a second time (no longer justifies itself by a keyed id); the cross-repo `BL-MEMOS-113` section gains the nonce-generation and no-authenticated-actor requirements, plus the new env var. Mirrored in `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.9b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.30b. New ids: `DEC-MEMOS-63..73`. No id reused. | working-tree | ATHER |
 | 0.1.28b | 2026-09-16 | proposed | **Method change: answers RKOI's and Fable's second parallel review of commit `540250c` (RKOI 5 critical, Fable 2) — neither could break the mechanism itself, both found the same six-round-running gap: a fix landing in some places and not others.** `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.8b §5.0 is now the sole normative specification of PH-MEMOS-5; this ADR's decisions point at it rather than restating it. `DEC-MEMOS-40`/`44`/`49`/`50`/`54`/`55` each revised in place a further time (race fix via `.immediate()`, `msp_context_audit` ordering matched to `bd47594`'s real branching, ungranted-vs-invalid-grant `msp_vault_resolve` split, `vault_id`'s mechanism corrected to state random/`mintVaultId()` throughout rather than the stale keyed-HMAC text this document still carried); `DEC-MEMOS-51` narrowed (`MSP_IDENTITY_HMAC_KEY` scoped to calls that actually resolve a principal vault, RKOI W9). New `DEC-MEMOS-56..62`: context-tool grant requirement; vault-/context-grant claim set checked against the shipped `verifyThreadGrant` (type-checked tuple claims, `policyRevision` thread-only); nonce requirement via the shared `grant_nonces` table, closing RKOI's concrete upsert-after-forget replay; trust statement rewritten to zuri-ai's real signer-is-requester-is-spawner topology, with the vault-grant signer required to derive claims from authenticated session state; the id helper corrected to a new `msp-core` `mintVaultId()`, not `vaultRef`; `mountId`'s NUL-injection fix; `global_private`'s gate fully specified (default-off setting, always-on mismatch refusal). Checklist items 40, 44, 49, 50, 51, 54, 55 stay unchecked; 56–62 added, unchecked. Mirrored in `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.8b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.29b. New ids: `DEC-MEMOS-56..62`. No id reused. | working-tree | ATHER |
 | 0.1.27b | 2026-09-16 | proposed | **Corrects two errors in v0.1.26b's own "RKOI/Fable joint review round 2" revision note, caught by the coordinator before submission for review — edited in place, same session.** (1) `stableId`'s separator (`packages/msp-core/src/domain/ids.mjs:15`) is a literal NUL byte, confirmed via ripgrep's own binary-file detection on the real file — the prior revision wrongly called it a plain space, misled by a text-rendering artifact; `ids.mjs`'s header comment claiming NUL-joining is correct. `computeEntityId`'s own separator (`entity-store.mjs:40`) is a genuine space, unaffected — Fable NOTE 1 (`stableId`) and NOTE 2 (`computeEntityId`) are separate findings against separate functions. The "spaces are common, more exploitable" framing is withdrawn; random `vault_id` is confirmed to still win without it, on the key-leak-permanence and non-tenant-binding points alone, stated explicitly. Legacy single-field `stableId` callers checked and found not exposed to this collision class; `mountId`'s own three-field call (`vault-registry.mjs:293`) is, named as a new, unfixed residual. (2) The zuri-ai caller premise underlying `DEC-MEMOS-40`'s revision is now verified directly against the actual extracted source (found at the Temp-directory scratchpad path a repo-root-only search had missed) — confirmed exactly as claimed: no grant sent, `validateVaultSet` drops the principal fields, no `allow_passport`, the memory port touches only `workspacePrivateVaultId`. The owner-directed scope widening is confirmed genuine. Corrected in the "RKOI/Fable joint review round 2" revision note, the matching checklist rows (40, 50), and the "Cross-repo changes PH-MEMOS-5 requires of zuri-ai" section. Mirrored in `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.7b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md`. No id reused; no decision's substance changes. | working-tree | ATHER |
 | 0.1.23b | 2026-09-16 | proposed | Owner confirmed DEC-MEMOS-36..53 ("ตามนั้น"), answering a summary that listed three open questions from decision 53; status-only change, no decision text altered. Checklist rows 36–53 checked; status summary and confirmation checklist intro updated to match. Two of the three raised questions carry dispositions, recorded without altering any decision: the `scrypt` work factor is confirmed as specified — `BL-MEMOS-076` measures real wall-clock cost first and tunes from the measurement, so `N=16384, r=8, p=1` is a starting point, not a frozen final value (noted on decision 53's own paragraph and checklist row). The third — whether domain separation and key versioning should extend to the journal's own `principalHmac` pseudonym and to room-ref hashing — was raised with no proposal attached and is **not** confirmed; it stays an open owner question, recorded in `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` §19 alongside the design's other remaining owner questions, not written into any decision as adopted. Mirrored in `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.3b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.25b. No id renumbered or reused. | working-tree | ATHER |
