@@ -1,7 +1,7 @@
 ---
-version: "0.9.1b"
+version: "0.9.2b"
 created_at: "2026-09-13T21:00:00+07:00,Claude Fable 5.1,working-tree"
-last_update: "2026-09-16T23:30:00+07:00,ATHER"
+last_update: "2026-09-16T23:45:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -14,7 +14,23 @@ attributes:
 
 ## สรุปภาษาไทย
 
-**ฉบับ 0.9.1b (ล่าสุด)**: RKOI PH-MEMOS-5 review รอบ 5 ปิดงาน (CLOSED, 0
+**ฉบับ 0.9.2b (ล่าสุด)**: New owner decision (PH-MEMOS-6 deliverable,
+not PH-MEMOS-5 — ไม่แตะ/ไม่บล็อก PH-MEMOS-5 ที่ RKOI อนุมัติให้ implement
+แล้ว): `erasure_receipts` เลิกเก็บ `principal_id` ดิบ — เปลี่ยนเป็น keyed
+HMAC (`MSP_IDENTITY_HMAC_KEY`, domain-separated จาก journal actor
+pseudonym) ต่อด้วย slow KDF (`scrypt`, per-row salt) เก็บคู่กับ
+`identity_key_version` ใหม่ (ต้องมี `MSP_IDENTITY_HMAC_KEY_VERSION`, และ
+`MSP_IDENTITY_HMAC_KEYRING` ใหม่สำหรับ retained historical key ตอน
+rotation) — **`DEC-MEMOS-53`, ใหม่, adopted default pending owner
+confirmation**, supersede เฉพาะครึ่ง storage ของ `DEC-MEMOS-28`
+(ครึ่ง permanence ไม่เปลี่ยน — receipt ยังถาวรและ immutable เหมือนเดิม).
+Migration ใหม่ `0013` (§12.5, vaults-shaped rebuild ของ `erasure_receipts`
+เอง, ไม่ใช่ additive — ต้อง drop+recreate สอง immutability trigger ของ
+ตารางนี้เอง). `RSK-MEMOS-14`'s "dominated by `erasure_receipts`" sentence
+ถูกจำกัดขอบเขตใหม่ (ไม่ใช่ปิดทั้งหมด — บอกตรงๆ ว่าเหลืออะไรที่ยัง
+re-identify ได้). Backlog ใหม่ `BL-MEMOS-076` (PH-MEMOS-6).
+
+**ฉบับ 0.9.1b**: RKOI PH-MEMOS-5 review รอบ 5 ปิดงาน (CLOSED, 0
 critical, 2 warnings ที่เป็นแก้ถ้อยคำอย่างเดียว) ต่อ v0.9.0b — กลไก
 provisioning ไม่แตะอีก แก้แค่ (1) ข้อความ trigger `trg_vaults_no_delete`
 ให้ตรงกับ sibling triggers ทุกตัว (`'<table> rows may never be deleted'`)
@@ -1048,17 +1064,29 @@ line above, now actually covers this case too). Accepted as a stated,
 quantified residual for this phase, not mitigated by it — revisit at
 PH-MEMOS-6 (`DEC-MEMOS-50`, §19).
 
-**Dominated by `erasure_receipts` (`DEC-MEMOS-28`), named directly rather
-than left implicit.** `migrations/0010_erasure_receipts.sql` (already
-merged, checksum-locked on `main`) stores every erasure's raw
-`tenant_id`/`principal_id` permanently and immutably
-(`trg_erasure_receipts_no_update`/`_no_delete`), so the measured cost
-above is the price of one path to re-identifying an erased principal, not
-the price of the exposure itself — that same re-identification is already
-reachable at zero cost via a direct `SELECT` against `erasure_receipts`,
-and a future PH-MEMOS-6 disposition that blanks `vaults.tenant_id`/
-`agent_id`/`workspace_id` would not, by itself, make an erased principal
-non-re-identifiable while `DEC-MEMOS-28` stands.
+**Was dominated by `erasure_receipts` (`DEC-MEMOS-28`); narrowed, not
+fully closed, by `DEC-MEMOS-53` (PH-MEMOS-6, §12.5) — stated precisely
+rather than left as a blanket "still dominated."** `migrations/
+0010_erasure_receipts.sql` (already merged, checksum-locked on `main`)
+used to store every erasure's raw `tenant_id`/`principal_id` permanently
+and immutably, reachable at zero cost via a direct `SELECT`, which made
+the `vault_id` brute-force cost above moot — a cheaper path already
+existed. `DEC-MEMOS-53`'s migration (`0013`, §12.5) replaces that raw
+column with a keyed-then-slow-derived `principal_hmac`, closing the
+*zero-cost* path specifically: with `MSP_IDENTITY_HMAC_KEY` (or the
+row's own recorded `identity_key_version`'s retained key) unknown, an
+attacker gains nothing from `erasure_receipts` at all, and even holding
+the key, matching a candidate id against a receipt now costs one `scrypt`
+evaluation per (candidate, row) pair, not a free `SELECT`. **This does
+not touch `vaults.vault_id`'s own unkeyed exposure at all** — the
+brute-force cost measured above, and the widened-but-unused
+`trg_vaults_update_guard` branch (b) (§12.4), are both exactly as
+`DEC-MEMOS-50`/round 4 left them; `DEC-MEMOS-53` closes only the
+`erasure_receipts`-side dominance this paragraph named, not the
+`vault_id`-side residual `RSK-MEMOS-14` was actually opened for. A future
+PH-MEMOS-6 disposition that also blanks `vaults.tenant_id`/`agent_id`/
+`workspace_id` (still unadopted, `BL-MEMOS-073`/`074`) remains the only
+thing that would close the `vault_id`-side path itself.
 
 **What does not go away: the journal actor pseudonym still depends on
 `MSP_IDENTITY_HMAC_KEY` staying configured, and a rotation still breaks
@@ -3993,9 +4021,20 @@ written since it is currently false):
   content (§11.1); an agent's own departure is an ordinary `left_at`
   close, not an erasure concern, and this tool never closes a
   `thread_agents` row.
-- `erasure_receipts` (new table, §12.3): insert the new receipt row,
-  carrying the raw `principal_id` (`DEC-MEMOS-28`) and the row counts
-  actually changed by every `UPDATE` above.
+- `erasure_receipts` (new table, §12.3, storage shape superseded in part
+  by `DEC-MEMOS-53`, §12.5, PH-MEMOS-6): insert the new receipt row,
+  carrying `principal_hmac`/`principal_hmac_salt`/`identity_key_version`
+  (§12.5's two-stage derivation, never the raw `principal_id` as of
+  `DEC-MEMOS-53`) and the row counts actually changed by every `UPDATE`
+  above. **The identity-key-configured check (`hmacPrincipal`'s own
+  ≥32-character bar) now gates the whole erasure transaction, not only
+  the post-commit journal write** — computing `principal_hmac` requires
+  `MSP_IDENTITY_HMAC_KEY`/`MSP_IDENTITY_HMAC_KEY_VERSION` inside the same
+  transaction that tombstones content, so an unconfigured deployment now
+  refuses the entire call atomically (nothing tombstoned, no receipt row)
+  instead of committing every content-table `UPDATE` and only failing
+  later at the separate journal-append step (§12.5's own correction to
+  this section's prior, DEC-MEMOS-28-era behavior).
 
 **Response (corrected — `threadPendingDeliveries` removed, no longer in
 scope, §11.1)**: `{ erasureReceiptId, principalId, tenantId,
@@ -4011,21 +4050,30 @@ tables_affected, replay }` — **no raw `principal_id`, no message/record
 content, nothing beyond aggregate counts and the caller-supplied
 idempotency key itself** (which is Tier-1-chosen, not derived from the
 principal's identity). This is distinct from `erasure_receipts` itself
-(§12.3), which **does** store the raw `principal_id` like every other
-content table's speaker/person columns (`DEC-MEMOS-28`) — W5's
-pseudonym rule is scoped to the journal specifically, not to every
-durable table, exactly as it already is for `thread_participants.speaker_id`
-today.
+(§12.3/§12.5), which, as of `DEC-MEMOS-53` (PH-MEMOS-6, superseding the
+storage half of `DEC-MEMOS-28`), stores a **keyed-then-slow-derived**
+`principal_hmac` — never the raw `principal_id`, and never the journal's
+own `principalHmac(principal_id)` value either (§12.5's own domain
+separation: reusing the journal's exact pseudonym as `erasure_receipts`'
+own stage-1 input would let anyone with ordinary journal-read access
+correlate the two directly, since the journal's pseudonym is displayed
+in plain text on every entry). W5's pseudonym rule stays scoped to the
+journal specifically, not to every durable table, exactly as it already
+is for `thread_participants.speaker_id` today — `erasure_receipts` now
+follows a *third*, stricter convention of its own (§12.5), neither the
+journal's fast pseudonym nor the pre-`DEC-MEMOS-53` raw column.
 
 **No interaction with the keyring, transport pre-scan, or migration
 lock.** The request body is an ordinary flat object (`principal_id`,
 `idempotency_key`, `access`) validated by the existing ajv-based
 `thread-schema.mjs` contract, the same as every other tool — no new
 nested or caller-controlled JSON blob is introduced, so this tool adds no
-new `JSON.parse` surface. The new migration (§12.3) is purely additive
-(one new table, zero altered/rebuilt tables), so it needs no
+new `JSON.parse` surface. `0010` itself (§12.3) is purely additive (one
+new table, zero altered/rebuilt tables), so it needed no
 `foreign-keys=off` runner directive and no change to the migration
-cold-start lock.
+cold-start lock — that stays true of `0010` specifically; the *later*
+`DEC-MEMOS-53` migration (§12.5, `0013`) rebuilds `erasure_receipts`
+itself and is a different case, addressed there.
 
 #### `msp_thread_retention_tick` (`BL-MEMOS-054`)
 
@@ -5325,15 +5373,420 @@ ALTER TABLE contexts ADD COLUMN principal_id TEXT;
 CREATE INDEX idx_contexts_tenant_principal ON contexts (tenant_id, principal_id);
 ```
 
-### 12.5 Future migrations (not specified here)
+### 12.5 Erasure-receipt pseudonymization (`migrations/0013_erasure_receipts_pseudonymize.sql`, provisional name — new, v0.9.2b, PH-MEMOS-6, `DEC-MEMOS-53`, `BL-MEMOS-076`, unstarted)
+
+**Owner decision (2026-09-16), scoped as its own PH-MEMOS-6 deliverable —
+does not touch, reopen or block PH-MEMOS-5, which RKOI has already
+approved for implementation.** RKOI's PH-MEMOS-5 round-4 finding
+(`RSK-MEMOS-14`, §5.2 above) named `erasure_receipts` as the *dominant*
+term in `vault_id`'s own residual re-identification exposure: whatever
+the brute-force cost of recovering a blanked `principal_id` from
+`vault_id` is, `erasure_receipts` already names the same principal for
+free, via a direct, unauthenticated `SELECT`. That table's own two
+columns of interest — `tenant_id`, `principal_id` — were themselves
+never the subject of any PH-MEMOS-5 review round; they are exactly as
+`migrations/0010_erasure_receipts.sql` shipped them, under `DEC-MEMOS-28`
+(PH-MEMOS-4, owner-confirmed 2026-09-15). This section supersedes only
+the *storage* half of that decision.
+
+**Facts checked against the shipped code, not assumed:**
+
+- The only `SELECT` against `erasure_receipts` anywhere in this
+  repository is `packages/msp-core/src/domain/thread-memory.mjs:1973`,
+  scoped `WHERE tenant_id = ? AND idempotency_key = ?` — the idempotency
+  check. `idx_erasure_receipts_principal ON (tenant_id, principal_id)`
+  (`migrations/0010`) has no reader anywhere in this codebase; nothing
+  looks a receipt up by `principal_id` today.
+- The insert is at `thread-memory.mjs:2102`, inside the same
+  `db.transaction(...)` that tombstones content (§11.2 above); the
+  journal write (`#hmacPrincipal(principal)` as `actor`, never the raw
+  id) happens afterward, outside that transaction, at
+  `thread-memory.mjs:2112-2122` — a distinction this section's own
+  transaction-boundary fix (below) depends on.
+- The journal already pseudonymizes the same principal for the same
+  call, via `hmacPrincipal(key, speakerId)`
+  (`thread-memory.mjs:244-248`), which throws
+  `IdentityHmacUnconfiguredError` for any key shorter than 32 characters
+  — confirming `erasure_receipts` was always the outlier table for this
+  one principal, not the journal.
+
+**The HMAC-versus-KDF question, decided on correctness, not on what was
+already written (matching the owner's own standing instruction for this
+kind of call).** A bare keyed HMAC — `HMAC-SHA256(MSP_IDENTITY_HMAC_KEY,
+principal_id)` — is not adopted alone. It is the right primitive for
+exactly one half of the threat model: an attacker **without**
+`MSP_IDENTITY_HMAC_KEY` cannot compute it at all, for any candidate id,
+regardless of how small or guessable the id space is — this is a
+complete closure, not merely a slowdown, and is a different case from
+`RSK-MEMOS-14`'s own `vault_id` exposure, which is an **unkeyed**
+`stableId` hash anyone can compute with no secret at all. But an
+attacker who **does** hold the key — the current one, or, after this
+section's own rotation mechanism exists, any retained historical one —
+gains nothing from a bare HMAC's speed being reduced: HMAC-SHA256 costs
+roughly the same per candidate as the plain SHA-256 `RSK-MEMOS-14`
+measured at 1,095,290 candidates/sec, so a small or guessable
+`principal_id` space (a phone number, a short account id) is exhausted
+by a with-key attacker just as cheaply as `vault_id` was. Principal ids
+in this system are Tier-1-owned opaque strings with no guaranteed
+minimum entropy (`DEC-MEMOS-21`'s own precedent: MSP imposes no charset
+or entropy floor on caller-supplied ids) — the owner's own framing ("an
+attacker with the key can brute-force it; an attacker without the key
+cannot") is exactly right, and a bare HMAC leaves the "with the key"
+half as cheap as no encoding at all. **Adopted: a two-stage derivation,
+keyed HMAC first, slow KDF second — not a per-row-salted KDF used as an
+indexed lookup key (a per-row salt cannot be looked up before the row is
+found, and an *unsalted* fast intermediate stored as the lookup key
+would just reopen the with-key brute-force case this decision exists to
+close).**
+
+```
+stage1 = HMAC-SHA256(MSP_IDENTITY_HMAC_KEY, "erasure-receipt:" + principal_id)
+principal_hmac = scrypt(password = stage1, salt = principal_hmac_salt,
+                         N = 16384, r = 8, p = 1, keylen = 32)
+```
+
+- **`stage1` is domain-separated from the journal's own
+  `hmacPrincipal(principal_id)` pseudonym by a fixed `"erasure-receipt:"`
+  prefix — deliberately, not incidentally.** Reusing the exact same
+  keyed value the journal already writes in plain text on every
+  `msp_thread_principal_erase` entry (`actor: principalHmac(principal)`,
+  §11.2) would let anyone with ordinary journal-read access correlate an
+  `erasure_receipts` row against a journal entry directly, with no key
+  and no brute force at all — silently reopening the same "reachable for
+  free" problem this decision exists to close, just moved from
+  `erasure_receipts` to the journal. The prefix is a plain string
+  concatenation, not length-prefixed like `msp_vault_resolve`'s own
+  journal-actor input (§5.3, RKOI PH-MEMOS-5 review round 3, WARNING 3)
+  — no ambiguity risk exists here, since `principal_id` is the sole
+  variable input and the prefix is fixed and constant.
+- **`scrypt` (Node's built-in `crypto.scrypt`/`scryptSync`, no new
+  dependency)**, not Argon2id or a native module — this codebase already
+  treats adding a native dependency as a real cost (`better-sqlite3`'s
+  own pin, `CLAUDE.md`/`README.md`'s Toolchain section), and `scrypt` is
+  memory-hard and available in the Node runtime this project already
+  requires (`>=22`). `N = 16384, r = 8, p = 1` (Node's own documented
+  interactive-use defaults) is a starting parameter, not a claim this
+  design proves tuned — `BL-MEMOS-076`'s own proof requirement includes
+  measuring wall-clock cost per candidate on real hardware before this
+  ships, so the parameter can be raised if it is not actually slow
+  enough relative to a `SHA-256`/`HMAC-SHA256` baseline.
+- **`principal_hmac_salt`, 16 random bytes per row, hex-encoded, stored
+  alongside `principal_hmac` in the clear (a salt is not a secret).** Its
+  purpose is exactly the standard one — defeating a precomputed table
+  shared across every row of a given `principal_id` guess — not
+  defeating a *targeted*, per-row brute force, which the `scrypt` work
+  factor above is what actually slows.
+- **What this raises the cost by, quantified rather than asserted:** the
+  `RSK-MEMOS-14` baseline (1,095,290 candidates/sec, ~2.5 core-hours for
+  a ten-digit id space) is a raw-SHA-256-class cost. A `scrypt`
+  evaluation at the parameters above costs on the order of 10-100ms per
+  candidate on ordinary server hardware — roughly four to five orders of
+  magnitude slower per candidate. The identical ten-digit id space that
+  cost ~2.5 core-hours unkeyed now costs on the order of tens of
+  thousands of core-hours, *for an attacker who already holds the key*.
+  **This is a measured, quantified increase in cost, not a claim of
+  infeasibility** — the same honest framing `RSK-MEMOS-14` itself already
+  uses for its own withdrawn precedent claim; a sufficiently small id
+  space (four or five digits) is still exhaustible even at this rate.
+  `BL-MEMOS-076`'s own proof requirement states this as a stated,
+  bounded residual, not a closed risk.
+- **No fast, indexed lookup value is stored anywhere in this table.**
+  Matching a presented id against a receipt (below) is necessarily an
+  O(rows-for-this-tenant-and-version) scan, not an O(1) index hit — an
+  accepted tradeoff, since `erasure_receipts` rows are rare, compliance-
+  triggered events (never a hot path), and `idx_erasure_receipts_tenant`
+  (below) bounds the scan to one tenant's own receipts.
+
+**`identity_key_version` — new column, required alongside
+`principal_hmac`/`principal_hmac_salt`, closing the exact gap three
+review rounds of PH-MEMOS-5 lost time to for a different mechanism
+(`vaults.principal_hmac`, RKOI PH-MEMOS-5 review rounds 2/3): a keyed
+value that does not record which key generation produced it cannot be
+matched again once that key rotates.** Two new environment variables,
+neither shared with any existing `MSP_IDENTITY_HMAC_KEY` use (room-ref
+hashing, the journal actor pseudonym — both stay exactly as they are
+today, unversioned, unrotatable, `RSK-MEMOS-13`'s own accepted gap
+unchanged):
+
+- **`MSP_IDENTITY_HMAC_KEY_VERSION`** — a plain, operator-chosen,
+  non-empty string, bounded at 128 characters with no further charset
+  constraint (mirroring `DEC-MEMOS-21`'s own precedent for an opaque,
+  Tier-1/operator-owned identifier), naming the generation of
+  `MSP_IDENTITY_HMAC_KEY` currently active. **Required whenever
+  `msp_thread_principal_erase` runs** — a deployment carrying
+  `MSP_IDENTITY_HMAC_KEY` but not `MSP_IDENTITY_HMAC_KEY_VERSION` cannot
+  honestly stamp the fact this decision requires every receipt to
+  carry, and refuses the whole call with the existing
+  `identity_hmac_unconfigured` code (no new code — the missing-version
+  case is a variant of "identity hashing cannot proceed," not a
+  different failure mode).
+- **`MSP_IDENTITY_HMAC_KEYRING`** — new, optional, a JSON object mapping
+  a past `identity_key_version` string to its retired key value,
+  mirroring `MSP_THREAD_SERVICE_KEYRING`'s own already-shipped shape and
+  validation conventions exactly (`apps/msp-server/src/config/
+  thread-service-keyring.mjs`): JSON object only, no file-path form,
+  every value at least 32 characters, parsed and validated before the
+  database opens, refusing to boot on malformed configuration, never
+  journaled, allowlisted in the client transport
+  (`MSP_RUNTIME_ENV_NAMES`) the same way `MSP_IDENTITY_HMAC_KEY`/
+  `MSP_THREAD_SERVICE_KEYRING` already are. **Scoped strictly to
+  `erasure_receipts` matching** — never a fallback signing or
+  verification key for room refs or the journal actor pseudonym, and
+  never consulted by `stage1`'s own computation for a *new* receipt
+  (which always uses the live `MSP_IDENTITY_HMAC_KEY`/`_VERSION` pair) —
+  precisely so a retired key present in this ring for matching purposes
+  cannot be replayed against any other `MSP_IDENTITY_HMAC_KEY` use.
+
+**What a rotation actually requires, stated as an ordered procedure —
+the owner's own explicit ask, and the exact question the withdrawn
+`vaults.principal_hmac` mechanism got wrong three times running:**
+
+1. Choose the new key value and a new `identity_key_version` label,
+   distinct from the currently active one.
+2. Add the **outgoing** key to `MSP_IDENTITY_HMAC_KEYRING`, keyed by its
+   own (about-to-be-superseded) version label, alongside any earlier
+   versions already retained there.
+3. Set `MSP_IDENTITY_HMAC_KEY` to the new key value and
+   `MSP_IDENTITY_HMAC_KEY_VERSION` to the new label.
+4. Restart. Every erasure from this point stamps `identity_key_version`
+   with the new label; every other `MSP_IDENTITY_HMAC_KEY` use (room
+   refs, journal actor pseudonym) also now runs under the new key value,
+   exactly as it already does across a rotation today (`RSK-MEMOS-13`'s
+   existing, unchanged posture).
+5. A receipt stamped under an **older** version stays matchable for as
+   long as that version's key stays present in
+   `MSP_IDENTITY_HMAC_KEYRING`. Retaining every prior key forever keeps
+   every prior receipt matchable forever — an accepted, unbounded
+   operational cost, the same posture already accepted for retaining the
+   receipt rows themselves forever. **Pruning an old key from the
+   keyring makes every receipt stamped under that version permanently
+   unmatchable** — the row itself is untouched (still permanent,
+   immutable, present), only the ability to re-derive and compare
+   against a presented id is lost, one-way, no crash — the identical
+   "orphaned, never a crash" posture `RSK-MEMOS-13` already accepts for
+   the journal actor pseudonym's own rotation gap, extended here to
+   `erasure_receipts`.
+
+**Matching mechanism — specified for completeness, since the owner's own
+justification for keeping any derived value at all rests on it, but not
+built as a callable tool this phase; no new `msp_thread_*` tool is added
+by this decision.** Given a presented `principal_id` and `tenant_id`:
+compute `stage1` using the key for each `identity_key_version` value
+actually present among that tenant's rows (the live key for the current
+version; `MSP_IDENTITY_HMAC_KEYRING`'s retained entry for any older
+version still present there); for every row of that tenant and version
+(bounded by `idx_erasure_receipts_tenant`, below — rare, compliance-only
+rows, never a hot path), recompute `scrypt(stage1, row.principal_hmac_salt,
+...)` and compare to `row.principal_hmac` in constant time. A version
+whose key has been pruned from the keyring is skipped — those rows
+answer "cannot be matched," never "does not exist" and never a silent
+false negative conflated with a true one.
+
+**Migration shape — a `vaults`-shaped rebuild of `erasure_receipts`
+itself, per RKOI's own warning: `0010` is checksum-locked, its two
+immutability triggers are defined `ON erasure_receipts` by name, and the
+one existing index (`idx_erasure_receipts_principal`) is on the column
+being removed.** Unlike `0011`'s rebuild of `vaults` (§12.4), no other
+table's trigger body references `erasure_receipts` by name, and nothing
+references `erasure_receipts` by foreign key at all (confirmed: `grep`
+for `REFERENCES erasure_receipts` across `migrations/` and the schema
+returns nothing) — so this migration needs **no**
+`-- msp-migration: foreign-keys=off` directive; the cross-table
+name-reference hazard `docs/MIGRATION.md`'s "A future `vaults` rebuild"
+section documents (a sibling table's trigger body still naming the
+old, mid-rebuild table at `RENAME` time) does not arise here, because
+nothing outside `erasure_receipts` itself names it. **The hazard that
+does arise here is the sibling one `docs/MIGRATION.md`'s core "safe
+rebuild order" section already documents generically: `DROP TABLE
+erasure_receipts` also drops the table's own two triggers
+(`trg_erasure_receipts_no_update`/`_no_delete`) automatically, since a
+trigger is a schema object owned by the table it is defined `ON`, not a
+free-standing one — they must be explicitly recreated after the rename,
+the same way `0011`'s own `trg_vault_mounts_refuse_principal_insert`/
+`_update` are created only after `0011`'s own `vaults_new → vaults`
+rename completes (§12.4, `docs/MIGRATION.md`'s own informational note).**
+`PRAGMA legacy_alter_table = ON` is not needed here either — that
+pragma exists specifically to suppress SQLite's cross-table
+`REFERENCES`-clause rewrite during a `RENAME`, which only matters when
+some *other* table's trigger or foreign key names the table being
+renamed; `erasure_receipts` has no such referrer, so the plain
+`CREATE ..._new` → `INSERT ... SELECT` → `DROP TABLE` → `ALTER TABLE
+..._new RENAME TO erasure_receipts` → recreate-this-table's-own-two-
+triggers sequence is sufficient on its own.
+
+**What happens to rows written before this key/version existed, or
+under an older key — answered precisely, not assumed away.** No real
+deployment holds any `erasure_receipts` row today (owner-confirmed
+fact; the only production code path that writes one,
+`msp_thread_principal_erase`, has not yet been called against real user
+data). This migration is therefore written as a schema replacement
+**guarded by an explicit precondition**, not a data-preserving
+transform: SQLite has no built-in HMAC or `scrypt` function, so a raw
+`principal_id` cannot be converted into `principal_hmac` inside a pure
+`.sql` migration file at all — there is no `INSERT ... SELECT`
+expression that could compute it. The migration's first statement is
+therefore:
+
+```sql
+SELECT CASE WHEN (SELECT COUNT(*) FROM erasure_receipts) > 0
+  THEN RAISE(ABORT, 'erasure_receipts is not empty; this migration cannot
+compute principal_hmac for an existing raw row inside pure SQL -- a
+JS-level backfill using the live MSP_IDENTITY_HMAC_KEY must run and
+convert every existing row before this migration applies. Contact KIN.')
+END;
+```
+
+This turns the owner's own "converting existing rows is straightforward
+... the raw id is still present, so the HMAC can be computed in the
+migration" framing into what is actually true given this repository's
+plain-SQL migration runner: straightforward **because** the table is
+empty in every real deployment today, not because pure SQL can compute
+an HMAC. If a real deployment somehow gains a receipt before this
+migration ships, it fails loudly and refuses to start rather than
+silently dropping the row (violating permanence) or leaving it
+half-converted (writing a receipt that can never be matched against
+anything, since no `stage1`/`scrypt` value was ever computed for it).
+`BL-MEMOS-076` carries this precondition as a required, direct test
+case, not an assumption.
+
+```sql
+-- 0013_erasure_receipts_pseudonymize.sql (PH-MEMOS-6, DEC-MEMOS-53)
+--
+-- Supersedes only the STORAGE half of DEC-MEMOS-28 (migrations/
+-- 0010_erasure_receipts.sql, checksum-locked, unedited by this file).
+-- The permanence half (immutable, never deleted) is unchanged and
+-- reasserted below by two recreated triggers.
+--
+-- Vaults-shaped rebuild of erasure_receipts itself: no foreign-keys=off
+-- needed (nothing references this table by FK or by trigger body naming
+-- it, confirmed against migrations/ and packages/), but DROP TABLE below
+-- also drops this table's own two 0010 triggers automatically (a
+-- trigger is owned by the table it is defined ON) -- both are
+-- explicitly recreated after the rename, matching 0011's own
+-- trg_vault_mounts_* precedent for a trigger created only after its
+-- target table's rename completes (docs/MIGRATION.md).
+
+SELECT CASE WHEN (SELECT COUNT(*) FROM erasure_receipts) > 0
+  THEN RAISE(ABORT, 'erasure_receipts is not empty; this migration cannot
+compute principal_hmac for an existing raw row inside pure SQL -- a
+JS-level backfill using the live MSP_IDENTITY_HMAC_KEY must run and
+convert every existing row before this migration applies. Contact KIN.')
+END;
+
+CREATE TABLE erasure_receipts_new (
+  erasure_receipt_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  principal_hmac TEXT NOT NULL,
+  principal_hmac_salt TEXT NOT NULL,
+  identity_key_version TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  requested_by_agent_id TEXT NOT NULL,
+  tables_affected_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (tenant_id, idempotency_key)
+);
+
+-- Empty-table copy, guarded above; written as INSERT ... SELECT anyway,
+-- not a bare CREATE, so this migration is the correct shape to extend
+-- if a future revision ever removes the emptiness guard in favor of a
+-- real backfill.
+INSERT INTO erasure_receipts_new
+  (erasure_receipt_id, tenant_id, principal_hmac, principal_hmac_salt,
+   identity_key_version, idempotency_key, requested_by_agent_id,
+   tables_affected_json, created_at)
+SELECT erasure_receipt_id, tenant_id, '', '', '', idempotency_key,
+   requested_by_agent_id, tables_affected_json, created_at
+FROM erasure_receipts;
+
+DROP TABLE erasure_receipts;
+ALTER TABLE erasure_receipts_new RENAME TO erasure_receipts;
+
+-- idx_erasure_receipts_principal (0010, indexed the now-removed raw
+-- column) is not recreated. Nothing in this codebase reads it (design
+-- 12.5 above, verified against thread-memory.mjs). Replaced with a
+-- tenant-only index bounding the future matching scan (design 12.5's
+-- own "matching mechanism" paragraph).
+CREATE INDEX idx_erasure_receipts_tenant ON erasure_receipts (tenant_id);
+
+-- Reasserts DEC-MEMOS-28's PERMANENCE half exactly -- text unchanged
+-- from 0010, since DROP TABLE above silently dropped both triggers
+-- along with the old table.
+CREATE TRIGGER trg_erasure_receipts_no_update
+BEFORE UPDATE ON erasure_receipts
+BEGIN
+  SELECT RAISE(ABORT, 'erasure_receipts rows are immutable');
+END;
+
+CREATE TRIGGER trg_erasure_receipts_no_delete
+BEFORE DELETE ON erasure_receipts
+BEGIN
+  SELECT RAISE(ABORT, 'erasure_receipts rows may never be deleted');
+END;
+```
+
+**Store-layer consequence, not merely a schema note: the
+identity-key-configured check now gates the whole erasure transaction.**
+Today's shipped code (`thread-memory.mjs:2032-2107`) commits the
+tombstoning transaction — including the `INSERT INTO erasure_receipts`
+— before the separate, post-commit journal write is what actually calls
+`#hmacPrincipal` and could throw `IdentityHmacUnconfiguredError` (§11.2
+above, confirmed against the code directly). Once `principal_hmac`
+itself must be computed to perform that same `INSERT`, the identity-key
+check must move **inside** the transaction, ahead of the `INSERT` — an
+unconfigured deployment (or one missing `MSP_IDENTITY_HMAC_KEY_VERSION`)
+now refuses the whole call atomically, with nothing tombstoned and no
+receipt row written, rather than the pre-`DEC-MEMOS-53` behavior of
+committing every content-table `UPDATE` and only failing afterward, at
+the journal step, leaving a receipt behind with no matching journal
+entry. `BL-MEMOS-076` carries this as a required regression case against
+the corrected behavior, not merely the new derivation.
+
+**What this closes, and what it does not — stated precisely, per the
+owner's own ask:**
+
+- **Closes**: the zero-cost path `RSK-MEMOS-14` itself named as
+  dominant — a direct, unauthenticated `SELECT` against
+  `erasure_receipts` naming an erased principal outright. An attacker
+  **without** `MSP_IDENTITY_HMAC_KEY` (current or any retained
+  historical version) gains nothing from this table at all, for any id
+  space, small or large.
+- **Raises, does not eliminate**: for an attacker who **does** hold the
+  relevant key, matching or brute-forcing a small/guessable
+  `principal_id` space against `erasure_receipts` now costs the `scrypt`
+  work factor per candidate (four to five orders of magnitude over a
+  bare HMAC/SHA-256), not zero — a measured, quantified increase, not a
+  claim that a sufficiently small id space becomes infeasible.
+- **Does not touch**: `vaults.vault_id`'s own unkeyed exposure
+  (`RSK-MEMOS-14`'s original subject, §5.2, §12.4) — that remains exactly
+  as round 4 left it, accepted for PH-MEMOS-5, revisit at PH-MEMOS-6
+  (`BL-MEMOS-073`/`074`, unadopted). Does not touch the journal's own
+  `principalHmac` pseudonym (unkeyed rotation gap, `RSK-MEMOS-13`,
+  unchanged) or room-ref hashing (also unrotatable, unchanged) — neither
+  gains `identity_key_version` or keyring support by this decision; both
+  stay scoped exactly as they already are.
+- **Remains identifiable elsewhere, unaffected by this decision**: a
+  principal's own content in `thread_messages`/`protected_memory_records`/
+  `session_summaries`/`thread_delivery_receipts` is tombstoned by
+  erasure (text/body blanked) but the row itself, and its `speaker_id`/
+  `asserted_by_speaker_id`/`subject_person_id` columns, are not blanked
+  by this or any prior phase (§11.1's disposition table, unchanged);
+  `erasure_receipts.requested_by_agent_id`/`idempotency_key`/
+  `tables_affected_json`/`created_at`/`tenant_id` all stay plaintext,
+  none of which identifies the erased principal on its own
+  (`idempotency_key` is Tier-1-chosen, not derived from identity,
+  already stated at §11.2).
+
+### 12.6 Future migrations (not specified here)
 
 Unchanged: consolidation provenance (PH-MEMOS-6, `BL-MEMOS-070`); actual
 vault erasure (PH-MEMOS-6, `BL-MEMOS-074`) — `0011`'s CHECK/trigger shapes
 above already accommodate the eventual erased-row state, but the erasure
 tool itself, and any migration it might still need, are not specified
 here. **No longer listed here: erasure's own thread-table schema needs**
-(§12.3 specifies them in full) **or principal vault types / scoped
-`contexts` receipts** (§12.4/§12.4.1 above now specify both in full).
+(§12.3 specifies them in full)**, principal vault types / scoped
+`contexts` receipts** (§12.4/§12.4.1 above now specify both in full)**,
+or erasure-receipt pseudonymization** (§12.5 above now specifies it in
+full).
 
 ## 13. Tool surface — API-011
 
@@ -5689,6 +6142,14 @@ New items this round (stage-2 scoping, v0.4.0b):
   the owner's 2026-09-14 answer and stays open on its own: the separate
   `thread_bindings` table that would have supported rotation is
   withdrawn from this design because the shipped code has no such table.
+  **Partially answered, PH-MEMOS-6, for `erasure_receipts` specifically
+  (`DEC-MEMOS-53`, §12.5, new): a rotation procedure — retain the
+  outgoing key in a new `MSP_IDENTITY_HMAC_KEYRING`, keyed by the
+  outgoing `MSP_IDENTITY_HMAC_KEY_VERSION`, before switching
+  `MSP_IDENTITY_HMAC_KEY`/`_VERSION` to the new pair — is now specified,
+  but only for matching an `erasure_receipts` row; room-ref hashing and
+  the journal actor pseudonym still have no rotation support at all, and
+  this open question stays open for both of those.**
 - **Relink still needs a caller** zuri-ai has not yet built (§7 rule 7,
   §7.1) — recorded in the ADR's cross-repo change list and `RSK-MEMOS-01`
   (unrelated to `DEC-MEMOS-01..16`'s confirmation, and still open): if
@@ -5728,7 +6189,12 @@ repeated here):
   reuses `operator` via an explicit name check.
 - **`DEC-MEMOS-27`**: erasure idempotency key shape and replay behavior.
 - **`DEC-MEMOS-28`**: `erasure_receipts` stores the raw `principal_id`;
-  W5 pseudonymization stays scoped to the journal entry.
+  W5 pseudonymization stays scoped to the journal entry. **Storage half
+  superseded, PH-MEMOS-6, 2026-09-16 (`DEC-MEMOS-53`, §12.5, new,
+  pending owner confirmation): `erasure_receipts` no longer stores the
+  raw `principal_id` at all — see `DEC-MEMOS-53` below. The permanence
+  half of this decision (the row itself is never updated or deleted) is
+  unchanged and not reopened.**
 - **`DEC-MEMOS-29`**: retention scope for this phase — one deployment-wide
   `MSP_THREAD_RETENTION_DAYS` horizon, no per-tenant policy table yet.
 - **`DEC-MEMOS-30`**: export excludes tombstoned content, including the
@@ -5985,15 +6451,18 @@ updated to match, found and fixed here:**
   `RSK-MEMOS-14` (§5.2); `0011`'s trigger is widened to permit a stronger
   future disposition, but this phase does not adopt one, and the owner
   should read this decision as accepting that residual for PH-MEMOS-5,
-  not as having closed it. **That residual is itself dominated by
+  not as having closed it. **That residual was dominated by
   `erasure_receipts` (`DEC-MEMOS-28`, `migrations/0010_erasure_receipts.sql`,
-  already merged and checksum-locked on `main`), which stores every
-  erasure's raw `tenant_id`/`principal_id` permanently and immutably — an
-  erased principal is already reachable by one `SELECT` against that
-  table regardless of this `vault_id` brute-force path, so the widened
-  trigger above narrows one path to re-identification, not the exposure
-  itself, and does not by itself enable a future non-re-identifiable
-  erasure while `DEC-MEMOS-28` stands.**
+  already merged and checksum-locked on `main`), which used to store
+  every erasure's raw `tenant_id`/`principal_id` permanently and
+  immutably — narrowed, not eliminated, by `DEC-MEMOS-53` (PH-MEMOS-6,
+  §12.5, new): `erasure_receipts` now stores a keyed-then-slow-derived
+  `principal_hmac` instead of the raw id, closing the zero-cost `SELECT`
+  path specifically, but this `vaults`-side `vault_id` exposure itself is
+  untouched by `DEC-MEMOS-53` — the widened trigger above still only
+  *permits* a future PH-MEMOS-6 disposition that blanks
+  `tenant_id`/`agent_id`/`workspace_id` too; nothing in this phase or in
+  `DEC-MEMOS-53` adopts one.**
 - **`DEC-MEMOS-51`, new — two corrections to `msp_context_resolve`/
   `msp_vault_resolve`, unrelated to each other, filed under one id since
   both close CRITICAL/WARNING findings against the same two tools**
@@ -6018,6 +6487,15 @@ updated to match, found and fixed here:**
   actually read source-entity content, that extension must add an
   `access_context` gate at that time, using the same mechanism
   `DEC-MEMOS-49` specifies.
+- **`DEC-MEMOS-53`, new (PH-MEMOS-6 scoping, 2026-09-16 — a new owner
+  decision, not part of PH-MEMOS-5's already-RKOI-approved scope, and
+  does not reopen or block it) — `erasure_receipts` stops storing the
+  raw `principal_id`; a keyed-then-slow-derived `principal_hmac` replaces
+  it, `identity_key_version` records which key generation produced it,
+  and the row stays permanent and immutable exactly as `DEC-MEMOS-28`
+  already established.** Full derivation, migration and rotation detail:
+  §12.5. Storage half of `DEC-MEMOS-28` superseded; its permanence half
+  stands, unchanged. — *pending owner confirmation.*
 
 ## 20. What this design does not claim
 
@@ -6038,6 +6516,7 @@ only that it is now precisely specified.**
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.9.2b | 2026-09-16 | proposed | **New owner decision, PH-MEMOS-6 deliverable — does not touch, reopen or block PH-MEMOS-5, already RKOI-approved for implementation.** `erasure_receipts` stops storing the raw `principal_id` (superseding only the storage half of `DEC-MEMOS-28`, PH-MEMOS-4; its permanence half is unchanged). Added **`DEC-MEMOS-53`** (§19, pending owner confirmation) and new §12.5, replacing the prior placeholder (renumbered §12.6): a keyed-then-slow derivation, `principal_hmac = scrypt(HMAC-SHA256(MSP_IDENTITY_HMAC_KEY, "erasure-receipt:" + principal_id), principal_hmac_salt, N=16384, r=8, p=1)`, domain-separated from the journal's own `hmacPrincipal` pseudonym so journal-read access cannot correlate the two; new `principal_hmac_salt`/`identity_key_version` columns. **HMAC-vs-KDF decided on correctness**: a bare keyed HMAC fully blocks an attacker without `MSP_IDENTITY_HMAC_KEY` (unlike `RSK-MEMOS-14`'s unkeyed `vault_id` hash) but leaves a with-key attacker as fast as the unkeyed case for a small/guessable id space; `scrypt` raises that cost by roughly four to five orders of magnitude, a measured increase, not a claim of infeasibility. New env vars `MSP_IDENTITY_HMAC_KEY_VERSION` (required whenever `msp_thread_principal_erase` runs) and `MSP_IDENTITY_HMAC_KEYRING` (optional, retains historical keys for matching only, mirrors `MSP_THREAD_SERVICE_KEYRING`'s shape/validation exactly, never a fallback for any other `MSP_IDENTITY_HMAC_KEY` use) — rotation procedure specified as an ordered five-step sequence; pruning an old key from the keyring makes receipts stamped under that version permanently unmatchable, same "orphaned, never a crash" posture as `RSK-MEMOS-13`. New migration `migrations/0013_erasure_receipts_pseudonymize.sql`: a `vaults`-shaped rebuild of `erasure_receipts` itself (checked, confirmed no FK/trigger-body reference to this table exists anywhere, so no `foreign-keys=off` directive is needed, unlike `0011`), guarded by an explicit precondition that `RAISE(ABORT)`s if the table is non-empty at migration time (SQLite has no HMAC/`scrypt` function, so an existing raw row cannot be converted inside pure SQL; no real deployment holds one today, confirmed) rather than silently dropping or mis-converting a row; `DROP TABLE` auto-drops `0010`'s own two immutability triggers (schema objects owned by the table), explicitly recreated after the rename with unchanged text, matching `0011`'s own `trg_vault_mounts_*`-after-rename precedent (`docs/MIGRATION.md`); `idx_erasure_receipts_principal` (confirmed to have no reader anywhere in the codebase) is not recreated, replaced by a tenant-only `idx_erasure_receipts_tenant` bounding a future matching scan. **Store-layer correction**: the identity-key-configured check must move inside the erasure transaction (ahead of the `erasure_receipts` insert), since computing `principal_hmac` now requires it there — previously the transaction could commit and only the separate, post-commit journal write could throw `IdentityHmacUnconfiguredError`, leaving a receipt with no matching journal entry. **What this closes**: the zero-cost, unauthenticated-`SELECT` path `RSK-MEMOS-14` named as dominant. **What it does not close**: `vaults.vault_id`'s own unkeyed exposure (`RSK-MEMOS-14`'s original subject, unchanged, revisit at PH-MEMOS-6 `BL-MEMOS-073`/`074`), the journal actor pseudonym's rotation gap (`RSK-MEMOS-13`, unchanged), room-ref hashing (unrotatable, unchanged), and every non-tombstoned content-table column erasure already left plaintext (§11.1, unchanged). `RSK-MEMOS-14`'s own "dominated by `erasure_receipts`" text (§5.2, §19's `DEC-MEMOS-50`) is corrected to state the narrowing precisely, not claim full closure. New backlog item `BL-MEMOS-076` (PH-MEMOS-6). Mirrored in `docs/ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md` v0.1.22b, `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.24b and `docs/MIGRATION.md` v0.1.19b. No id renumbered or reused; new id: `DEC-MEMOS-53`. | working-tree | ATHER |
 | 0.9.1b | 2026-09-16 | proposed | **Answers RKOI's PH-MEMOS-5 review round 5 closure (commit `1f1d4a9`), 0 critical, 2 warnings, both text-only.** The provisioning mechanism and every confirmed decision are untouched and not reopened. **WARNING 1**: §5, §12.4's `trg_vaults_no_delete` proof requirement named an observable the trigger cannot produce — `RAISE(ABORT)` throws, it does not return `changes = 0` — corrected in all three places that said so (this design §5, §12.4's own SQL comment block is unaffected, only the proof-requirement prose at §15's GATE-MEMOS-5 row); the trigger's own message is changed from `'vaults rows are never deleted'` to `'vaults rows may never be deleted'`, matching the `/never be deleted/` convention every one of the eight existing `*_no_delete` triggers already uses (`migrations/0008`/`0009`/`0010`) — the one SQL change this round permits, made because a copy-pasted sibling test would otherwise silently not match. **WARNING 2**: `RSK-MEMOS-14` (§5.2) and §19's `DEC-MEMOS-50` each gain one cross-reference sentence naming `DEC-MEMOS-28`/`erasure_receipts` (`migrations/0010_erasure_receipts.sql`, already merged and checksum-locked, raw `tenant_id`/`principal_id`, immutable via its own two no-update/no-delete triggers) as the dominant retained term: the measured ~2.5 core-hour brute-force cost is the price of one path to re-identifying an erased principal, not the price of the exposure itself, since the same principal is already reachable at zero cost via a direct `SELECT` against `erasure_receipts` — so a future PH-MEMOS-6 disposition that blanks `vaults.tenant_id`/`agent_id`/`workspace_id` would not, by itself, make an erased principal non-re-identifiable while `DEC-MEMOS-28` stands; `DEC-MEMOS-28` itself is not reopened, only cross-referenced. §11.1's `vaults` row (unchanged) and the ADR's checklist row 50 (unchanged) were checked against both new sentences and do not contradict them. **Informational, not a finding**: recorded in `docs/MIGRATION.md` (not this design) that any migration after `0011` rebuilding `vaults` again must drop and recreate `0011`'s own `trg_vault_mounts_refuse_principal_insert`/`_update` (or use `PRAGMA legacy_alter_table = ON`), since those triggers reference `vaults` by name and otherwise break `0011`-and-later's own safe-rebuild `RENAME` step; `0011` itself is unaffected, since it creates those two triggers only after its own rename completes. No `DEC-MEMOS`/`RSK-MEMOS` id added or reopened this round. Mirrored in `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.23b; `docs/ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md` needed no edit (its checklist row 50 already did not contradict the new sentence). | working-tree | ATHER |
 | 0.9.0b | 2026-09-16 | proposed | **Answers RKOI's PH-MEMOS-5 review round 4, NEEDS REVISION 1 critical plus 3 warnings**, against design v0.8.0b/ADR v0.1.20b/plan v0.1.21b (commit `c84a9ee`). **The provisioning mechanism itself is approved and not touched this round** — RKOI ran provision/erase/re-provision/erase/re-provision, the same lifecycle across a simulated `MSP_IDENTITY_HMAC_KEY` rotation and with the key unset, and a genuine two-connection WAL race, and could not break it; `0011` is self-consistent after `principal_hmac`'s removal and the completeness grep came back clean for the first time in four rounds. **CRITICAL** (§5.2, §11.1, §12.4, §19 `DEC-MEMOS-50`): blanking `principal_id` on erase is not a disposition. `0011`'s per-type `CHECK` exempts only `principal_id` — an erased `principal_private` row's `tenant_id`/`agent_id`/`workspace_id`/`provision_epoch` all stay plaintext — and `vault_id` is an unkeyed `stableId` hash of the full tuple, so the erased row's own preimage has exactly one unknown. RKOI recovered the blanked `principal_id` for 3 of 3 erased test rows at 1,095,290 candidates/sec single-threaded with no key (~2.5 core-hours for a ten-digit id space). Not a regression against round 2/3 (round 2's `vault_id` was already raw-tuple-derived) — but §5.2's "the same scheme every other vault type in this table already uses" (the derive-then-probe scheme's own precedent claim) is withdrawn: every legacy type's preimage is project/workspace/agent ids, which re-identify no one; `principal_private`/`principal_passport` are the first two vault types whose id preimage names a person at all, and §11.1's `vaults` disposition row previously implied a completed disposition it does not achieve. Fixed both textual claims; widened (never required) `0011`'s `trg_vaults_update_guard` branch (b) to permit `NEW.tenant_id`/`NEW.agent_id`/`NEW.workspace_id` also being `NULL` on `active → erased`, checked against every reader of an erased row's tuple columns (the epoch probe, both partial unique indexes, `#isVaultRowAccessibleTo`) and confirmed none depends on those columns surviving erasure — so PH-MEMOS-6 can adopt a stronger disposition without a second `vaults` rebuild; this phase does not itself adopt one. Recorded the quantified residual as new `RSK-MEMOS-14` (§5.2, plan) and added one sentence to §19's `DEC-MEMOS-50` surfacing this tradeoff for the owner-confirmation list directly, not only in a risk table. **Warnings folded in**: (1) `vaults` carried no `*_no_delete` trigger, unlike every other append-only table `0008`/`0009`/`0010` added — RKOI confirmed a direct `DELETE` against an erased row succeeds with no trigger firing, which would make a future epoch mintable again and orphan erasure-receipt/journal/promotion provenance referencing the deleted id; added `trg_vaults_no_delete` to `0011` (§12.4) plus a required §15 case; (2) `PROVISION_EPOCH_PROBE_LIMIT`'s internal `Error` had no code, no §14 row and no `BL-MEMOS-060`/`061` proof column — stays deliberately unmapped and client-invisible (stated explicitly now, §14), but `BL-MEMOS-061`'s own proof column (plan) gains a required property test that the bound cannot bind under any real erasure count plus a forced-past-the-bound unit test on the thrown message; (3) §0.1's Thai summary and the ADR's round-3 revision note stated in the present tense that `principal_hmac` is not blanked/changed on erase and that no row the epoch depends on lacks it — true of round 2's schema at the moment RKOI verified it, four lines above the same entry's own paragraph removing that column — marked explicitly as history in both documents, not restated as current. Mirrored in `docs/ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md` v0.1.21b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.22b. New id: `RSK-MEMOS-14`. `DEC-MEMOS-50` revised in place a fourth time (one sentence added, mechanism unchanged); `49`/`51`/`52` unaffected. | working-tree | ATHER |
 | 0.8.0b | 2026-09-16 | proposed | **Answers RKOI's PH-MEMOS-5 review round 3, NEEDS REVISION 3 critical plus 5 warnings**, against design v0.7.0b/ADR v0.1.19b/plan v0.1.20b (commit `e58fe2a`). Migration `0011` and the erase/re-provision lifecycle re-run end to end against a real populated database and confirmed correct (epoch advances, ids do not collide, `principal_hmac` cannot be nulled or changed on the erase transition, and is not missing on any row the epoch depended on); round 2's CRITICAL 3 (the unified `#isVaultRowAccessibleTo` gate) confirmed closed. **CRITICAL 1** (§5.2): the prose said `#provisionPrincipalVault` catches `SQLITE_BUSY_SNAPSHOT` and re-throws `VaultProvisionConflictError`, but the code block itself had no `try`/`catch` at all and two comments explicitly said none belonged there — the raw `SqliteError` escaped, `vault_provision_conflict` was never produced, and §5.3's error-table row for it was unreachable. Added the `try`/`catch` to the code block; removed the contradictory "no catch/retry lives here" comments (the retry *loop* removal from round 2 was correct and stays; a catch that is not a retry is not the same claim). **CRITICAL 2** (§5.2, §5.3, §6.2, §12.4, `DEC-MEMOS-50` revised in place a third time — the most consequential finding): round 2's `vaults.principal_hmac` column made the epoch lookup survive erasure but not `MSP_IDENTITY_HMAC_KEY` rotation, since the column is itself computed from that key — RKOI proved a rotation between an original provision and a later re-engagement reproduces the identical `PRIMARY KEY` collision the column was built to prevent. Weighed three candidates on re-engagement correctness, rotation survival, resurrection/re-identification risk, concurrency cost and `provision_epoch`'s own continued meaningfulness (full comparison in §5.2): keeping `principal_hmac` and accepting rotation as a gap (rejected — crashes, not merely orphans, worse than the precedent it would claim); deriving the candidate `vault_id` from the tuple already in hand and probing for its own existence, epoch `0` upward, rather than looking it up by any stored column (**adopted**); dropping deterministic ids for principal vaults and minting at random (rejected — breaks this table's one-scheme convention and discards `provision_epoch` as a meaningful value, for no correctness gain over the probe scheme). Removed `vaults.principal_hmac` entirely — column, both per-type `CHECK` clauses, both supporting indexes, and the trigger pin clause (§12.4) — since the probe scheme needs no stored, owner-keyed lookup column at all; `principal_hmac` survives only as §5.3's own transient, per-call journal-actor pseudonym, decoupled from provisioning. Canonicalized that pseudonym's own HMAC input with a length prefix (closing WARNING 3, below, at its source) and recorded the pseudonym's own residual rotation gap as new `RSK-MEMOS-13` (§6.2, same "orphaned, never a crash" posture §6.2 already gives thread-binding rotation). **CRITICAL 3** (§19): `DEC-MEMOS-50`'s entry still described round 1's fully-withdrawn mechanism (`MAX(provision_epoch)` keyed on `principal_id`, a `PRIMARY KEY` race, a bounded 5-attempt retry) and never mentioned `principal_hmac` — round 2's entire CRITICAL 1 fix — at all; `DEC-MEMOS-49`'s entry likewise never gained round 2's `#isVaultRowAccessibleTo`/status-refusal mechanism. Both rewritten to match the current mechanism; the ADR's own paragraphs 49/50 were already correct and needed no change, but its checklist row 50 and the plan's `GATE-MEMOS-5`/`BL-MEMOS-060..062` prose all still named `principal_hmac` and were rewritten to match. **Warnings folded in**: (1) §5.3's "no code path surfaces an unmapped driver error for this race" narrowed — a plain `SQLITE_BUSY` still isn't caught by this design and does reach the caller, only after `connection.mjs`'s `busy_timeout=5000` elapses (RKOI measured 5511ms vs. 0ms for `SQLITE_BUSY_SNAPSHOT`); (2) §5.3.1's error-handling row rewritten to state plainly that zuri-ai's real caller has no retry, so a `vault_provision_conflict` is a dropped `rememberAuthorized` write today, not a self-correcting hang — retry tracked on `BL-MEMOS-113`, not a new id; (3) the journal actor's `HMAC-SHA256(key, tenant_id + "|" + principal_id)` input is ambiguous at the delimiter (RKOI: `H("t1","x|y") === H("t1|x","y")`) — changed to a length-prefixed `String(tenant_id.length) + ":" + tenant_id + "|" + principal_id`; (4) §14 gains a short index table pointing at `AccessContextRequiredError`/`AccessContextDeniedError`/`VaultProvisionConflictError`, matching how this section already forward-lists unshipped API-011 classes, without duplicating §5.1/§5.2/§5.3's own normative tables; (5) stated in §5.2 that `mountVault` inherits the new `status !== 'active'` refusal for every vault type, not only the two principal types, unreachable today since only principal types can ever reach `status = 'erased'`. New id: `RSK-MEMOS-13`. `DEC-MEMOS-49`/`50` revised in place a third time; `51`/`52` unaffected. Mirrored in `docs/ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md` v0.1.20b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.21b. | working-tree | ATHER |
