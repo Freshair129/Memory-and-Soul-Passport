@@ -103,7 +103,13 @@ other.
 ```ts
 type VaultScope = {
   vault_id: string;
-  vault_type: "shared" | "workspace_private" | "global_private";
+  // PH-MEMOS-5 (v0.2.0+draft, RKOI round-1 WARNING 3): "principal_private"
+  // and "principal_passport" added -- API-010's msp_vault_resolve mints
+  // both, and §4.10's access_context amendment already names them as the
+  // vault_type values that make access_context mandatory on the nine
+  // msp_memory_* tools below, so the type this VaultScope allows must
+  // legally include them, not just informally require them.
+  vault_type: "shared" | "workspace_private" | "global_private" | "principal_private" | "principal_passport";
 };
 
 type EpistemicState = "hypothesis" | "confirmed" | "contested" | "deprecated";

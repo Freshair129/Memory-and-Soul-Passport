@@ -122,6 +122,34 @@ export function createVaultResolveHandler({ db, vaultRegistry, journal, identity
           provisionedPassport = !passportAlreadyExisted;
         }
 
+        // RKOI round-1 WARNING 5: append() is synchronous (a plain
+        // db.prepare().run(), same as every provision*Vault call above),
+        // and better-sqlite3's db.transaction() callback is itself
+        // synchronous end-to-end -- so this call is free to sit INSIDE the
+        // same transaction rather than after resolve() returns. Moving it
+        // here makes the header comment above ("a principal vault is never
+        // provisioned without a matching, pseudonymized audit trail")
+        // literally true: a VaultProvisionConflictError (or any other
+        // failure) rolls the vault row(s) AND this journal row back
+        // together, so there is no window where a committed principal
+        // vault has no journal receipt, or a journal row exists for a
+        // provisioning transaction that never actually committed.
+        journal.append({
+          actor: `principal_hmac:${principalHmac}`,
+          toolName: "msp_vault_resolve",
+          ref: principalPrivateVault.vault_id,
+          workspaceId,
+          payload: {
+            tenant_id: tenantId,
+            agent_id: agentId,
+            workspace_id: workspaceId,
+            provisioned_episodic: provisionedEpisodic,
+            provisioned_passport: provisionedPassport,
+            passport_requested: allowPassport,
+          },
+          policyDecision: "allow",
+        });
+
         return {
           workspacePrivateVault,
           sharedVault,
@@ -142,22 +170,6 @@ export function createVaultResolveHandler({ db, vaultRegistry, journal, identity
       // correct behavior, not an omission.
       const result = resolve();
 
-      journal.append({
-        actor: `principal_hmac:${principalHmac}`,
-        toolName: "msp_vault_resolve",
-        ref: result.principalPrivateVault.vault_id,
-        workspaceId,
-        payload: {
-          tenant_id: tenantId,
-          agent_id: agentId,
-          workspace_id: workspaceId,
-          provisioned_episodic: result.provisionedEpisodic,
-          provisioned_passport: result.provisionedPassport,
-          passport_requested: allowPassport,
-        },
-        policyDecision: "allow",
-      });
-
       return {
         workspacePrivateVaultId: result.workspacePrivateVault.vault_id,
         globalPrivateVaultIds: authorization.allow_global_private === true ? [result.globalPrivateVault.vault_id] : [],
@@ -168,7 +180,19 @@ export function createVaultResolveHandler({ db, vaultRegistry, journal, identity
           read: authorization.read === true,
           writePrivate: authorization.write_private === true,
           writeShared: authorization.write_shared === true,
-          policyVersion: typeof accessContext.policy_version === "string" ? accessContext.policy_version : "",
+          // RKOI round-1 WARNING 6: access_context.policy_version is
+          // documented (API-010 §3) as optional/nullable on the REQUEST,
+          // matching zuri-ai's own field -- but zuri-ai's shipped
+          // validateVaultSet throws on an empty-string permissions.policyVersion
+          // in the RESPONSE (design §5.3's own cross-repo compatibility
+          // table). "" was a silent contract-breaker for any caller that
+          // legitimately omits policy_version: a non-empty sentinel is
+          // emitted instead so the response always satisfies the shipped
+          // caller's own strict check, never a fabricated real version.
+          policyVersion:
+            typeof accessContext.policy_version === "string" && accessContext.policy_version.trim()
+              ? accessContext.policy_version
+              : "unspecified",
           allowPassport,
         },
       };

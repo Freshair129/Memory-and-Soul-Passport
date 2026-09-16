@@ -14,7 +14,7 @@
       "required": ["vault_id", "vault_type"],
       "properties": {
         "vault_id": { "type": "string", "minLength": 1 },
-        "vault_type": { "enum": ["shared", "workspace_private", "global_private"] }
+        "vault_type": { "enum": ["shared", "workspace_private", "global_private", "principal_private", "principal_passport"] }
       }
     },
     "accessContext": {

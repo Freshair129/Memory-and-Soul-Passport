@@ -9,16 +9,22 @@
 // stableId(prefix, ...parts) call shape packages/govibe-core/src/vaults.mjs
 // uses for its own local preview ids (e.g. stableId("vault", "shared",
 // projectId)). The two implementations are not byte-identical: vaults.mjs
-// joins hash parts with a NUL separator and uses a two-value vault_type
-// (shared/private) plus a separate vault_level, while WP-13's schema (see
-// 0002_phase2.sql) collapses type+level into a single three-value
-// vault_type enum (shared/workspace_private/global_private) and
-// domain/ids.mjs's stableId joins parts with a plain space -- a pre-existing
-// mismatch already present in WP-12's domain/ids.mjs (its own header
-// comment claims NUL-joining, its implementation does not); that is not
-// this packet's file to fix. This module reuses the *mechanism*
-// (stableId/mintRef) exactly as instructed; it does not claim byte-for-byte
-// id parity with vaults.mjs's preview ids.
+// uses a two-value vault_type (shared/private) plus a separate vault_level,
+// while WP-13's schema (see 0002_phase2.sql) collapses type+level into a
+// single three-value vault_type enum (shared/workspace_private/
+// global_private) -- a real, intentional shape difference, so this module
+// does not claim byte-for-byte id parity with vaults.mjs's preview ids.
+// (RKOI round-1 WARNING 7 correction: an earlier revision of this comment
+// additionally claimed domain/ids.mjs's stableId joins with a plain space
+// while its header comment claims NUL-joining -- that claim was itself
+// wrong; stableId's `parts.join("\0")` always has NUL-joined, matching its
+// own header comment, both before and after the literal-NUL-byte-to-escape
+// fix WARNING 7 made to that file's source bytes. domain/entity-store.mjs's
+// OWN computeEntityId is the one real space-joined derivation in this
+// codebase, a separate function with its own, genuinely different,
+// intentionally-unchanged convention -- see that file's own corrected
+// comment.) This module reuses the *mechanism* (stableId/mintRef) exactly
+// as instructed.
 import { MspRuntimeError, VaultProvisionConflictError } from "./errors.mjs";
 import { mintRef, stableId } from "./ids.mjs";
 
@@ -79,6 +85,8 @@ export class VaultRegistry {
   #selectMount;
   #selectAnyMount;
   #insertMount;
+  #selectActivePrincipalPrivateVault;
+  #selectActivePrincipalPassportVault;
 
   constructor(db) {
     this.#db = db;
@@ -115,6 +123,15 @@ export class VaultRegistry {
       INSERT INTO vault_mounts (mount_id, vault_id, workspace_id, mount_alias, access_mode, status, mounted_at)
       VALUES (@mount_id, @vault_id, @workspace_id, @mount_alias, @access_mode, 'mounted', @mounted_at)
     `);
+    // RKOI round-1 WARNING 8: prepared once, like every other statement in
+    // this class -- hasActivePrincipalPrivateVault/PassportVault used to
+    // call db.prepare(...) inline on every invocation instead.
+    this.#selectActivePrincipalPrivateVault = db.prepare(
+      "SELECT 1 FROM vaults WHERE vault_type = 'principal_private' AND tenant_id = ? AND principal_id = ? AND agent_id = ? AND workspace_id = ? AND status = 'active'",
+    );
+    this.#selectActivePrincipalPassportVault = db.prepare(
+      "SELECT 1 FROM vaults WHERE vault_type = 'principal_passport' AND tenant_id = ? AND principal_id = ? AND status = 'active'",
+    );
   }
 
   /**
@@ -309,21 +326,11 @@ export class VaultRegistry {
    * on the same connection inside the same transaction).
    */
   hasActivePrincipalPrivateVault({ tenantId, principalId, agentId, workspaceId }) {
-    return Boolean(
-      this.#db
-        .prepare(
-          "SELECT 1 FROM vaults WHERE vault_type = 'principal_private' AND tenant_id = ? AND principal_id = ? AND agent_id = ? AND workspace_id = ? AND status = 'active'",
-        )
-        .get(tenantId, principalId, agentId, workspaceId),
-    );
+    return Boolean(this.#selectActivePrincipalPrivateVault.get(tenantId, principalId, agentId, workspaceId));
   }
 
   hasActivePrincipalPassportVault({ tenantId, principalId }) {
-    return Boolean(
-      this.#db
-        .prepare("SELECT 1 FROM vaults WHERE vault_type = 'principal_passport' AND tenant_id = ? AND principal_id = ? AND status = 'active'")
-        .get(tenantId, principalId),
-    );
+    return Boolean(this.#selectActivePrincipalPassportVault.get(tenantId, principalId));
   }
 
   /**

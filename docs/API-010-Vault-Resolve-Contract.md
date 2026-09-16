@@ -144,7 +144,13 @@ additive-only:
 - **`permissions.read`/`.writePrivate`/`.writeShared`**: echo
   `authorization.read`/`.write_private`/`.write_shared` as booleans.
 - **`permissions.policyVersion`**: echoes `access_context.policy_version`
-  (empty string if absent).
+  when it is a non-empty string; otherwise the literal sentinel
+  `"unspecified"` (RKOI PH-MEMOS-5 review round 1, WARNING 6 — corrected
+  from an earlier draft's "empty string if absent": zuri-ai's shipped,
+  unmodified `validateVaultSet` throws on an empty `permissions.policyVersion`,
+  so an empty-string default would have silently broken the response
+  contract for any caller that legitimately omits `policy_version`, exactly
+  the case §3 documents as optional/nullable).
 - **`permissions.allowPassport`** (new): echoes the same boolean MSP just
   read from `authorization.allow_passport` — confirmation, not an
   independent decision.
