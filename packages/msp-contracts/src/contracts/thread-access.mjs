@@ -23,15 +23,12 @@
 //     (code `thread_scope_denied`), mirroring
 //     contracts/vault-scope-guard.mjs's assertVaultScope(isAccessible,
 //     message) exactly.
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 
 import {
-  GrantExpiredError,
-  GrantPayloadMismatchError,
-  GrantSignatureInvalidError,
-  GrantUnconfiguredError,
   ThreadScopeDeniedError,
 } from "./errors.mjs";
+import { verifySignedGrant } from "./signed-grant.mjs";
 
 /**
  * Signs a thread-tool request with a short-lived grant. Used by the
@@ -88,45 +85,10 @@ export function signThreadRequest(name, input, claims, key, now = Date.now()) {
  * @param {number} [now]
  */
 export function verifyThreadGrant(name, input, access, keyFor, now = Date.now()) {
-  const grant = access?.grant;
-  const claimedTenantId = grant && typeof grant === "object" ? grant.tenantId : undefined;
-  const key = typeof keyFor === "function" ? keyFor(claimedTenantId) : keyFor;
-  if (typeof key !== "string" || key.length < 32) {
-    throw new GrantUnconfiguredError("No thread service key is configured for this grant's claimed tenant.");
-  }
-  if (!grant || typeof grant !== "object" || grant.operation !== name) {
-    throw new GrantSignatureInvalidError("The grant is missing or names a different operation.");
-  }
-  const actual = Buffer.from(typeof access?.signature === "string" ? access.signature : "", "hex");
-  const expected = createHmac("sha256", key).update(JSON.stringify(grant)).digest();
-  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-    throw new GrantSignatureInvalidError("The grant signature does not match.");
-  }
-  if (!Number.isInteger(grant.expiresAt) || grant.expiresAt <= now || grant.expiresAt > now + 65_000) {
-    throw new GrantExpiredError();
-  }
-  if (grant.payloadHash !== createHash("sha256").update(JSON.stringify(input)).digest("hex")) {
-    throw new GrantPayloadMismatchError();
-  }
-  if (!grant.tenantId || !grant.principalId || !grant.policyRevision) {
-    throw new GrantSignatureInvalidError("The grant is missing a required claim (tenantId, principalId or policyRevision).");
-  }
-  // PH-MEMOS-3 stage 2 (design doc Sec.6.1.1, DEC-MEMOS-21): agentId/
-  // workspaceId join the same "missing required claim" bucket -- the
-  // shipped check already treats "signature is fine but a required claim
-  // is absent" as grant_signature_invalid, not a scope question, since the
-  // grant itself is malformed before scope is even evaluated. Required on
-  // every one of the fifteen API-011 tools, with no charset constraint beyond
-  // non-emptiness and the 128-character bound (MSP has no agent/workspace
-  // identity registry of its own, mirroring principalId's own treatment as
-  // an opaque Tier-1-owned string).
-  if (!grant.agentId || !grant.workspaceId) {
-    throw new GrantSignatureInvalidError("The grant is missing a required claim (agentId or workspaceId).");
-  }
-  if (typeof grant.agentId !== "string" || grant.agentId.length > 128 || typeof grant.workspaceId !== "string" || grant.workspaceId.length > 128) {
-    throw new GrantSignatureInvalidError("agentId and workspaceId must be strings of at most 128 characters.");
-  }
-  return grant;
+  return verifySignedGrant(name, input, access, keyFor, {
+    now,
+    requiredClaims: ["tenantId", "principalId", "policyRevision", "agentId", "workspaceId"],
+  });
 }
 
 /**

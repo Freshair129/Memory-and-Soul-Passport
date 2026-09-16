@@ -32,11 +32,21 @@ function stableStringify(value) {
 }
 
 function computeEntityId(vaultId, category, key) {
-  // Same convention as domain/ids.mjs's stableId (space-joined parts,
-  // sha256, first 24 hex chars), minted as an msp:-namespaced ref via
-  // mintRef. WP-14: vaultId is now the first hashed part after the "entity"
-  // tag, so the same (category, key) pair in two different vaults always
-  // produces two different entity_ids.
+  // RKOI round-1 WARNING 7: this function's own join separator is a plain
+  // space (" "), NOT domain/ids.mjs's stableId -- that function joins its
+  // parts with a NUL byte (see its own header comment and its
+  // `parts.join("\0")`), a genuinely different, incompatible convention.
+  // The two were never meant to produce comparable hashes for the same
+  // inputs; this comment previously (wrongly) claimed they matched. sha256,
+  // first 24 hex chars, and mintRef's "entity"-prefixed msp:-namespaced ref
+  // ARE shared with stableId's own shape -- only the separator differs.
+  // Unchanged on purpose: every entity_id ever minted by this exact
+  // space-joined derivation must keep hashing identically (migration 0003's
+  // UNIQUE(vault_id, category, key) constraint and every persisted
+  // entity_history row already depend on it), so this comment is corrected
+  // without touching the join itself. WP-14: vaultId is now the first
+  // hashed part after the "entity" tag, so the same (category, key) pair
+  // in two different vaults always produces two different entity_ids.
   const digest = sha256Hex(["entity", vaultId, category, key].join(" ")).slice(0, 24);
   return mintRef("entity", digest);
 }

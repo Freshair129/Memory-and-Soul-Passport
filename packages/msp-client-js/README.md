@@ -20,7 +20,7 @@ start without one rather than choosing a database path for you.
 **This is the behaviour most likely to surprise you.** The MSP child is not
 given your process environment. It is given exactly:
 
-- `MSP_RUNTIME_ENV_NAMES` — the fifteen variables the MSP server reads:
+- `MSP_RUNTIME_ENV_NAMES` — the eighteen variables the MSP server reads:
   `MSP_DB_PATH`, `MSP_GKS_COMMAND`, `MSP_GKS_ARGS`, `MSP_GKS_CWD`,
   `MSP_PIPELINE_PRINCIPALS`, `MSP_GKS_PIPELINE_CREDENTIAL`,
   `MSP_PIPELINE_WORKER_URL`, `MSP_PIPELINE_WORKER_TOKEN`, `OLLAMA_BASE_URL`,
@@ -30,7 +30,12 @@ given your process environment. It is given exactly:
   entirely, for every tenant, with no fallback), `MSP_IDENTITY_HMAC_KEY`
   (API-011 thread-memory secrets — see
   `docs/API-011-THREAD-MEMORY-CONTRACT.md` — never journaled or echoed back
-  to a caller), `MSP_THREAD_IDLE_TIMEOUT_MINUTES` /
+  to a caller), `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED` (set to `1` to require
+  the signed principal/agent grant for global private reads; default off),
+  `MSP_IDENTITY_HMAC_KEY_VERSION` (active erasure-receipt key generation;
+  required for erasure), `MSP_IDENTITY_HMAC_KEYRING` (optional JSON object
+  of retired receipt-key generations used to match earlier erasure receipts,
+  not to authorize grants), `MSP_THREAD_IDLE_TIMEOUT_MINUTES` /
   `MSP_THREAD_RECENT_EXCHANGES` (API-011 per-deployment ceilings), and
   `MSP_THREAD_RETENTION_DAYS` (PH-MEMOS-4, `msp_thread_retention_tick`'s
   deployment-wide age horizon in days — unset or `0` is a documented,

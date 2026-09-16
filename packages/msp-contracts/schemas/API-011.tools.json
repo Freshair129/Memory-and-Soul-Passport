@@ -4,7 +4,7 @@
   "title": "API-011 Thread Memory MSP tools",
   "contract": {
     "doc_id": "API-011-THREAD-MEMORY-CONTRACT",
-    "version": "0.3.0b",
+    "version": "0.4.1b",
     "source": "docs/API-011-THREAD-MEMORY-CONTRACT.md"
   },
   "$defs": {
@@ -365,6 +365,11 @@
           },
           "access": {
             "$ref": "#/$defs/access"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
           }
         }
       },
@@ -759,6 +764,9 @@
           },
           "access": {
             "$ref": "#/$defs/access"
+          },
+          "erase_vault": {
+            "type": "boolean"
           }
         }
       }

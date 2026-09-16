@@ -6,6 +6,7 @@
   "exports": {
     "./*": "./src/contracts/*.mjs",
     "./api-009": "./schemas/API-009.tools.json",
+    "./api-010": "./schemas/API-010.tools.json",
     "./api-011": "./schemas/API-011.tools.json",
     "./genesisrag17": "./schemas/GENESISRAG17.tools.json"
   },

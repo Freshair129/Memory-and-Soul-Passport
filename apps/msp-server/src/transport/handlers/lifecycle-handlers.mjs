@@ -4,7 +4,8 @@
 // of GKS's gks_stage_evidence_export — docs/TIER-BOUNDARY-17-STAGE.md).
 import { proofRef, memoryPromotionRef, knowledgePromotionRef } from "@freshair129/msp-contracts/refs";
 import { rejectCanonicalCandidate, requireNoGksRefs } from "@freshair129/msp-contracts/namespace-guard";
-import { GksProviderInvalidResponseError, GksProviderUnconfiguredError, ValidationError } from "@freshair129/msp-contracts/errors";
+import { GksProviderInvalidResponseError, GksProviderUnconfiguredError, ValidationError, VaultScopeDeniedError } from "@freshair129/msp-contracts/errors";
+import { assertGlobalPrivateGrant, verifyVaultGrant } from "@freshair129/msp-contracts/vault-grant-guard";
 
 const HASH = /^[a-f0-9]{64}$/i;
 
@@ -167,7 +168,7 @@ function validateGksResult(result, expectedHash) {
   return { knowledge_ref: result.knowledge_ref, source_hash: result.source_hash.toLowerCase(), idempotent: result.idempotent };
 }
 
-export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journal, gksProvider = null }) {
+export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journal, gksProvider = null, keyFor, globalPrivateGrantRequired = false, now = Date.now }) {
   // WP-14: promotions is re-keyed to UNIQUE(vault_id, idempotency_key) (was
   // UNIQUE(idempotency_key) globally) -- this is the direct fix for the
   // cross-agent Global-Private disclosure this packet exists to close (see
@@ -355,6 +356,20 @@ export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journa
         throw new ValidationError(
           `Unsupported target_scope "${targetScope}"; only "global_private" and "shared" are recognized.`,
         );
+      }
+
+      let grant = null;
+      if (args.access !== undefined) {
+        const { access, ...input } = args;
+        try {
+          grant = verifyVaultGrant("msp_memory_promote", input, access, keyFor, { vaultType: "global_private", now: now() });
+        } catch {
+          throw new VaultScopeDeniedError("vault_scope_denied: a matching global-private grant is required.");
+        }
+        if (grant) assertGlobalPrivateGrant({ agent_id: agentId }, grant);
+      }
+      if (globalPrivateGrantRequired && !grant) {
+        throw new VaultScopeDeniedError("vault_scope_denied: a matching global-private grant is required.");
       }
 
       const result = runGlobalPrivatePromotion({

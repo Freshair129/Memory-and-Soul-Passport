@@ -25,14 +25,17 @@ import { VaultRegistry } from "@freshair129/msp-core/vault-registry";
 import { createRetrievalService } from "@freshair129/msp-retrieval/retrieval-service";
 import { createVectorClient } from "@freshair129/msp-retrieval/vector";
 import { createContextHandlers } from "./transport/handlers/context-handlers.mjs";
+import { createConsolidationHandlers } from "./transport/handlers/consolidation-handlers.mjs";
 import { createLifecycleHandlers } from "./transport/handlers/lifecycle-handlers.mjs";
 import { createMemoryHandlers } from "./transport/handlers/memory-handlers.mjs";
 import { createPipelineHandlers } from "./transport/handlers/pipeline-handlers.mjs";
 import { createGksProviderFromEnvironment } from "./providers/gks-stdio-provider.mjs";
+import { resolveIdentityHmacConfig } from "./config/identity-hmac-keyring.mjs";
 import { resolveThreadServiceKeyFor } from "./config/thread-service-keyring.mjs";
 import { createThreadGuard } from "./transport/handlers/thread-guard.mjs";
 import { createThreadHandlers } from "./transport/handlers/thread-handlers.mjs";
 import { createVaultHandlers } from "./transport/handlers/vault-handlers.mjs";
+import { createVaultResolveHandler } from "./transport/handlers/vault-resolve-handler.mjs";
 import { createStdioJsonRpcServer } from "./transport/stdio-jsonrpc-server.mjs";
 import { ToolRegistry } from "./transport/tool-registry.mjs";
 
@@ -57,6 +60,11 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   // file, and must never leave an in-process caller holding an open DB
   // handle it never asked for and has no way to close.
   const threadServiceKeyFor = resolveThreadServiceKeyFor(env);
+  // PH-MEMOS-6 / BL-MEMOS-076: parse the optional retired identity-key
+  // ring before opening the database. The active key/version pair remains
+  // request-gated by msp_thread_principal_erase so existing room/journal
+  // callers keep their prior startup behavior.
+  const identityHmacConfig = resolveIdentityHmacConfig(env);
 
   const db = open(dbPath);
   runMigrations(db, migrationsDir);
@@ -68,12 +76,23 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const vectorClient = createVectorClient();
   const retrievalService = createRetrievalService({ db, vectorClient });
   const gksProvider = createGksProviderFromEnvironment(env);
+  const globalPrivateGrantRequired = env.MSP_GLOBAL_PRIVATE_GRANT_REQUIRED === "1";
 
-  const vaultHandlers = createVaultHandlers({ vaultRegistry, journal });
-  const contextHandlers = createContextHandlers({ db, journal });
-  const lifecycleHandlers = createLifecycleHandlers({ db, entityStore, vaultRegistry, journal, gksProvider });
-  const memoryHandlers = createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore });
+  const vaultHandlers = createVaultHandlers({ vaultRegistry, journal, keyFor: threadServiceKeyFor, globalPrivateGrantRequired });
+  // Signed principal resolution needs the identity key for its audit actor.
+  // Unsigned legacy resolution does not require identity or service keys.
+  const vaultResolveHandler = createVaultResolveHandler({
+    db,
+    vaultRegistry,
+    journal,
+    identityHmacKey: identityHmacConfig.key,
+    keyFor: threadServiceKeyFor,
+  });
+  const contextHandlers = createContextHandlers({ db, journal, keyFor: threadServiceKeyFor, now: Date.now });
+  const lifecycleHandlers = createLifecycleHandlers({ db, entityStore, vaultRegistry, journal, gksProvider, keyFor: threadServiceKeyFor, globalPrivateGrantRequired });
+  const memoryHandlers = createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore, keyFor: threadServiceKeyFor, globalPrivateGrantRequired });
   const pipelineHandlers = createPipelineHandlers({ gksProvider, journal, env });
+  const consolidationHandlers = createConsolidationHandlers({ db, entityStore, vaultRegistry, keyFor: threadServiceKeyFor });
 
   // W1: whether a caller-supplied `now` may ever reach the thread-memory
   // domain layer is decided ONCE, here, at the composition root -- never
@@ -95,7 +114,9 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const threadHandlers = createThreadHandlers({
     db,
     journal,
-    identityHmacKey: env.MSP_IDENTITY_HMAC_KEY ?? null,
+    identityHmacKey: identityHmacConfig.key,
+    identityHmacKeyVersion: identityHmacConfig.version,
+    identityHmacKeyring: identityHmacConfig.keyring,
     idleTimeoutMinutes: parsePositiveEnv("MSP_THREAD_IDLE_TIMEOUT_MINUTES", 30),
     recentExchangeCount: parsePositiveEnv("MSP_THREAD_RECENT_EXCHANGES", 6),
     allowTestClock,
@@ -113,15 +134,17 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
     key: threadServiceKeyFor,
     // RKOI review (2nd round), WARNING 1: the guard recomputes a grant's own
     // room hash to compare against a resolved thread's stored one.
-    identityHmacKey: env.MSP_IDENTITY_HMAC_KEY ?? null,
+    identityHmacKey: identityHmacConfig.key,
   });
 
   const toolRegistry = new ToolRegistry();
   toolRegistry.register("msp_ping", async () => ({ ok: true, timestamp: new Date().toISOString() }));
   for (const [name, handler] of Object.entries(vaultHandlers)) toolRegistry.register(name, handler);
+  for (const [name, handler] of Object.entries(vaultResolveHandler)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(contextHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(lifecycleHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(memoryHandlers)) toolRegistry.register(name, handler);
+  for (const [name, handler] of Object.entries(consolidationHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(pipelineHandlers)) toolRegistry.register(name, handler);
   for (const [name, handler] of Object.entries(threadHandlers)) {
     toolRegistry.register(name, guardThreadHandler({ name, handler }));

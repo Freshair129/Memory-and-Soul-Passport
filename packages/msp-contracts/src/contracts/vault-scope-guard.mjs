@@ -19,7 +19,7 @@
 // "before the request reaches domain/" in the sense that matters: the
 // mutating domain/ call (e.g. vaultRegistry.mountVault(), which writes a
 // vault_mounts row) never runs when this guard throws.
-import { VaultScopeDeniedError } from "./errors.mjs";
+import { AccessContextDeniedError, AccessContextRequiredError, VaultScopeDeniedError } from "./errors.mjs";
 
 /**
  * @param {boolean} isAccessible result of domain/vault-registry.mjs's
@@ -31,4 +31,32 @@ export function assertVaultScope(isAccessible, message) {
   if (!isAccessible) {
     throw new VaultScopeDeniedError(message);
   }
+}
+
+/**
+ * PH-MEMOS-5 (design §5.1, DEC-MEMOS-49): the new guard behind API-009's
+ * access_context amendment -- nine new call sites in
+ * apps/msp-server/src/transport/handlers/memory-handlers.mjs, one per
+ * msp_memory_* tool, never a reuse of assertVaultScope's own single
+ * existing call site (msp_vault_mount, plus msp_memory_links_create's
+ * pre-existing endpoint-consistency check, both unchanged by this
+ * amendment). Takes the three-way STRING outcome
+ * domain/vault-registry.mjs's classifyPrincipalAccess(vault, accessContext)
+ * already computed -- this module reads no database row and imports no
+ * domain/ module at all, keeping the same "compute the boolean/outcome in
+ * domain/, throw on it in contracts/" split assertVaultScope itself
+ * already uses.
+ *
+ * @param {null | "ok" | "access_context_required" | "access_context_denied"} outcome
+ * @param {string} [message] optional, more specific denial message.
+ */
+export function assertAccessContext(outcome, message) {
+  if (outcome === null || outcome === "ok") return;
+  if (outcome === "access_context_required") {
+    throw new AccessContextRequiredError(message);
+  }
+  if (outcome === "access_context_denied") {
+    throw new AccessContextDeniedError(message);
+  }
+  throw new TypeError(`assertAccessContext: unrecognized outcome "${outcome}".`);
 }

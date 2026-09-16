@@ -1,7 +1,7 @@
 ---
-version: "0.2.2b"
+version: "0.3.2b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-12T12:00:00+07:00,Claude Opus 5"
+last_update: "2026-09-17T03:40:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp"
@@ -70,6 +70,44 @@ npm start
 
 The server uses JSON-RPC 2.0 messages separated by newlines on stdin/stdout. It implements `initialize`, `notifications/initialized`, and `tools/call`; tool discovery is intentionally static and there is no `tools/list`.
 
+### Signed principal memory and local setup
+
+MEMOS-008 uses signed `access: { grant, signature }` for principal vault
+resolution, all nine principal memory tools, and scoped context reads.
+Unsigned `msp_vault_resolve` still returns legacy vault fields, null
+principal IDs, and requires neither a service nor an identity key.
+Signed principal resolution needs `MSP_THREAD_SERVICE_KEY` (or its tenant
+keyring) and `MSP_IDENTITY_HMAC_KEY` for the receipt actor. API-011 thread
+identity paths also require the identity key. Principal vault IDs are random
+UUIDs, independent of those keys and the owner tuple.
+
+`MSP_GLOBAL_PRIVATE_GRANT_REQUIRED=1` requires a matching agent grant for
+global memory and promotion. Status omits the global vault when no grant is
+present. The flag defaults off; a present invalid or wrong-agent grant is
+refused regardless of the flag. Mounts do not bypass that check.
+
+Erasure receipts require `MSP_IDENTITY_HMAC_KEY_VERSION` alongside the active
+identity key. Optional `MSP_IDENTITY_HMAC_KEYRING` retains older receipt keys
+for matching after rotation; it does not authorize thread grants. See
+[receipt evidence and rotation](docs/BL-MEMOS-076-EVIDENCE.md).
+
+The requested local database is initialized at `.local/msp.db` with schema
+15. From an integration checkout, set `MSP_DB_PATH` to its absolute path
+before `npm start`. The runtime is a stdio service. No credentials or
+external service activation are implied by creating the empty database.
+Migration 0013 adds the global nonce partition; 0014 pseudonymizes erasure
+receipts and refuses an existing non-empty raw receipt table.
+
+The owner-approved [Phase 6 contract](docs/PHASE6-CONSOLIDATION-PASSPORT.md)
+adds protected-record consolidation, threshold-gated passport promotion and
+a reference-only context digest. Signed writes consume fresh nonces in the
+entity/provenance transaction. `msp_thread_memory_record.confidence` defaults
+to 0; passport promotion requires confidence >= 0.90 and two distinct
+confirmed sessions. `msp_thread_principal_erase({erase_vault:true})` performs
+bounded atomic content/retrieval erasure. Migration 0015 adds these storage
+contracts. Summary-item ingestion remains outside the approved concrete API.
+Release review, merge/tag and publication remain separate gates.
+
 ## GenesisRAG17 relay
 
 MSP is Tier 2 in the isolated `genesisrag17.v1` pipeline. It owns runtime
@@ -99,6 +137,9 @@ See [docs/NOTES.md](docs/NOTES.md) for extraction evidence and known gaps, and [
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.3.2b | 2026-09-17 | beta | Describe approved Phase 6 APIs, confidence policy and bounded vault erasure; distinguish package candidate from release activation. | working-tree | RWANG |
+| 0.3.1b | 2026-09-17 | beta | Align signed grants, unsigned legacy compatibility, global gate, receipt key versioning and local schema setup; retain Phase 6/release gates. | working-tree | RWANG |
+| 0.3.0b | 2026-09-16 | beta | PH-MEMOS-5: principal vaults (`principal_private`/`principal_passport`, `migrations/0011`), API-010 `msp_vault_resolve`, the API-009 `access_context` amendment on all nine `msp_memory_*` tools, scoped `contexts` receipts (`migrations/0012`), and the multi-agent vault rules. `MSP_IDENTITY_HMAC_KEY` is now a hard deployment prerequisite for `msp_vault_resolve`. | working-tree | KIN |
 | 0.2.2b | 2026-09-12 | beta | Toolchain section: Node `>=22` for `better-sqlite3` 13 (N-API), why 11.x/12.x must not return, and the second-process rule that `close()` now enforces. | working-tree | Claude Opus 5 |
 | 0.2.0b | 2026-09-08 | beta | Added the authenticated GenesisRAG17 relay boundary, nine-tool ownership summary, pinned zuri-ai acceptance pointer, ADR and isolated local runbook. | working-tree | ATHER |
 | 0.1.1b | 2026-08-12 | beta | Finalized implementation commit metadata. | 394a176 | ATHER |

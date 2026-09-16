@@ -5,22 +5,23 @@
 // (domain/ids.mjs, domain/errors.mjs) -- never contracts/ or transport/,
 // per ADR-027's layering rule.
 //
-// Id minting reuses domain/ids.mjs's stableId/mintRef, following the same
-// stableId(prefix, ...parts) call shape packages/govibe-core/src/vaults.mjs
-// uses for its own local preview ids (e.g. stableId("vault", "shared",
-// projectId)). The two implementations are not byte-identical: vaults.mjs
-// joins hash parts with a NUL separator and uses a two-value vault_type
-// (shared/private) plus a separate vault_level, while WP-13's schema (see
-// 0002_phase2.sql) collapses type+level into a single three-value
-// vault_type enum (shared/workspace_private/global_private) and
-// domain/ids.mjs's stableId joins parts with a plain space -- a pre-existing
-// mismatch already present in WP-12's domain/ids.mjs (its own header
-// comment claims NUL-joining, its implementation does not); that is not
-// this packet's file to fix. This module reuses the *mechanism*
-// (stableId/mintRef) exactly as instructed; it does not claim byte-for-byte
-// id parity with vaults.mjs's preview ids.
-import { MspRuntimeError } from "./errors.mjs";
-import { mintRef, stableId } from "./ids.mjs";
+// Legacy vaults retain their stable ids for compatibility. Principal vaults
+// use mintVaultId() below so owner tuples never influence the opaque id.
+// (RKOI round-1 WARNING 7 correction: an earlier revision of this comment
+// additionally claimed domain/ids.mjs's stableId joins with a plain space
+// while its header comment claims NUL-joining -- that claim was itself
+// wrong; stableId's `parts.join("\0")` always has NUL-joined, matching its
+// own header comment, both before and after the literal-NUL-byte-to-escape
+// fix WARNING 7 made to that file's source bytes. domain/entity-store.mjs's
+// OWN computeEntityId is the one real space-joined derivation in this
+// codebase, a separate function with its own, genuinely different,
+// intentionally-unchanged convention -- see that file's own corrected
+// comment.) This module reuses the *mechanism* (stableId/mintRef) exactly
+// as instructed.
+import { MspRuntimeError, VaultProvisionConflictError } from "./errors.mjs";
+import { mintRef, mintVaultId, stableId } from "./ids.mjs";
+
+export const PROVISION_ID_MINT_RETRY_LIMIT = 5;
 
 function rowToVault(row) {
   if (!row) return null;
@@ -31,8 +32,11 @@ function rowToVault(row) {
     project_id: row.project_id,
     workspace_id: row.workspace_id,
     agent_id: row.agent_id,
+    tenant_id: row.tenant_id ?? null,
+    principal_id: row.principal_id ?? null,
     role: row.role ?? null,
     status: row.status,
+    decay_policy: row.decay_policy,
     created_at: row.created_at,
   };
 }
@@ -59,10 +63,13 @@ export class VaultRegistry {
   #selectGlobalPrivate;
   #selectById;
   #insertVault;
+  #insertPrincipalVault;
   #backfillProjectId;
   #selectMount;
   #selectAnyMount;
   #insertMount;
+  #selectActivePrincipalPrivateVault;
+  #selectActivePrincipalPassportVault;
 
   constructor(db) {
     this.#db = db;
@@ -73,6 +80,17 @@ export class VaultRegistry {
     this.#insertVault = db.prepare(`
       INSERT INTO vaults (vault_id, vault_type, project_id, workspace_id, agent_id, role, status, created_at)
       VALUES (@vault_id, @vault_type, @project_id, @workspace_id, @agent_id, @role, 'active', @created_at)
+    `);
+    // PH-MEMOS-5 (design §5.2, §12.4): a NEW prepared statement, not a
+    // reuse of #insertVault above -- #insertVault's fixed column list
+    // omits decay_policy/tenant_id/principal_id entirely,
+    // so routing a principal_passport row through it would insert with no
+    // decay_policy value, falling to the column's own
+    // DEFAULT 'ebbinghaus', which then fails 0011's own
+    // decay_policy = 'pinned' CHECK for that type.
+    this.#insertPrincipalVault = db.prepare(`
+      INSERT INTO vaults (vault_id, vault_type, tenant_id, principal_id, agent_id, workspace_id, decay_policy, status, created_at)
+      VALUES (@vault_id, @vault_type, @tenant_id, @principal_id, @agent_id, @workspace_id, @decay_policy, @status, @created_at)
     `);
     this.#backfillProjectId = db.prepare(
       "UPDATE vaults SET project_id = @project_id WHERE vault_id = @vault_id AND project_id IS NULL",
@@ -85,6 +103,15 @@ export class VaultRegistry {
       INSERT INTO vault_mounts (mount_id, vault_id, workspace_id, mount_alias, access_mode, status, mounted_at)
       VALUES (@mount_id, @vault_id, @workspace_id, @mount_alias, @access_mode, 'mounted', @mounted_at)
     `);
+    // RKOI round-1 WARNING 8: prepared once, like every other statement in
+    // this class -- hasActivePrincipalPrivateVault/PassportVault used to
+    // call db.prepare(...) inline on every invocation instead.
+    this.#selectActivePrincipalPrivateVault = db.prepare(
+      "SELECT 1 FROM vaults WHERE vault_type = 'principal_private' AND tenant_id = ? AND principal_id = ? AND agent_id = ? AND workspace_id = ? AND status = 'active'",
+    );
+    this.#selectActivePrincipalPassportVault = db.prepare(
+      "SELECT 1 FROM vaults WHERE vault_type = 'principal_passport' AND tenant_id = ? AND principal_id = ? AND status = 'active'",
+    );
   }
 
   /**
@@ -214,6 +241,120 @@ export class VaultRegistry {
   }
 
   /**
+   * PH-MEMOS-5 (design §5.2), lazy/idempotent, keyed on all four owner
+   * fields: two agents serving the same person get two DISTINCT episodic
+   * vaults (design §5.5 rule 1), falling directly out of this key, not a
+   * separate enforcement path.
+   */
+  provisionPrincipalPrivateVault({ tenantId, principalId, agentId, workspaceId }) {
+    if (!tenantId) throw new TypeError("provisionPrincipalPrivateVault requires tenantId.");
+    if (!principalId) throw new TypeError("provisionPrincipalPrivateVault requires principalId.");
+    if (!agentId) throw new TypeError("provisionPrincipalPrivateVault requires agentId.");
+    if (!workspaceId) throw new TypeError("provisionPrincipalPrivateVault requires workspaceId.");
+    return this.#provisionPrincipalVault({
+      vaultType: "principal_private",
+      activeWhere:
+        "vault_type = 'principal_private' AND tenant_id = ? AND principal_id = ? AND agent_id = ? AND workspace_id = ? AND status = 'active'",
+      activeParams: [tenantId, principalId, agentId, workspaceId],
+      row: {
+        vault_type: "principal_private",
+        tenant_id: tenantId,
+        principal_id: principalId,
+        agent_id: agentId,
+        workspace_id: workspaceId,
+        decay_policy: "ebbinghaus",
+      },
+    });
+  }
+
+  /**
+   * PH-MEMOS-5 (design §5.2), lazy/idempotent, keyed on tenantId +
+   * principalId only -- agent_id/workspace_id are always null for this
+   * type (design §5, §12.4).
+   */
+  provisionPrincipalPassportVault({ tenantId, principalId }) {
+    if (!tenantId) throw new TypeError("provisionPrincipalPassportVault requires tenantId.");
+    if (!principalId) throw new TypeError("provisionPrincipalPassportVault requires principalId.");
+    return this.#provisionPrincipalVault({
+      vaultType: "principal_passport",
+      activeWhere: "vault_type = 'principal_passport' AND tenant_id = ? AND principal_id = ? AND status = 'active'",
+      activeParams: [tenantId, principalId],
+      row: {
+        vault_type: "principal_passport",
+        tenant_id: tenantId,
+        principal_id: principalId,
+        agent_id: null,
+        workspace_id: null,
+        decay_policy: "pinned",
+      },
+    });
+  }
+
+  /**
+   * PH-MEMOS-5 (design §5.3): a plain existence read, never a mutation --
+   * lets msp_vault_resolve's own handler tell "this call newly provisioned
+   * a vault" apart from "this call found an already-active one" for its
+   * journal receipt's provisioned_episodic/provisioned_passport booleans,
+   * without changing provisionPrincipalPrivateVault/PassportVault's own
+   * RKOI-approved return shape (a plain vault row, matching every other
+   * provision*Vault method in this class) to smuggle that bit through.
+   * Call this BEFORE provisionPrincipalPrivateVault/PassportVault, inside
+   * the SAME outer transaction, so the check-then-provision sequence is
+   * consistent (no race between the read and the provision, since both run
+   * on the same connection inside the same transaction).
+   */
+  hasActivePrincipalPrivateVault({ tenantId, principalId, agentId, workspaceId }) {
+    return Boolean(this.#selectActivePrincipalPrivateVault.get(tenantId, principalId, agentId, workspaceId));
+  }
+
+  hasActivePrincipalPassportVault({ tenantId, principalId }) {
+    return Boolean(this.#selectActivePrincipalPassportVault.get(tenantId, principalId));
+  }
+
+  /**
+   * Shared by both principal provisioners. The active-row lookup and the
+   * random-id insert run in one immediate transaction, with a bounded retry
+   * only for the impossible-but-testable UUID primary-key collision.
+   */
+  #provisionPrincipalVault({ vaultType, activeWhere, activeParams, row }) {
+    const run = this.#db.transaction(() => {
+      const existing = this.#db.prepare(`SELECT * FROM vaults WHERE ${activeWhere}`).get(...activeParams);
+      if (existing) return rowToVault(existing);
+
+      let vaultId = mintVaultId();
+      let attempts = 0;
+      for (;;) {
+        try {
+          this.#insertPrincipalVault.run({
+            vault_id: vaultId,
+            ...row,
+            status: "active",
+            created_at: new Date().toISOString(),
+          });
+          break;
+        } catch (err) {
+          if (err?.code === "SQLITE_CONSTRAINT_PRIMARYKEY") {
+            if (attempts < PROVISION_ID_MINT_RETRY_LIMIT) {
+              attempts += 1;
+              vaultId = mintVaultId();
+              continue;
+            }
+            throw new VaultProvisionConflictError(
+              `mintVaultId() produced a colliding vault_id ${PROVISION_ID_MINT_RETRY_LIMIT + 1} times in a row; retry`,
+            );
+          }
+          if (err?.code === "SQLITE_CONSTRAINT_UNIQUE" || err?.code === "SQLITE_BUSY_SNAPSHOT") {
+            throw new VaultProvisionConflictError();
+          }
+          throw err;
+        }
+      }
+      return rowToVault(this.#db.prepare("SELECT * FROM vaults WHERE vault_id = ?").get(vaultId));
+    });
+    return run.immediate();
+  }
+
+  /**
    * WP-14 AC-04: the ownership/scope check backing `vault_scope_denied`
    * enforcement. Returns a plain boolean -- never throws, never itself
    * shapes an error -- so transport/handlers/*.mjs can pass the result
@@ -222,34 +363,65 @@ export class VaultRegistry {
    * contracts/ decoupled from this module (see that file's header comment
    * for the layering rationale).
    *
-   * A caller (identified by workspaceId and/or agentId, whichever the
-   * calling tool's request shape actually carries) is considered
-   * authorized for vaultId if:
-   *   - the vault is unknown: false (an unknown vault_id is a distinct
-   *     not_found condition, not a scope question -- callers check
-   *     getVaultById() separately when they need to tell the two apart);
-   *   - a workspace_mounts row already links vaultId to workspaceId
-   *     (status='mounted'): true -- a previously-authorized mount remains
-   *     authorized (idempotent re-mount with a different alias, etc.);
-   *   - vault_type is 'workspace_private': true only if the vault's own
-   *     workspace_id equals the caller's workspaceId (a workspace never
-   *     owns another workspace's private vault);
-   *   - vault_type is 'global_private': true only if the vault's own
-   *     agent_id equals the caller's agentId (this cannot be satisfied
-   *     through a request shape that carries no agentId, e.g.
-   *     msp_vault_mount's current request -- that is a deliberate,
-   *     conservative consequence of this fix, not an oversight: a
-   *     workspace-scoped mount request has no way to prove agent
-   *     ownership of a Global-Private vault, so it is denied);
-   *   - vault_type is 'shared': true only if the caller's own
-   *     workspace-private vault (looked up by workspaceId) is already
-   *     known to belong to the same project_id as the shared vault.
+   * PH-MEMOS-5 (design §5.2): now a thin SELECT-then-delegate wrapper
+   * around #isVaultRowAccessibleTo below, the single row-taking branch set
+   * this method and classifyPrincipalAccess() both share -- this is
+   * mountVault's sole caller and remains fully backward-compatible for
+   * every existing {workspaceId, agentId}-only caller.
    */
-  isVaultAccessibleTo(vaultId, { workspaceId = null, agentId = null } = {}) {
+  isVaultAccessibleTo(vaultId, ctx = {}) {
     const vault = this.#selectById.get(vaultId);
-    if (!vault) return false;
+    return this.#isVaultRowAccessibleTo(vault, ctx);
+  }
 
-    if (workspaceId && this.#selectAnyMount.get(vaultId, workspaceId)) {
+  /**
+   * PH-MEMOS-5 (design §5.2), the single normative branch set both
+   * isVaultAccessibleTo() and classifyPrincipalAccess() share -- never
+   * restated a second time anywhere else in this codebase. Takes an
+   * ALREADY-FETCHED row (never performs its own SELECT), so a caller that
+   * already has the row in hand (classifyPrincipalAccess, called from a
+   * transport handler's own requireKnownVault/getVaultById lookup) never
+   * pays for a second one.
+   *
+   *   - vault not found: false (unchanged).
+   *   - vault.status !== 'active': false, checked FIRST, before any tuple
+   *     comparison, for every vault type -- an erased principal vault's
+   *     still-populated tenant_id/agent_id/workspace_id columns (0011
+   *     blanks only principal_id on erasure) must never read as
+   *     accessible merely because they still match. This is the single
+   *     place this status gate lives; requireKnownVault stays existence-
+   *     only by design (API-009 §5.1) and is never asked to check status.
+   *   - vault_type === 'principal_private': all four owner fields must be
+   *     present AND match exactly.
+   *   - vault_type === 'principal_passport': tenantId/principalId must
+   *     match AND allowPassport must be exactly true.
+   *   - the three legacy branches (workspace-mount short-circuit,
+   *     workspace_private, global_private, shared) are unchanged from
+   *     before this phase -- reordered only so the two principal branches
+   *     above sit ahead of the workspace-mount short-circuit, removing
+   *     (at zero behavioral cost, since 0011's vault_mounts triggers
+   *     already refuse ever inserting a mount row naming a principal
+   *     vault_id) principal-vault isolation's dependency on that
+   *     cross-table invariant.
+   */
+  #isVaultRowAccessibleTo(vault, { workspaceId = null, agentId = null, tenantId = null, principalId = null, allowPassport = false } = {}) {
+    if (!vault) return false;
+    if (vault.status !== "active") return false;
+
+    if (vault.vault_type === "principal_private") {
+      return Boolean(tenantId && principalId && agentId && workspaceId)
+        && vault.tenant_id === tenantId
+        && vault.principal_id === principalId
+        && vault.agent_id === agentId
+        && vault.workspace_id === workspaceId;
+    }
+    if (vault.vault_type === "principal_passport") {
+      return Boolean(tenantId && principalId && allowPassport === true)
+        && vault.tenant_id === tenantId
+        && vault.principal_id === principalId;
+    }
+
+    if (workspaceId && this.#selectAnyMount.get(vault.vault_id, workspaceId)) {
       return true;
     }
 
@@ -268,6 +440,28 @@ export class VaultRegistry {
   }
 
   /**
+   * Classify a verified vault-grant claim set against a principal vault row.
+   * The transport layer collapses every non-ok result to its surface-specific
+   * refusal; this domain method only compares the already-fetched row.
+   */
+  classifyPrincipalAccess(vault, claims) {
+    if (!vault || (vault.vault_type !== "principal_private" && vault.vault_type !== "principal_passport")) {
+      return null;
+    }
+    if (!claims || typeof claims !== "object") {
+      return "access_context_denied";
+    }
+    const outcome = this.#isVaultRowAccessibleTo(vault, {
+      tenantId: claims.tenantId ?? null,
+      principalId: claims.principalId ?? null,
+      agentId: claims.agentId ?? null,
+      workspaceId: claims.workspaceId ?? null,
+      allowPassport: claims.allowPassport === true,
+    });
+    return outcome ? "ok" : "access_context_denied";
+  }
+
+  /**
    * Idempotent by (vault_id, workspace_id, mount_alias). Rejects an unknown
    * vault_id (fail closed -- a mount must target a vault this registry
    * actually provisioned, never an arbitrary caller-supplied string).
@@ -276,15 +470,18 @@ export class VaultRegistry {
     if (!vaultId) throw new TypeError("mountVault requires vaultId.");
     if (!workspaceId) throw new TypeError("mountVault requires workspaceId.");
     if (!mountAlias) throw new TypeError("mountVault requires mountAlias.");
+    const vault = this.getVaultById(vaultId);
+    if (!vault) {
+      throw new MspRuntimeError(`mountVault: unknown vault_id "${vaultId}".`, "not_found");
+    }
+    if (vault.vault_type === "principal_private" || vault.vault_type === "principal_passport") {
+      throw new MspRuntimeError(`mountVault: unknown vault_id "${vaultId}".`, "not_found");
+    }
     if (!["read", "read_write"].includes(accessMode)) {
       throw new MspRuntimeError(
         `mountVault requires accessMode "read" or "read_write", got "${accessMode}".`,
         "invalid_request",
       );
-    }
-    const vault = this.getVaultById(vaultId);
-    if (!vault) {
-      throw new MspRuntimeError(`mountVault: unknown vault_id "${vaultId}".`, "not_found");
     }
 
     const run = this.#db.transaction(() => {

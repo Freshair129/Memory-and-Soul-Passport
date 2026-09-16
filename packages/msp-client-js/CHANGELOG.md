@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.7 (release candidate, unpublished)
+
+- Forward `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED`, `MSP_IDENTITY_HMAC_KEY_VERSION`
+  and `MSP_IDENTITY_HMAC_KEYRING` to the child runtime for the approved
+  principal/global grant and erasure-receipt contracts.
+- The generic stdio caller supports the three Phase 6 tools without changing
+  its public call interface. Phase 6 authorization is enforced by the server.
+- Document all eighteen supported runtime environment variables.
+- Local package validation does not imply npm publication.
+
 ## 0.2.6
 
 - `MSP_THREAD_RETENTION_DAYS` is forwarded to the MSP child (added to

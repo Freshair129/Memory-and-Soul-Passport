@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Freshair129/msp/blob/main/packages/msp-contracts/schemas/API-010.tools.json",
+  "title": "API-010 Vault Resolve MSP tool",
+  "contract": {
+    "doc_id": "API-010-VAULT-RESOLVE-CONTRACT",
+    "version": "0.2.0b",
+    "source": "docs/API-010-Vault-Resolve-Contract.md"
+  },
+  "$defs": {
+    "vaultResolveAccessContext": {
+      "type": "object",
+      "required": ["tenant_id", "principal_id", "agent_id", "workspace_id", "project_id"],
+      "properties": {
+        "tenant_id": { "type": "string", "minLength": 1 },
+        "business_id": { "type": ["string", "null"] },
+        "principal_id": { "type": "string", "minLength": 1 },
+        "agent_id": { "type": "string", "minLength": 1 },
+        "instance_id": { "type": ["string", "null"] },
+        "project_id": { "type": "string", "minLength": 1 },
+        "workspace_id": { "type": "string", "minLength": 1 },
+        "thread_id": { "type": ["string", "null"] },
+        "session_id": { "type": ["string", "null"] },
+        "policy_version": { "type": ["string", "null"] }
+      }
+    },
+    "signedAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grant", "signature"],
+      "properties": {
+        "grant": {
+          "type": "object",
+          "required": ["operation", "expiresAt", "payloadHash"],
+          "properties": {
+            "operation": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "expiresAt": { "type": "integer" },
+            "payloadHash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+            "tenantId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "principalId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "allowPassport": { "type": "boolean" },
+            "nonce": { "type": "string", "minLength": 1, "maxLength": 128 }
+          },
+          "additionalProperties": true
+        },
+        "signature": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+      }
+    },
+    "vaultResolveAuthorization": {
+      "type": "object",
+      "properties": {
+        "membership_active": { "type": "boolean" },
+        "allowed": { "type": "boolean" },
+        "allow_global_private": { "type": "boolean" },
+        "allow_tenant_global_private": { "type": "boolean" },
+        "allow_shared": { "type": "boolean" },
+        "read": { "type": "boolean" },
+        "write_private": { "type": "boolean" },
+        "write_shared": { "type": "boolean" },
+        "allow_passport": { "type": "boolean" }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "msp_vault_resolve",
+      "inputSchema": {
+        "type": "object",
+        "required": ["access_context", "authorization"],
+        "properties": {
+          "actor": { "type": "string" },
+          "access_context": { "$ref": "#/$defs/vaultResolveAccessContext" },
+          "authorization": { "$ref": "#/$defs/vaultResolveAuthorization" },
+          "access": { "$ref": "#/$defs/signedAccess" }
+        }
+      }
+    }
+  ]
+}

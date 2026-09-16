@@ -18,6 +18,10 @@ function encode(payload) {
  *                                  optional per-tenant grant HMAC keys; disables MSP_THREAD_SERVICE_KEY
  *                                  entirely for every tenant once set)
  *   MSP_IDENTITY_HMAC_KEY          apps/msp-server/src/server.mjs (API-011 room-ref/journal-actor HMAC)
+ *   MSP_GLOBAL_PRIVATE_GRANT_REQUIRED
+ *                                   apps/msp-server/src/server.mjs (PH-MEMOS-5 global-private gate)
+ *   MSP_IDENTITY_HMAC_KEY_VERSION  apps/msp-server/src/config/identity-hmac-keyring.mjs (BL-MEMOS-076 active receipt-key generation)
+ *   MSP_IDENTITY_HMAC_KEYRING      apps/msp-server/src/config/identity-hmac-keyring.mjs (BL-MEMOS-076 retired receipt-key generations)
  *   MSP_THREAD_IDLE_TIMEOUT_MINUTES, MSP_THREAD_RECENT_EXCHANGES
  *                                  apps/msp-server/src/server.mjs (API-011 per-deployment ceilings)
  *   MSP_THREAD_RETENTION_DAYS     apps/msp-server/src/server.mjs (PH-MEMOS-4,
@@ -44,6 +48,9 @@ export const MSP_RUNTIME_ENV_NAMES = Object.freeze([
   "MSP_THREAD_SERVICE_KEY",
   "MSP_THREAD_SERVICE_KEYRING",
   "MSP_IDENTITY_HMAC_KEY",
+  "MSP_GLOBAL_PRIVATE_GRANT_REQUIRED",
+  "MSP_IDENTITY_HMAC_KEY_VERSION",
+  "MSP_IDENTITY_HMAC_KEYRING",
   "MSP_THREAD_IDLE_TIMEOUT_MINUTES",
   "MSP_THREAD_RECENT_EXCHANGES",
   "MSP_THREAD_RETENTION_DAYS",
