@@ -1,7 +1,7 @@
 ---
-version: "0.1.16b"
+version: "0.1.17b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-15T23:59:00+07:00,ATHER"
+last_update: "2026-09-16T09:00:00+07:00,ATHER"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -24,7 +24,10 @@ the owner on 2026-09-14 as well. **`DEC-MEMOS-22..35`, added in the PH-MEMOS-4
 (participant lifecycle, erasure, retention, export) revision (`34`/`35` added
 in the RKOI-review-response round), were confirmed by the owner on
 2026-09-15** ("ยืนยัน"), the same way `17..21` were confirmed on 2026-09-14.
-**All thirty-five decisions are now confirmed by the owner.** This ADR
+**All thirty-five of those decisions are confirmed by the owner.**
+**`DEC-MEMOS-36..48`, added in this revision (PH-MEMOS-5 scoping,
+2026-09-16), are new adopted defaults and are NOT yet confirmed** — the
+owner-confirmation checklist below marks them unchecked. This ADR
 authorizes design work, not a merge — merge still waits on the owner's own
 explicit instruction to proceed.
 
@@ -520,6 +523,45 @@ assertion.
 **No new `DEC-MEMOS`/`BL-MEMOS`/`RSK-MEMOS` id this round** — this round
 corrects prose to match already-adopted decisions; it adopts nothing new.
 
+## Revision note — PH-MEMOS-5 (principal vaults, API-010, API-009 `access_context` amendment) spec (2026-09-16)
+
+This revision scopes PH-MEMOS-5 (`TASK-MEMOS-008`, `BL-MEMOS-060..068`/
+`105`) in full for the first time — a design pass only, no code, and not
+yet reviewed by RKOI. It adds **`DEC-MEMOS-36..48`** below (thirteen new
+adopted defaults, **pending owner confirmation** — unlike decisions
+22–35, nothing in this range has been confirmed as of this revision) and
+the corresponding checklist rows, all unchecked. Full technical
+specification lives in
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.6.0b §5–§5.5,
+§12.4–§12.4.1; this ADR records only the decision paragraphs and the
+cross-repo change list, per its own "what this ADR does not decide"
+boundary (below).
+
+The single most load-bearing piece of this revision is `BL-MEMOS-105`'s
+cross-repo read: zuri-ai already ships a real `msp_vault_resolve` caller
+(`msp-vault-resolver.js`, `origin/main@4ca28c1d`), and it does **not**
+match a "clean" extension of API-011's own signed-grant model — it sends
+no `grant`/`signature` at all, has no `allow_passport` concept, and
+requires a `project_id` field with no principal-vault meaning. Every one
+of these is resolved **additively** in `DEC-MEMOS-40`/`41`/`42` below,
+never by silently designing something the shipped caller cannot call —
+the full verification table is design §5.3.1. One genuine gap remains and
+is filed as its own item rather than assumed away: `BL-MEMOS-113`
+(`DEC-MEMOS-48`), zuri-ai's own `validateVaultSet` must be updated before
+the new response fields are actually usable — deferred to `PH-MEMOS-8`
+alongside `BL-MEMOS-106`/`092`/`093`, consistent with the owner's
+2026-09-14 direction that channel activation stays parked.
+
+Also corrected in this revision: the owner-confirmation checklist's item
+7 named a placeholder migration number (`0009`) for principal vaults,
+written before `0009`/`0010` actually merged as `thread_agents`/
+`erasure_receipts`. The underlying decision (`DEC-MEMOS-07`/`14`:
+migration numbers are assigned in merge order, never pre-bound) is
+**not** reopened — only the stale example number in the checklist's own
+prose is corrected to the concrete number this revision actually assigns
+(`0011`, `DEC-MEMOS-37`), the same way `BL-MEMOS-060`'s own row in the
+plan has always phrased it.
+
 ## Context
 
 Two independent efforts exist for MSP's thread/session/memory surface, and
@@ -981,6 +1023,126 @@ RKOI-review-response round below, were confirmed by the owner on
     itself, no per-row content) — a `dry_run: false` call additionally
     consumes a nonce and journals normally, unchanged from before. —
     *confirmed by the owner, 2026-09-15.* (design §11.2).
+36. **DEC-MEMOS-36, principal vault owner tuples and `decay_policy`
+    pinning.** `principal_private` (the episodic vault) is owned by
+    `tenant_id, principal_id, agent_id, workspace_id`, all `NOT NULL`
+    while active, and decays on the ordinary Ebbinghaus schedule;
+    `principal_passport` (the Soul Passport vault) is owned by
+    `tenant_id, principal_id` alone (`agent_id`/`workspace_id` always
+    `NULL`) and never decays. `decay_policy` is a new `vaults` column,
+    pinned per type by a `CHECK`, not a caller-chosen setting. — *pending
+    owner confirmation.* (design §5, §12.4).
+37. **DEC-MEMOS-37, migration numbers.** The principal-vaults migration is
+    `0011`; scoped `contexts` receipts is its own migration, `0012` —
+    both provisional per `DEC-MEMOS-14`'s merge-order rule, now concrete
+    because `0008`/`0009`/`0010` are confirmed already merged to `main`
+    as thread memory, `thread_agents` and `erasure_receipts`. — *pending
+    owner confirmation.* (design §12.4, §12.4.1).
+38. **DEC-MEMOS-38, `vaults` rebuild strategy.** The migration uses the
+    `-- msp-migration: foreign-keys=off` directive and the safe
+    create/copy/drop/rename order (`docs/MIGRATION.md`), since `vaults`
+    is a real parent table with four existing child tables
+    (`vault_mounts`, `entities`, `promotions`, `links`) and SQLite cannot
+    alter a `CHECK` in place. The per-type owner `CHECK`s exempt an
+    erased row (`status = 'erased'`, `principal_id` blanked) in advance,
+    but the erasure transition itself is out of this phase's scope
+    (PH-MEMOS-6). — *pending owner confirmation.* (design §12.4).
+39. **DEC-MEMOS-39, never-mountable enforcement.** Two triggers on
+    `vault_mounts` (`BEFORE INSERT`/`BEFORE UPDATE`) refuse a mount
+    naming a `principal_private`/`principal_passport` `vault_id` at the
+    database layer; `VaultRegistry#mountVault` refuses the same case at
+    the JS layer first — deliberate defense in depth, not redundant
+    duplication. A separate `vaults` identity-pin `UPDATE` trigger
+    permits only the pre-existing legacy `project_id` backfill and the
+    (deferred) erasure transition, pinning every other column on both
+    branches. — *pending owner confirmation.* (design §5.2, §12.4).
+40. **DEC-MEMOS-40, `msp_vault_resolve`'s request matches zuri-ai's
+    shipped, unsigned caller exactly.** No `grant`/`signature` field, no
+    HMAC, no expiry — resolved in favor of matching what
+    `msp-vault-resolver.js` actually sends (`origin/main@4ca28c1d`) rather
+    than extending API-011's signed-grant model to a tool that would then
+    be uncallable by the one real caller that exists. Accepted on the
+    same stdio-only trust boundary already accepted for the entire
+    API-011 surface (`RSK-MEMOS-05`) — not a new, weaker precedent. —
+    *pending owner confirmation.* (design §5.3).
+41. **DEC-MEMOS-41, `msp_vault_resolve`'s response is additive-only.**
+    `workspacePrivateVaultId`/`globalPrivateVaultIds`/`sharedVaultIds`/
+    `permissions.{read,writePrivate,writeShared,policyVersion}` keep
+    their exact shape and camelCase casing; new
+    `principalPrivateVaultId`/`principalPassportVaultId`/
+    `permissions.allowPassport` fields use the same casing convention and
+    are silently dropped by the shipped client's own `validateVaultSet`
+    until it is updated (`BL-MEMOS-113`, decision 48) — confirmed safe by
+    reading that function's source, not assumed. — *pending owner
+    confirmation.* (design §5.3).
+42. **DEC-MEMOS-42, `allow_passport` gating is safe by default.**
+    zuri-ai's shipped `authorizationFacts()` does not send `allow_passport`
+    at all; MSP treats its absence, or any value other than the literal
+    `true`, identically to `false` — no passport vault provisioned or
+    returned. The episodic (`principal_private`) vault, by contrast,
+    resolves and is lazily provisioned on every well-formed call, gated
+    by no flag — matching the design's own tier table ("this principal's
+    turns with this agent in this workspace," every turn). — *pending
+    owner confirmation.* (design §5.3, §5.5).
+43. **DEC-MEMOS-43, the API-009 `access_context` shape.** One flat,
+    snake_case object (`tenant_id`, `principal_id`, `agent_id`?,
+    `workspace_id`?, `allow_passport`?), reusing `msp_vault_resolve`'s own
+    field names so a caller can share one object across both tool
+    families; mandatory only when the target vault (or, for
+    `msp_memory_history`/`forget`/`links_list`/`links_create`, the vault
+    the named entity resolves to) is `principal_private`/
+    `principal_passport`; unaffected and ignored-if-sent for every legacy
+    vault. `msp_memory_links_create` needs no independent second check
+    for its two endpoints — the pre-existing WP-17 same-vault refusal
+    (`migrations/0006_links.sql`) already guarantees both endpoints share
+    one vault before this amendment's logic ever runs. — *pending owner
+    confirmation.* (design §5.1).
+44. **DEC-MEMOS-44, error-code vocabulary for the amendment.**
+    `vault_scope_denied`'s existing meaning is broadened additively (same
+    code, not a new one) to also cover an `access_context` mismatch. Two
+    genuinely new codes: `access_context_required` (the field is absent
+    on a principal-vault-type request) and `access_context_denied` (the
+    field is present but wrong — tuple mismatch, or a passport target
+    missing `allow_passport: true`; deliberately the same code for both
+    sub-cases, so a caller cannot learn "wrong principal" from "right
+    principal, no passport grant," mirroring `DEC-MEMOS-33`'s no-new-
+    oracle reasoning). — *pending owner confirmation.* (design §5.1).
+45. **DEC-MEMOS-45, `msp_memory_decay_tick`'s `pinned` field.** The
+    response gains `pinned: boolean`, read from the target vault's own
+    `decay_policy` column — `true` only for `principal_passport`. When
+    `true`, `evaluated`/`transitioned` are always `0`/`[]` regardless of
+    `dry_run`, a distinct statement from `dry_run`'s own
+    computed-but-not-persisted contract, never conflated with it. —
+    *pending owner confirmation.* (design §5.1).
+46. **DEC-MEMOS-46, scoped `contexts` receipts.** `tenant_id`/
+    `principal_id`, both nullable, added by a plain `ALTER TABLE` (no
+    rebuild — `contexts` is not FK-referenced by any other table);
+    both-or-neither is enforced at the contracts layer
+    (`context-scope-guard.mjs`), not a database `CHECK`, mirroring
+    `migrations/0006_links.sql`'s own precedent for an app-layer-only
+    cross-column invariant. `include_payload` is refused for a scoped row
+    unconditionally on `msp_context_diff`/`audit`/`replay`, even given a
+    correctly-matching `access_context` — it is not a second read path
+    around the entity-level checks decision 43 already adds. — *pending
+    owner confirmation.* (design §5.4, §12.4.1).
+47. **DEC-MEMOS-47, the API-009 contract file's own edit is deferred to
+    implementation time.** This design pass fully specifies the
+    `access_context` amendment's content (decision 43–45) but does not
+    itself edit `docs/API-009-Persistent-Memory-Contract.md` — that
+    version bump and Changelog row are `BL-MEMOS-063`'s own
+    implementation-time deliverable, the same precedent already set for
+    API-011's contract file versus its design-doc specification
+    (design §6.1.1). — *pending owner confirmation.* (design §5.1).
+48. **DEC-MEMOS-48, new cross-repo item `BL-MEMOS-113`.** zuri-ai's
+    `msp-vault-resolver.js`/`validateVaultSet` must be extended to read
+    and forward `principalPrivateVaultId`/`principalPassportVaultId`/
+    `permissions.allowPassport` before a caller can actually *use* a
+    principal vault `msp_vault_resolve` resolves — until then these
+    fields are safely, silently dropped by the shipped client (decision
+    41), not broken. Deferred to `PH-MEMOS-8`, alongside
+    `BL-MEMOS-106`/`092`/`093`, since production use is itself deferred
+    by owner direction (2026-09-14). — *pending owner confirmation.*
+    (design §5.3.1).
 
 ### The multi-user model
 
@@ -1177,6 +1339,40 @@ instruction that every cross-repo change be listed in both places:
   the stage-2-only requirements happens before stage 2 merges, and no
   channel activation (PH-MEMOS-8) happens before that.
 
+## Cross-repo changes PH-MEMOS-5 requires of zuri-ai (`BL-MEMOS-105`)
+
+A separate list from `RSK-MEMOS-01` above — these are about the new
+`msp_vault_resolve`/API-009 surface, not the API-011 grant.
+
+- **`msp_vault_resolve` needs no zuri-ai-side change to keep working as
+  it does today** (decisions 40/41) — the request/response shapes below
+  are read directly from the shipped `msp-vault-resolver.js`
+  (`origin/main@4ca28c1d`), not invented, and the new response fields are
+  additive and silently dropped by the shipped client's own
+  `validateVaultSet` until it is updated.
+- **New item — `BL-MEMOS-113` (decision 48):** zuri-ai's
+  `msp-vault-resolver.js`/`validateVaultSet` must be extended to read and
+  forward `principalPrivateVaultId`/`principalPassportVaultId`/
+  `permissions.allowPassport` before a caller can actually *use* a
+  principal vault `msp_vault_resolve` resolves — today these fields are
+  present on the wire but structurally unreachable through the shipped
+  client. Deferred to `PH-MEMOS-8`, alongside `BL-MEMOS-106`/`092`/`093`,
+  since production use is itself deferred by owner direction
+  (2026-09-14).
+- **New item, same deferral — `authorizationFacts()` must add
+  `allow_passport` (decision 42):** without this, `msp_vault_resolve`
+  always answers `principalPassportVaultId: null` for every zuri-ai call,
+  which is safe (never over-grants) but also means the passport tier is
+  unreachable from zuri-ai until this ships. No new `BL-MEMOS` id — this
+  is the same `BL-MEMOS-113` caller-side change, not a second one.
+- **`access_context` on `msp_memory_*` calls remains `BL-MEMOS-106`'s own
+  item, unchanged by this ADR** — already tracked in the plan, deferred to
+  `PH-MEMOS-8`.
+- None of the above changes any field zuri-ai's `msp_vault_resolve`
+  caller already sends — every addition is a new response field the
+  shipped client does not yet read, not a request-shape change it would
+  need to adopt merely to keep calling MSP.
+
 ## Consequences
 
 - MSP gains one coherent API-011 surface instead of two incompatible ones,
@@ -1200,10 +1396,14 @@ instruction that every cross-repo change be listed in both places:
 
 ## What this ADR does not decide
 
-- The exact corrected DDL for the folded migration, and for the stage-2
-  multi-agent migration — that is
-  `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.4.2b's job, not
+- The exact corrected DDL for the folded migration, the stage-2
+  multi-agent migration, the principal-vaults migration (`0011`) and the
+  scoped-`contexts` migration (`0012`) — that is
+  `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.6.0b's job, not
   this ADR's.
+- The live edit to `docs/API-009-Persistent-Memory-Contract.md` itself —
+  `DEC-MEMOS-47` defers that to `BL-MEMOS-063`'s own implementation-time
+  commit, matching the precedent already set for API-011's contract file.
 - Whether or when GoVibe or Zuri actually calls the participant lifecycle
   tool (decision 4 only says MSP must provide it).
 - Ceiling → tier policy and passport promotion thresholds — these were
@@ -1221,7 +1421,7 @@ instruction that every cross-repo change be listed in both places:
 
 Items 1–16 were confirmed by the owner on 2026-09-14, and items 17–21 later the same day. Item 7's migration
 numbering is read as corrected by DEC-MEMOS-14: later migrations are
-numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-09-14 in a separate answer ("ยืนยัน RKOI rulings 1-4"). **Items 22–35 (PH-MEMOS-4 scoping, 2026-09-15, `34`/`35` added in the RKOI-review-response round) were confirmed by the owner on 2026-09-15** ("ยืนยัน") **— corrected (RKOI PH-MEMOS-4 review, WARNING 1): an earlier revision's changelog claimed this checklist had already been extended with items 22–33; it had not been. The rows below are the actual extension, now checked.**
+numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-09-14 in a separate answer ("ยืนยัน RKOI rulings 1-4"). **Items 22–35 (PH-MEMOS-4 scoping, 2026-09-15, `34`/`35` added in the RKOI-review-response round) were confirmed by the owner on 2026-09-15** ("ยืนยัน") **— corrected (RKOI PH-MEMOS-4 review, WARNING 1): an earlier revision's changelog claimed this checklist had already been extended with items 22–33; it had not been. The rows below are the actual extension, now checked.** **Items 36–48 (PH-MEMOS-5 scoping, 2026-09-16) are new and are NOT yet confirmed** — left unchecked below, pending the owner's own answer, exactly like items 17–21 and 22–35 each stood before their own confirmation date.
 
 - [x] 1. API-010 = `msp_vault_resolve`; thread/session/memory surface = API-011.
 - [x] 2. The branch's six `msp_thread_*` tool shapes are canonical (business fields frozen).
@@ -1229,7 +1429,7 @@ numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-
 - [x] 4. A participant lifecycle tool exists in MSP; wiring callers is deferred.
 - [x] 5. Erasure ships before any channel activation.
 - [x] 6. Room refs are HMAC-at-rest; `MSP_IDENTITY_HMAC_KEY` is required.
-- [x] 7. Thread memory = migration 0008 (folded, corrected); principal vaults = migration 0009.
+- [x] 7. Thread memory = migration 0008 (folded, corrected); principal vaults = a later migration, number assigned at merge (**corrected, PH-MEMOS-5 scoping, 2026-09-16**: `0009`/`0010` merged first as `thread_agents`/`erasure_receipts`, so principal vaults is `0011`, `DEC-MEMOS-37` — the underlying decision, numbers assigned in merge order, is unchanged and not reopened; only this row's stale placeholder number is corrected).
 - [x] 8. Thread-scoped memory stays in thread tables; consolidation to principal vaults is later and owner-context-only.
 - [x] 9. Caller-supplied `now` is test-only, never production.
 - [x] 10. No extractive fallback; `coverageGap` is the mechanism.
@@ -1262,14 +1462,28 @@ numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-
 - [x] 33. An unknown principal is a trivial success on both erase and export, never `not_found` (DEC-MEMOS-33).
 - [x] 34. Erasure/export summary and delivery-table disposition is restricted to threads where the principal is the thread's sole-ever `HUMAN` participant (checked as two separate counts, `speaker_id` and non-null `person_id`, either disqualifying) **and** the thread carries no `thread_messages` row with `speaker_kind NOT IN ('HUMAN', 'AGENT')` anywhere on it; a `GROUP`/`ROOM` thread failing either condition is left untouched (erasure) or excluded entirely (export), a conservative under-erasure default, stated as such (DEC-MEMOS-34).
 - [x] 35. `msp_thread_retention_tick`'s `dry_run: true` consumes no nonce but does write a journal entry, the same as `dry_run: false` — only the nonce exemption is dry-run-specific (DEC-MEMOS-35).
+- [ ] 36. Principal vault owner tuples: `principal_private` = `tenant_id, principal_id, agent_id, workspace_id`, ebbinghaus decay; `principal_passport` = `tenant_id, principal_id` only, pinned (no decay) (DEC-MEMOS-36).
+- [ ] 37. The principal-vaults migration is `0011`; scoped `contexts` receipts is its own migration, `0012` (DEC-MEMOS-37).
+- [ ] 38. `vaults` is rebuilt with the `foreign-keys=off` directive and the safe create/copy/drop/rename order; the erased-row `CHECK` exemption is added now, the erasure transition itself ships in PH-MEMOS-6 (DEC-MEMOS-38).
+- [ ] 39. Never-mountable enforcement is two `vault_mounts` triggers plus a JS-layer `mountVault` refusal; a separate `vaults` identity-pin trigger permits only the legacy backfill and the future erasure transition (DEC-MEMOS-39).
+- [ ] 40. `msp_vault_resolve`'s request is unsigned, matching zuri-ai's shipped `msp-vault-resolver.js` exactly — no `grant`/`signature` field — on the same stdio-only trust boundary already accepted for API-011 (DEC-MEMOS-40).
+- [ ] 41. `msp_vault_resolve`'s response is additive-only; legacy fields unchanged in shape and casing, new principal-vault fields camelCase and safely dropped by the shipped, unmodified client (DEC-MEMOS-41).
+- [ ] 42. `allow_passport` absent or not exactly `true` is a safe default (no passport vault provisioned or returned); the episodic vault resolves on every well-formed call with no gating flag (DEC-MEMOS-42).
+- [ ] 43. API-009's `access_context` is one flat, snake_case object reusing `msp_vault_resolve`'s own field names, mandatory only for a principal-vault-type target; entity-id-only tools resolve entity → vault first, and `links_create` needs no independent second check (DEC-MEMOS-43).
+- [ ] 44. `vault_scope_denied`'s meaning is broadened additively to cover an `access_context` mismatch; two new codes, `access_context_required` and `access_context_denied` (DEC-MEMOS-44).
+- [ ] 45. `msp_memory_decay_tick` gains a `pinned` response field; a `principal_passport` vault always reports zero transitions regardless of `dry_run` (DEC-MEMOS-45).
+- [ ] 46. Scoped `contexts` rows add nullable `tenant_id`/`principal_id` via a plain `ALTER TABLE`, both-or-neither enforced at the contracts layer; `include_payload` is refused unconditionally for a scoped row (DEC-MEMOS-46).
+- [ ] 47. The live edit to `docs/API-009-Persistent-Memory-Contract.md` is deferred to `BL-MEMOS-063`'s own implementation-time commit, not part of this design pass (DEC-MEMOS-47).
+- [ ] 48. New cross-repo item `BL-MEMOS-113`: zuri-ai's `validateVaultSet` must be updated to read and forward the new principal-vault response fields before they are usable in production, deferred to PH-MEMOS-8 (DEC-MEMOS-48).
 
 Overturning any row above reopens the corresponding section of
-`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.5.3b named in its
+`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.6.0b named in its
 mapping table (§3.1).
 
 ## Evidence and implementation map
 
-- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.5.3b (superseded in relevant part by this ADR + the design's own §0.1 review response)
+- Prior design: [`DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`](DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md) v0.6.0b (superseded in relevant part by this ADR + the design's own §0.1 review response)
+- Cross-repo source read for `BL-MEMOS-105`: zuri-ai `msp-vault-resolver.js`/`msp-vault-resolver.test.js`/`msp-vault-memory-port.test.js`, `origin/main@4ca28c1d`
 - Stage-1 code, the new source of truth for wire/schema shapes: `feat/memos-002-thread-memory` (worktree `agent-ab508b7a790efd268`), especially `migrations/0008_thread_memory.sql`, `packages/msp-core/src/domain/thread-memory.mjs`, `packages/msp-contracts/src/contracts/thread-access.mjs`, `apps/msp-server/src/transport/handlers/thread-guard.mjs`, and `docs/API-011-THREAD-MEMORY-CONTRACT.md`
 - Unmerged branch (facts only, not read via git by this ADR's author): `origin/codex/msp-thread-memory`, commits `50859fb`, `e4303cb`
 - Existing guard pattern the design's C-2 fix follows: [`packages/msp-contracts/src/contracts/vault-scope-guard.mjs`](../packages/msp-contracts/src/contracts/vault-scope-guard.mjs) (the fix itself, `grant-scope-guard.mjs`, does not exist yet — see the corrected C-2 entry above)
@@ -1281,6 +1495,7 @@ mapping table (§3.1).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.17b | 2026-09-16 | proposed | **PH-MEMOS-5 (principal vaults, API-010, API-009 `access_context` amendment) scoped for the first time — design pass only, not yet RKOI-reviewed.** Added a new revision-note section and **`DEC-MEMOS-36..48`** (13 new adopted defaults, pending owner confirmation) to the decision list, matching `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.6.0b §5–§5.5/§12.4–§12.4.1. Added a new "Cross-repo changes PH-MEMOS-5 requires of zuri-ai" section (`BL-MEMOS-113`, the `authorizationFacts()`/`allow_passport` gap) separate from `RSK-MEMOS-01`. Added checklist rows 36–48, unchecked. Corrected checklist item 7's stale placeholder migration number (`0009` → `0011`, `DEC-MEMOS-37`) without reopening `DEC-MEMOS-07`/`14`'s underlying merge-order rule. Extended "what this ADR does not decide" with the `0011`/`0012` DDL and the deferred API-009 contract-file edit (`DEC-MEMOS-47`). Updated the design-version citation to v0.6.0b throughout. No id renumbered or reused; new ids: `DEC-MEMOS-36..48`, cross-repo item `BL-MEMOS-113`. | working-tree | ATHER |
 | 0.1.16b | 2026-09-15 | proposed | Owner confirmed DEC-MEMOS-22..35 ("ยืนยัน"); status-only change, no decision text altered. | working-tree | ATHER |
 | 0.1.15b | 2026-09-15 | proposed | **Answers RKOI's PH-MEMOS-4 review round 3, NEEDS REVISION 1 critical plus 5 warnings** — new "Revision note — RKOI PH-MEMOS-4 review round 3" section. **CRITICAL**: decisions 34 and 35's own paragraphs in "the thirty-five decisions" still carried text withdrawn two rounds ago, even though the owner-confirmation checklist and the round-2 revision-note summary were already correct — decision 34's paragraph gains the second, ANDed `speaker_kind NOT IN ('HUMAN', 'AGENT')` disqualifying condition it was missing; decision 35's paragraph is rewritten to state both `dry_run` arms write a journal entry (only the nonce exemption is dry-run-specific), removing the withdrawn no-journal claim from the decision paragraph itself. **Warnings folded in (design-level)**: named the three-way branch's case 2b (a caller with `assertParticipants` can re-attach a *different*, departed third party on `GROUP`/`ROOM` threads, refused unconditionally on `DIRECT` by the existing schema constraint) in design §7 rule 2/§7.1/§15 and as `BL-MEMOS-052`'s fifth required case; narrowed the `close_for_relink` race's error mapping (design §7.1, §14, §15) to exactly `SQLITE_BUSY_SNAPSHOT`, stating that a plain `SQLITE_BUSY` propagates unmapped; named `dry_run: true`'s unbounded-journal-write tradeoff (design §11.2, §19) as the second stated exception to RKOI ruling 3's nonce pattern; added the missing "first-ever" qualifier to design §13's `msp_thread_message_append` row; bumped `BL-MEMOS-050`'s stale `design v0.5.1b` plan citation to v0.5.3b and expanded `BL-MEMOS-052`'s plan test list to all five required cases plus the raw-SQLite-error assertion. Two design-version citations in this ADR (Evidence map, checklist overturn note) pointed at v0.5.3b. Mirrored in `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.5.3b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.15b. **No new `DEC-MEMOS`/`BL-MEMOS`/`RSK-MEMOS` id this round** — prose-only correction of already-adopted decisions. | working-tree | ATHER |
 | 0.1.14b | 2026-09-15 | proposed | **Answers RKOI's PH-MEMOS-4 review round 2, NEEDS REVISION 2 critical (both subtler than round 1)** — new "Revision note — RKOI PH-MEMOS-4 review round 2" section records the decision-level consequences (full detail in the design's own updated §7 rule 2, §11.1, §11.2, §14, §15, §19). **CRITICAL 1, still open**: round 1's fix ("no current row" → "no row at all") was under-specified — both literal readings fail (a bare swap throws on `current.personId` for `null`; a null-hardened swap silently falls into `DEC-MEMOS-15`'s self-upgrade exception, re-admitting the rejoin with no claim). `BL-MEMOS-058` is re-specified as an explicit three-way branch (never-participated / participated-but-none-current / current-row-exists), with the rejoin case never reading `current` at all and never falling through to `DEC-MEMOS-15`. **CRITICAL 2, new**: `DEC-MEMOS-34` read `thread_participants` only, but `OPERATOR`/`UNKNOWN` speakers post messages with no participant row at all, so a sole-ever-`HUMAN` `GROUP` thread with an `UNKNOWN`-speaker message wrongly qualified and leaked that speaker's content into erasure-exemption and export (RKOI's probe reproduced it) — `DEC-MEMOS-34` gains a second, independent, ANDed disqualifying condition (no `thread_messages` row with `speaker_kind NOT IN ('HUMAN', 'AGENT')` anywhere on the thread; `AGENT` excluded, `UNKNOWN`/`OPERATOR` not). **Warnings folded in**: the ordering rationale was factually wrong for the query as specified (no `left_at` filter — both orderings identical) and is rewritten honestly as defense in depth, with the false "closing first would break the result" acceptance case replaced by a property test; the `dry_run` acceptance criterion ("row counts unchanged") was vacuous against an `UPDATE`-only mechanism and is replaced with a `redaction_state`-count/content-column assertion; the `close_for_relink` race's remaining raw `SQLITE_BUSY_SNAPSHOT` interleaving is now explicitly re-mapped to a typed `conflict`; the `speaker_id`/`person_id` disqualifying check is now two separate counts, either of which disqualifies (the prior SQL counted `speaker_id` only despite its own prose); `RSK-MEMOS-06` gains a stated permanent-erasure-gap consequence, no new id; `DEC-MEMOS-35`'s no-journal half is withdrawn — `dry_run: true` now also writes a journal entry, only the nonce exemption stays dry-run-specific; `migrations/0010`'s header now states its dependency on `0009` explicitly. **No new `DEC-MEMOS`/`BL-MEMOS`/`RSK-MEMOS` id this round** — `DEC-MEMOS-34`/`35`, `BL-MEMOS-058`/`059` and `RSK-MEMOS-06` are revised in place; consistency re-checked, no duplicates. | working-tree | ATHER |
