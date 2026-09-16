@@ -1,6 +1,6 @@
 ---
 doc_id: "API-010-VAULT-RESOLVE-CONTRACT"
-version: "0.1.0b"
+version: "0.2.0b"
 status: "beta"
 created_at: "2026-09-16T00:00:00+07:00,KIN"
 last_update: "2026-09-16T00:00:00+07:00,KIN"
@@ -8,14 +8,14 @@ last_update: "2026-09-16T00:00:00+07:00,KIN"
 
 # API-010 Vault Resolve Contract (`msp_vault_resolve`)
 
-This is the first real implementation of `msp_vault_resolve`. Every earlier
-revision of `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` (back to
-v0.1.0b) named this tool in vocabulary only; it has never had MSP-side code
-before PH-MEMOS-5 (`TASK-MEMOS-008`, `BL-MEMOS-062`). Full design
-specification, every reviewed correction, and the cross-repo verification
-against zuri-ai's shipped caller live in that design document's §5.3/§5.3.1
-— this contract file is the wire-shape source of truth; the design document
-is the reasoning behind it.
+This is the Phase 5 implementation of `msp_vault_resolve`. The current
+normative authority is `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`
+v0.9.9b §5.0; earlier §5.1 material is historical. This contract records
+the wire shape and the signed principal-grant extension. Compatibility was
+checked against the immutable zuri.ai `origin/main` resolver extract at
+`c07cfaba8eedb53f677e313977a1e2344fb5c8c5`; the cross-repo test proves the
+unsigned legacy request/response path without requiring an identity or
+service key.
 
 ## 1. Purpose
 
@@ -39,17 +39,13 @@ response body; `error` follows the same JSON-RPC 2.0 error object shape
 every other tool in this runtime uses, `data.code` carrying the typed error
 code from §5.
 
-**No `access`/`grant`/`signature` field.** Unlike every API-011 tool, this
-request is **unsigned** — it carries no HMAC-signed grant. This is a real,
-deliberate disagreement with API-011's signed-grant model, not an oversight:
-the shipped caller does not send one and cannot be made to without a
-zuri-ai-side change this phase does not schedule. `msp_vault_resolve`
-accepts the request on the same stdio-only trust boundary every tool that
-predates API-011's signed grant already lives on (`RSK-MEMOS-05`,
-`RSK-MEMOS-12`) — a caller able to reach this server at all already shares
-the process boundary that holds every tenant's actual keys. **`access_context`
-here authorizes against a self-asserted identity; it does not authenticate
-the caller.**
+The legacy request remains accepted without an `access` field so the shipped
+zuri.ai resolver stays byte-compatible. When the optional top-level
+`access: { grant, signature }` field is present, the grant is verified against
+the exact request body (with `access` removed) before the principal vault half
+is resolved or provisioned. The signed grant is required for
+`principal_private`/`principal_passport`; legacy fields continue to resolve
+without it.
 
 ## 3. Request
 
@@ -71,6 +67,17 @@ reconstructed:
     "allow_shared": false,
     "read": true, "write_private": false, "write_shared": false,
     "allow_passport": false
+  },
+  "access": {
+    "grant": {
+      "operation": "msp_vault_resolve",
+      "expiresAt": 1757836865123,
+      "payloadHash": "sha256(JSON.stringify(request without access))",
+      "tenantId": "string", "principalId": "string",
+      "agentId": "string", "workspaceId": "string",
+      "allowPassport": false, "nonce": "128-bit-random-string"
+    },
+    "signature": "hex HMAC-SHA256(JSON.stringify(grant))"
   }
 }
 ```
@@ -90,7 +97,7 @@ reconstructed:
 - **`authorization.allowed`** must be exactly `true`, else `vault_scope_denied`
   — MSP re-checks this server-side even though the shipped client-side
   `currentScope()` already refuses first in practice.
-- **`authorization.allow_passport`** (new): absent, or any value other than
+- **`authorization.allow_passport`** (legacy response preference): absent, or any value other than
   the literal `true`, is treated identically to `false` — no passport vault
   is provisioned, no passport-related response field is populated beyond
   its own safe default. The shipped caller does not send this field at all
@@ -130,17 +137,15 @@ additive-only:
   present, never omitted.
 - **`sharedVaultIds`**: `[VaultRegistry.provisionSharedVault(access_context.project_id).vault_id]`
   when `authorization.allow_shared === true`, else `[]` — always present.
-- **`principalPrivateVaultId`** (new): `VaultRegistry.provisionPrincipalPrivateVault`
-  for `(tenant_id, principal_id, agent_id, workspace_id)`, resolved and
-  lazily provisioned on **every** well-formed call — the episodic vault is
-  not gated by any `authorization.*` flag, matching the design's own tier
-  table ("this principal's turns with this agent in this workspace," every
-  turn, no separate opt-in).
-- **`principalPassportVaultId`** (new): `null` unless
-  `authorization.allow_passport === true`, in which case
-  `VaultRegistry.provisionPrincipalPassportVault(tenant_id, principal_id).vault_id`.
-  Never provisioned when the gate does not hold — no row is created "just
-  in case."
+- **`principalPrivateVaultId`** (new): `null` when `access` is absent. When
+  `access` is present and its `msp_vault_resolve` grant verifies, its
+  `tenantId`/`principalId`/`agentId`/`workspaceId` claims must match the
+  request's `access_context`; only then does
+  `VaultRegistry.provisionPrincipalPrivateVault` resolve and lazily provision
+  the episodic vault.
+- **`principalPassportVaultId`** (new): `null` unless the verified grant is
+  present, matches the request, and carries `allowPassport: true` together
+  with `authorization.allow_passport === true`; no row is created otherwise.
 - **`permissions.read`/`.writePrivate`/`.writeShared`**: echo
   `authorization.read`/`.write_private`/`.write_shared` as booleans.
 - **`permissions.policyVersion`**: echoes `access_context.policy_version`
@@ -151,9 +156,9 @@ additive-only:
   so an empty-string default would have silently broken the response
   contract for any caller that legitimately omits `policy_version`, exactly
   the case §3 documents as optional/nullable).
-- **`permissions.allowPassport`** (new): echoes the same boolean MSP just
-  read from `authorization.allow_passport` — confirmation, not an
-  independent decision.
+- **`permissions.allowPassport`** (new): `true` only when both the legacy
+  authorization preference and the verified grant's literal
+  `allowPassport: true` are present; otherwise `false`.
 
 Every field above is **always present with the correct type**, even when a
 permission is denied (`false`/`[]`, never omitted) — the shipped, unmodified
@@ -169,6 +174,11 @@ writeShared,policyVersion}` only) — this is the concrete mechanism behind
 |---|---|
 | `validation_failed` | `access_context` missing a required field (`tenant_id`/`principal_id`/`agent_id`/`workspace_id`/`project_id`), or `authorization` is absent or not an object |
 | `vault_scope_denied` | `authorization.allowed` is not exactly `true` |
+| `grant_signature_invalid` | A present `access` grant is malformed, signed for another operation, or has an invalid required claim |
+| `grant_expired` | A present grant is outside the accepted `expiresAt` window |
+| `grant_payload_mismatch` | A grant hash or its owner tuple does not match this request |
+| `grant_unconfigured` | A present grant cannot be verified because no service key is configured |
+| `grant_nonce_required` / `grant_replayed` | The principal resolve grant has no usable nonce or its nonce was already consumed |
 | `identity_hmac_unconfigured` | No `MSP_IDENTITY_HMAC_KEY` configured. This tool is refused **entirely** without one, not only for principal-vault-touching calls — every well-formed call resolves and journals a `principal_private` vault unconditionally (§4), and that journal receipt's own actor pseudonym needs the key. A deployment must configure `MSP_IDENTITY_HMAC_KEY` before enabling this tool for any caller, including a caller that only wants the legacy fields |
 | `vault_provision_conflict` | A concurrent `msp_vault_resolve` call is provisioning the identical `(tenant_id, principal_id, agent_id, workspace_id)` or `(tenant_id, principal_id)` tuple's first-ever generation (`SQLITE_BUSY_SNAPSHOT` on the losing `INSERT`) — retry the whole call; the retry's own fresh transaction sees the winner's committed row |
 
@@ -208,16 +218,16 @@ provenance field ever appears in this receipt.
 
 ## 8. Compatibility
 
-Versioning: this contract is `0.1.0b`; breaking changes to any request or
+Versioning: this contract is `0.2.0b`; breaking changes to any request or
 response shape require a version bump and a Changelog row, following
 `docs/STD-Document-Versioning-Governance.md`. `docs/API-009-Persistent-
-Memory-Contract.md`'s `access_context` amendment (§4.10 there) reuses this
-tool's own `access_context` field names/casing field-for-field, so a
-caller that already builds one object for this tool can reuse it, trimmed
-or widened per tool, for every `msp_memory_*` call in the same turn.
+Memory-Contract.md`'s signed-access section (§4.11 there) reuses the same
+grant envelope and verifier, while this tool retains its legacy
+`access_context` request object for the shipped caller.
 
 ## Changelog
 
 | Version | Date | Summary |
 |---|---|---|
+| 0.2.0b | 2026-09-17 | PH-MEMOS-5 alignment with design §5.0: retained unsigned legacy resolution, added optional signed principal access, target claim checks, nonce consumption, and conditional principal response fields. |
 | 0.1.0b | 2026-09-16 | PH-MEMOS-5 (`TASK-MEMOS-008`, `BL-MEMOS-062`): first real implementation and first real contract file for `msp_vault_resolve` — request/response shapes matched exactly against zuri-ai's shipped `msp-vault-resolver.js` (`origin/main@4ca28c1d`), full error table, idempotency/concurrency guarantees, and the journal receipt shape. |

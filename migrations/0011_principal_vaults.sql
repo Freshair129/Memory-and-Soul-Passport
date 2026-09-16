@@ -26,23 +26,11 @@ CREATE TABLE vaults_new (
   agent_id TEXT,
   tenant_id TEXT,
   principal_id TEXT,
-  -- principal_hmac is deliberately NOT a column here: the epoch scheme
-  -- below is found by probing vault_id's own PRIMARY KEY directly
-  -- (design §5.2), which needs no stored, owner-keyed lookup column at
-  -- all. It survives only where it always independently existed for a
-  -- different reason: msp_vault_resolve's own transient, per-call
-  -- journal-actor pseudonym (design §5.3), never stored here.
+  -- principal_hmac is deliberately NOT a column here. The random principal
+  -- vault id needs no stored, owner-keyed lookup column; the journal actor
+  -- pseudonym is computed transiently by msp_vault_resolve.
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'erased')),
   decay_policy TEXT NOT NULL DEFAULT 'ebbinghaus' CHECK (decay_policy IN ('ebbinghaus', 'pinned')),
-  -- New (DEC-MEMOS-50): the deterministic vault_id below is computed
-  -- over the owner tuple PLUS this per-tuple generation counter, not
-  -- the tuple alone. A legacy (0-3-type) row's own id predates this
-  -- column and is backfilled to 0 below; it is otherwise unused by
-  -- legacy provisioning, which keeps its own tuple-only stableId call
-  -- unchanged. Found by probing vault_id's own existence at each
-  -- candidate epoch, never by a lookup keyed on any stored column. See
-  -- design §5.2.
-  provision_epoch INTEGER NOT NULL DEFAULT 0,
   role TEXT,
   created_at TEXT NOT NULL,
   -- decay_policy is type-pinned (design §5): a principal_passport vault
@@ -89,10 +77,10 @@ CREATE TABLE vaults_new (
 
 INSERT INTO vaults_new
   (vault_id, vault_type, project_id, workspace_id, agent_id, tenant_id,
-   principal_id, status, decay_policy, provision_epoch, role, created_at)
+   principal_id, status, decay_policy, role, created_at)
 SELECT
   vault_id, vault_type, project_id, workspace_id, agent_id, NULL,
-  NULL, status, 'ebbinghaus', 0, role, created_at
+  NULL, status, 'ebbinghaus', role, created_at
 FROM vaults;
 
 DROP TABLE vaults;
@@ -111,10 +99,7 @@ CREATE INDEX idx_vaults_tenant_id ON vaults (tenant_id);
 CREATE INDEX idx_vaults_principal_id ON vaults (principal_id);
 
 -- Idempotent-resolve backstop for VaultRegistry.provisionPrincipal*Vault
--- (design §5.2): at most one ACTIVE row per owner tuple, per type. Still
--- correct under the epoch scheme (DEC-MEMOS-50) -- epoch disambiguates
--- SUCCESSIVE generations of one tuple, never two simultaneously-active
--- rows for the same tuple, which stays exactly as forbidden as before.
+-- (design §5.0.3): at most one ACTIVE row per owner tuple, per type.
 CREATE UNIQUE INDEX idx_vaults_principal_private_active
   ON vaults (tenant_id, principal_id, agent_id, workspace_id)
   WHERE vault_type = 'principal_private' AND status = 'active';
@@ -128,8 +113,7 @@ CREATE UNIQUE INDEX idx_vaults_principal_passport_active
 -- backfill, now legacy-types-only, and (b) the future PH-MEMOS-6
 -- erasure transition (active -> erased, principal_id blanked, principal
 -- vault types only) -- not built by this migration, only made possible
--- by it. provision_epoch is pinned on both branches, like every other
--- identity column. Every other column is pinned on both branches,
+-- by it. Every other column is pinned on both branches,
 -- EXCEPT as widened below.
 --
 -- Branch (b) PERMITS (never requires) NEW.tenant_id/NEW.agent_id/
@@ -142,9 +126,9 @@ CREATE UNIQUE INDEX idx_vaults_principal_passport_active
 -- only thing standing between "the schema permits a stronger
 -- disposition" and "0011 forecloses it until a second rebuild." Checked
 -- against every reader of these columns on an erased row before
--- widening: the epoch-mint probe (design §5.2) derives vault_id from
--- the CALLER'S tuple, never a stored row's; both partial unique indexes
--- above are WHERE status = 'active' only; and #isVaultRowAccessibleTo
+-- widening: principal ids are minted randomly and never derived from a
+-- stored row; both partial unique indexes above are WHERE status = 'active'
+-- only; and #isVaultRowAccessibleTo
 -- (design §5.2) refuses status != 'active' before any tuple comparison
 -- at all -- none of the three depends on these columns surviving
 -- erasure, so this widening is safe today and requires no other change
@@ -160,7 +144,6 @@ BEGIN
       AND NEW.workspace_id IS OLD.workspace_id AND NEW.agent_id IS OLD.agent_id
       AND NEW.tenant_id IS OLD.tenant_id AND NEW.principal_id IS OLD.principal_id
       AND NEW.status IS OLD.status AND NEW.decay_policy IS OLD.decay_policy
-      AND NEW.provision_epoch IS OLD.provision_epoch
       AND NEW.role IS OLD.role AND NEW.created_at IS OLD.created_at
     ) OR (
       OLD.status = 'active' AND NEW.status = 'erased'
@@ -171,7 +154,7 @@ BEGIN
       AND (NEW.workspace_id IS OLD.workspace_id OR NEW.workspace_id IS NULL)
       AND (NEW.agent_id IS OLD.agent_id OR NEW.agent_id IS NULL)
       AND (NEW.tenant_id IS OLD.tenant_id OR NEW.tenant_id IS NULL)
-      AND NEW.decay_policy IS OLD.decay_policy AND NEW.provision_epoch IS OLD.provision_epoch
+      AND NEW.decay_policy IS OLD.decay_policy
       AND NEW.role IS OLD.role AND NEW.created_at IS OLD.created_at
     )
   ) THEN RAISE(ABORT, 'vaults rows may only backfill project_id (legacy types only) or transition active -> erased (principal_id blanked, tenant_id/agent_id/workspace_id optionally blanked)')
@@ -180,11 +163,9 @@ END;
 
 -- No-delete enforcement: every other append-only table 0008/0009/0010
 -- added already carries a *_no_delete trigger; vaults did not. The
--- probe-based epoch scheme (design §5.2) depends on an erased row's own
--- vault_id staying in this table forever -- if it were ever deleted,
--- epoch 0 of that tuple becomes mintable again, and a re-provisioned
--- vault would silently inherit an id that erasure_receipts, journal
--- `ref` values and promotions/links provenance still name. Refuses
+-- vault_id staying in this table forever -- deleting it would orphan
+-- erasure_receipts, journal `ref` values and promotions/links provenance
+-- and silently turn an erased target into an unknown one. Refuses
 -- every DELETE on `vaults`, legacy and principal rows alike -- no tool
 -- deletes a vaults row today either, so this closes an unenforced
 -- invariant, not a new restriction on any shipped behavior.

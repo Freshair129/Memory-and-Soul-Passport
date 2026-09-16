@@ -1,148 +1,106 @@
-// transport/handlers/vault-resolve-handler: msp_vault_resolve (API-010,
-// PH-MEMOS-5, BL-MEMOS-062). Built to match zuri-ai's shipped, unsigned
-// `{actor, access_context, authorization}` caller (`msp-vault-resolver.js`,
-// origin/main@4ca28c1d) exactly -- no `grant`/`signature`, on the same
-// stdio-only trust boundary every pre-API-011 tool already lives on
-// (design §5.3, DEC-MEMOS-40). Composes VaultRegistry's existing legacy
-// provision*Vault methods (unchanged) with the two new
-// provisionPrincipalPrivateVault/PassportVault methods (design §5.2) in
-// ONE outer transaction, so a call that needs to newly provision both the
-// episodic vault and (when gated) the passport vault either commits both
-// or neither.
+// msp_vault_resolve (API-010, PH-MEMOS-5 §5.0.5). Legacy vault fields stay
+// unsigned and byte-compatible; the principal half is opt-in behind a
+// verified vault grant.
 import { createHmac } from "node:crypto";
 
-import { IdentityHmacUnconfiguredError, MspRuntimeError, ValidationError } from "@freshair129/msp-contracts/errors";
+import { consumeGrantNonce } from "@freshair129/msp-core/grant-nonces";
+import {
+  GrantPayloadMismatchError,
+  IdentityHmacUnconfiguredError,
+  MspRuntimeError,
+  ValidationError,
+} from "@freshair129/msp-contracts/errors";
+import { requireGrantNonce, verifyVaultGrant } from "@freshair129/msp-contracts/vault-grant-guard";
 
 function requireString(value, label) {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new ValidationError(`access_context.${label} is required.`);
-  }
+  if (typeof value !== "string" || !value.trim()) throw new ValidationError(`${label} is required.`);
   return value.trim();
 }
 
-// Matches domain/thread-memory.mjs's own hmacRoomRef/hmacPrincipal >=32
-// character bar exactly (design §5.3: "reusing the same
-// MSP_IDENTITY_HMAC_KEY room-ref hashing mechanism §6.2 already
-// establishes"). VaultRegistry itself never reads this key or computes
-// this hash (design §5.2) -- both stay this handler's own responsibility.
 function assertIdentityHmacKeyConfigured(key) {
-  if (typeof key !== "string" || key.length < 32) {
-    throw new IdentityHmacUnconfiguredError();
-  }
+  if (typeof key !== "string" || key.length < 32) throw new IdentityHmacUnconfiguredError();
 }
 
-// Length-prefixed to remove the delimiter ambiguity a bare
-// tenantId + "|" + principalId concatenation would carry (design §5.3,
-// WARNING 3): HMAC-SHA256(k, "t1" + "|" + "x|y") and
-// HMAC-SHA256(k, "t1|x" + "|" + "y") would otherwise produce the identical
-// input string for two different (tenant_id, principal_id) pairs.
 function computePrincipalHmac(key, tenantId, principalId) {
   return createHmac("sha256", key).update(`${String(tenantId.length)}:${tenantId}|${principalId}`, "utf8").digest("hex");
 }
 
-export function createVaultResolveHandler({ db, vaultRegistry, journal, identityHmacKey }) {
+export function createVaultResolveHandler({ db, vaultRegistry, journal, identityHmacKey, keyFor, now = Date.now }) {
   return {
     async msp_vault_resolve(args = {}) {
-      const accessContext = args.access_context && typeof args.access_context === "object" ? args.access_context : null;
-      if (!accessContext) {
-        throw new ValidationError("access_context is required and must be an object.");
-      }
-      // Design §5.3: all five of these are required non-empty strings on
-      // the wire -- the shipped client-side caller's own required(...)
-      // already throws before ever calling transport if any is missing,
-      // so every real call MSP receives already carries all five; MSP
-      // re-checks server-side, per this codebase's standing "vault
-      // isolation is never optional" rule (never trust a client-side gate
-      // alone).
+      const accessContext = args.access_context && typeof args.access_context === "object" && !Array.isArray(args.access_context)
+        ? args.access_context
+        : null;
+      if (!accessContext) throw new ValidationError("access_context is required and must be an object.");
       const tenantId = requireString(accessContext.tenant_id, "tenant_id");
       const principalId = requireString(accessContext.principal_id, "principal_id");
       const agentId = requireString(accessContext.agent_id, "agent_id");
       const workspaceId = requireString(accessContext.workspace_id, "workspace_id");
       const projectId = requireString(accessContext.project_id, "project_id");
 
-      const authorization = args.authorization && typeof args.authorization === "object" ? args.authorization : null;
-      if (!authorization) {
-        throw new ValidationError("authorization is required and must be an object.");
-      }
-
-      // Mandatory for this tool AS A WHOLE (design §5.3, DEC-MEMOS-51):
-      // principalPrivateVaultId resolves and is lazily provisioned on
-      // EVERY well-formed call, unconditionally -- there is no
-      // "legacy-only" msp_vault_resolve call, so a deployment lacking this
-      // key cannot serve ANY call, before any resolution logic runs
-      // (checked ahead of authorization.allowed too, since the key
-      // requirement is deployment-wide, not gated by any one call's own
-      // authorization claims).
-      assertIdentityHmacKeyConfigured(identityHmacKey);
-
-      // authorization.allowed must be exactly true, else vault_scope_denied
-      // -- the shipped client-side currentScope() already refuses before
-      // ever calling transport when this would be false, but MSP does not
-      // trust that client-side gate and re-checks it server-side.
+      const authorization = args.authorization && typeof args.authorization === "object" && !Array.isArray(args.authorization)
+        ? args.authorization
+        : null;
+      if (!authorization) throw new ValidationError("authorization is required and must be an object.");
       if (authorization.allowed !== true) {
-        throw new MspRuntimeError(
-          "vault_scope_denied: authorization.allowed must be exactly true.",
-          "vault_scope_denied",
-        );
+        throw new MspRuntimeError("vault_scope_denied: authorization.allowed must be exactly true.", "vault_scope_denied");
       }
 
-      const allowPassport = authorization.allow_passport === true;
-
-      // Computed once, before any provisioning runs -- a principal vault
-      // is never provisioned without a matching, pseudonymized audit
-      // trail (design §5.3). No raw principal_id is ever placed in the
-      // journal actor.
-      const principalHmac = computePrincipalHmac(identityHmacKey, tenantId, principalId);
+      const { access, ...input } = args;
+      const hasAccess = access !== undefined;
+      let grant = null;
+      let principalGrant = false;
+      let allowPassport = false;
+      if (hasAccess) {
+        grant = verifyVaultGrant("msp_vault_resolve", input, access, keyFor, {
+          vaultType: "principal_private",
+          now: now(),
+        });
+        if (
+          grant.tenantId !== tenantId ||
+          grant.principalId !== principalId ||
+          grant.agentId !== agentId ||
+          grant.workspaceId !== workspaceId
+        ) {
+          throw new GrantPayloadMismatchError("The grant claims do not match access_context.");
+        }
+        requireGrantNonce(grant);
+        assertIdentityHmacKeyConfigured(identityHmacKey);
+        principalGrant = true;
+        allowPassport = authorization.allow_passport === true && grant.allowPassport === true;
+      }
 
       const resolve = db.transaction(() => {
-        // Legacy resolution: computed exactly as the existing
-        // provision*Vault methods already do (unchanged), gated by the
-        // corresponding authorization.* flags below. Every one of these
-        // five response fields is always present with the correct type,
-        // even when a permission is denied (false / [], never omitted) --
-        // the shipped, unmodified validateVaultSet throws on a missing or
-        // wrongly-typed field.
+        if (principalGrant) consumeGrantNonce(db, { tenantId: grant.tenantId, nonce: grant.nonce, expiresAt: grant.expiresAt });
+
         const workspacePrivateVault = vaultRegistry.provisionWorkspacePrivateVault(workspaceId, { projectId });
         const sharedVault = vaultRegistry.provisionSharedVault(projectId);
         const globalPrivateVault = vaultRegistry.provisionGlobalPrivateVault(agentId);
-
-        // Principal resolution (design §5.2, §5.3). The existence check
-        // runs BEFORE the provisioning call it describes, inside this SAME
-        // transaction, so the two can never disagree about whether this
-        // call is the one that newly created the row.
-        const episodicAlreadyExisted = vaultRegistry.hasActivePrincipalPrivateVault({ tenantId, principalId, agentId, workspaceId });
-        const principalPrivateVault = vaultRegistry.provisionPrincipalPrivateVault({ tenantId, principalId, agentId, workspaceId });
-        const provisionedEpisodic = !episodicAlreadyExisted;
-
+        let principalPrivateVault = null;
         let principalPassportVault = null;
+        let provisionedEpisodic = false;
         let provisionedPassport = false;
-        if (allowPassport) {
-          const passportAlreadyExisted = vaultRegistry.hasActivePrincipalPassportVault({ tenantId, principalId });
-          principalPassportVault = vaultRegistry.provisionPrincipalPassportVault({ tenantId, principalId });
-          provisionedPassport = !passportAlreadyExisted;
+
+        if (principalGrant) {
+          const episodicAlreadyExisted = vaultRegistry.hasActivePrincipalPrivateVault({ tenantId, principalId, agentId, workspaceId });
+          principalPrivateVault = vaultRegistry.provisionPrincipalPrivateVault({ tenantId, principalId, agentId, workspaceId });
+          provisionedEpisodic = !episodicAlreadyExisted;
+          if (allowPassport) {
+            const passportAlreadyExisted = vaultRegistry.hasActivePrincipalPassportVault({ tenantId, principalId });
+            principalPassportVault = vaultRegistry.provisionPrincipalPassportVault({ tenantId, principalId });
+            provisionedPassport = !passportAlreadyExisted;
+          }
         }
 
-        // RKOI round-1 WARNING 5: append() is synchronous (a plain
-        // db.prepare().run(), same as every provision*Vault call above),
-        // and better-sqlite3's db.transaction() callback is itself
-        // synchronous end-to-end -- so this call is free to sit INSIDE the
-        // same transaction rather than after resolve() returns. Moving it
-        // here makes the header comment above ("a principal vault is never
-        // provisioned without a matching, pseudonymized audit trail")
-        // literally true: a VaultProvisionConflictError (or any other
-        // failure) rolls the vault row(s) AND this journal row back
-        // together, so there is no window where a committed principal
-        // vault has no journal receipt, or a journal row exists for a
-        // provisioning transaction that never actually committed.
         journal.append({
-          actor: `principal_hmac:${principalHmac}`,
+          actor: principalGrant ? `principal_hmac:${computePrincipalHmac(identityHmacKey, tenantId, principalId)}` : "unauthenticated",
           toolName: "msp_vault_resolve",
-          ref: principalPrivateVault.vault_id,
-          workspaceId,
+          ref: principalPrivateVault?.vault_id ?? null,
+          workspaceId: principalGrant ? workspaceId : null,
           payload: {
-            tenant_id: tenantId,
-            agent_id: agentId,
-            workspace_id: workspaceId,
+            tenant_id: principalGrant ? tenantId : null,
+            agent_id: principalGrant ? agentId : null,
+            workspace_id: principalGrant ? workspaceId : null,
             provisioned_episodic: provisionedEpisodic,
             provisioned_passport: provisionedPassport,
             passport_requested: allowPassport,
@@ -150,49 +108,21 @@ export function createVaultResolveHandler({ db, vaultRegistry, journal, identity
           policyDecision: "allow",
         });
 
-        return {
-          workspacePrivateVault,
-          sharedVault,
-          globalPrivateVault,
-          principalPrivateVault,
-          principalPassportVault,
-          provisionedEpisodic,
-          provisionedPassport,
-        };
+        return { workspacePrivateVault, sharedVault, globalPrivateVault, principalPrivateVault, principalPassportVault };
       });
-
-      // VaultProvisionConflictError (SQLITE_BUSY_SNAPSHOT on the losing
-      // INSERT, domain/vault-registry.mjs's own catch) rolls this whole
-      // transaction back and propagates HERE unremapped -- this tool never
-      // retries a vault_provision_conflict internally (design §5.2/§5.3);
-      // the caller's own NEXT, genuinely top-level call is what resolves
-      // the race. No try/catch needed: propagating unremapped IS the
-      // correct behavior, not an omission.
-      const result = resolve();
+      const result = principalGrant ? resolve.immediate() : resolve();
 
       return {
         workspacePrivateVaultId: result.workspacePrivateVault.vault_id,
         globalPrivateVaultIds: authorization.allow_global_private === true ? [result.globalPrivateVault.vault_id] : [],
         sharedVaultIds: authorization.allow_shared === true ? [result.sharedVault.vault_id] : [],
-        principalPrivateVaultId: result.principalPrivateVault.vault_id,
-        principalPassportVaultId: result.principalPassportVault ? result.principalPassportVault.vault_id : null,
+        principalPrivateVaultId: result.principalPrivateVault?.vault_id ?? null,
+        principalPassportVaultId: result.principalPassportVault?.vault_id ?? null,
         permissions: {
           read: authorization.read === true,
           writePrivate: authorization.write_private === true,
           writeShared: authorization.write_shared === true,
-          // RKOI round-1 WARNING 6: access_context.policy_version is
-          // documented (API-010 §3) as optional/nullable on the REQUEST,
-          // matching zuri-ai's own field -- but zuri-ai's shipped
-          // validateVaultSet throws on an empty-string permissions.policyVersion
-          // in the RESPONSE (design §5.3's own cross-repo compatibility
-          // table). "" was a silent contract-breaker for any caller that
-          // legitimately omits policy_version: a non-empty sentinel is
-          // emitted instead so the response always satisfies the shipped
-          // caller's own strict check, never a fabricated real version.
-          policyVersion:
-            typeof accessContext.policy_version === "string" && accessContext.policy_version.trim()
-              ? accessContext.policy_version
-              : "unspecified",
+          policyVersion: typeof accessContext.policy_version === "string" && accessContext.policy_version.trim() ? accessContext.policy_version : "unspecified",
           allowPassport,
         },
       };

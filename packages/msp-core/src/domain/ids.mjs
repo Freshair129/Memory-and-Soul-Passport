@@ -5,7 +5,7 @@
 // (parts joined with a NUL byte separator), same digest algorithm (sha256),
 // same truncation (first 24 hex chars). This means ids minted here agree
 // with vault-registry ids if/when vault-registry is added in a later phase.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 export function sha256Hex(value) {
   return createHash("sha256").update(String(value), "utf8").digest("hex");
@@ -18,4 +18,12 @@ export function stableId(prefix, ...parts) {
 
 export function mintRef(prefix, id) {
   return `msp:${prefix}/${id}`;
+}
+
+/**
+ * Mint an opaque principal-vault id. Principal ownership is stored in the
+ * vault row and must never be recoverable from the id itself.
+ */
+export function mintVaultId() {
+  return `vault_${randomUUID()}`;
 }

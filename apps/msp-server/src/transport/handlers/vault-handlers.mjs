@@ -5,8 +5,9 @@
 // packages/govibe-core/src/msp-client.mjs -- both read directly (not
 // paraphrased) as this packet's ground truth.
 import { workspaceRef, vaultRegistryRef } from "@freshair129/msp-contracts/refs";
-import { ValidationError } from "@freshair129/msp-contracts/errors";
+import { MspRuntimeError, ValidationError, VaultScopeDeniedError } from "@freshair129/msp-contracts/errors";
 import { assertVaultScope } from "@freshair129/msp-contracts/vault-scope-guard";
+import { assertGlobalPrivateGrant, verifyVaultGrant } from "@freshair129/msp-contracts/vault-grant-guard";
 
 function requireString(value, label) {
   if (typeof value !== "string" || !value.trim()) {
@@ -19,7 +20,11 @@ function optionalString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-export function createVaultHandlers({ vaultRegistry, journal }) {
+function rejectControlCharacters(value, label) {
+  if (/[\u0000-\u001F]/.test(value)) throw new ValidationError(`${label} must not contain control characters.`);
+}
+
+export function createVaultHandlers({ vaultRegistry, journal, keyFor, globalPrivateGrantRequired = false, now = Date.now }) {
   return {
     // Request fields as built by registerWorkspace in msp-client.mjs:
     // schema_version, actor, workspace_id, project_id, workspace_path,
@@ -65,8 +70,20 @@ export function createVaultHandlers({ vaultRegistry, journal }) {
       const actor = requireString(args.actor, "actor");
       const workspaceId = optionalString(args.workspace_id);
       const agentId = optionalString(args.agent_id);
+      let statusAgentId = agentId;
+      if (agentId && args.access === undefined && globalPrivateGrantRequired) statusAgentId = null;
+      if (agentId && args.access !== undefined) {
+        const { access, ...input } = args;
+        let grant = null;
+        try {
+          grant = verifyVaultGrant("msp_vault_status", input, access, keyFor, { vaultType: "global_private", now: now() });
+        } catch {
+          throw new VaultScopeDeniedError("vault_scope_denied: a matching global-private grant is required.");
+        }
+        if (grant) assertGlobalPrivateGrant({ agent_id: agentId }, grant);
+      }
 
-      const { vaults } = vaultRegistry.getVaultStatus({ workspaceId, agentId });
+      const { vaults } = vaultRegistry.getVaultStatus({ workspaceId, agentId: statusAgentId });
 
       const workspace_ref = workspaceId ? workspaceRef(workspaceId) : null;
       const registry_ref = workspaceId ? vaultRegistryRef(workspaceId) : null;
@@ -119,11 +136,16 @@ export function createVaultHandlers({ vaultRegistry, journal }) {
       requireString(args.workspace_path, "workspace_path");
       const vaultId = requireString(args.vault_id, "vault_id");
       const mountAlias = requireString(args.mount_alias, "mount_alias");
+      rejectControlCharacters(workspaceId, "workspace_id");
+      rejectControlCharacters(mountAlias, "mount_alias");
       const accessMode = args.access_mode ?? "read";
       const reason = requireString(args.reason, "reason");
 
       const knownVault = vaultRegistry.getVaultById(vaultId);
       if (knownVault) {
+        if (knownVault.vault_type === "principal_private" || knownVault.vault_type === "principal_passport") {
+          throw new MspRuntimeError(`mountVault: unknown vault_id "${vaultId}".`, "not_found");
+        }
         assertVaultScope(
           vaultRegistry.isVaultAccessibleTo(vaultId, { workspaceId }),
           `vault_scope_denied: vault_id "${vaultId}" is not owned by, or already mounted for, workspace "${workspaceId}".`,

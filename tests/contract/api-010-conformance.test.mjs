@@ -47,7 +47,7 @@ describe("API-010 machine contract", () => {
     const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
     expect(schema.contract).toMatchObject({
       doc_id: "API-010-VAULT-RESOLVE-CONTRACT",
-      version: "0.1.0b",
+      version: "0.2.0b",
     });
     expect(schema.tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
     for (const tool of schema.tools) expect(tool.inputSchema).toMatchObject({ type: "object" });
@@ -80,14 +80,14 @@ describe("API-010 request/response conformance over real stdio", () => {
     expect(typeof result.workspacePrivateVaultId).toBe("string");
     expect(Array.isArray(result.globalPrivateVaultIds)).toBe(true);
     expect(Array.isArray(result.sharedVaultIds)).toBe(true);
-    expect(typeof result.principalPrivateVaultId).toBe("string");
-    expect(typeof result.principalPassportVaultId).toBe("string");
+    expect(result.principalPrivateVaultId).toBeNull();
+    expect(result.principalPassportVaultId).toBeNull();
     expect(result.permissions).toMatchObject({
       read: true,
       writePrivate: true,
       writeShared: false,
       policyVersion: "policy-v1",
-      allowPassport: true,
+      allowPassport: false,
     });
   });
 });

@@ -2,7 +2,7 @@
 title: "API Contract: Persistent-Memory MSP Runtime (msp_memory_*)"
 doc_id: "API-009-PERSISTENT-MEMORY-CONTRACT"
 status: "draft"
-version: "0.2.0+draft"
+version: "0.3.0+draft"
 updated: "2026-09-16"
 owner: "Boss (CEO)"
 source_of_truth: true
@@ -103,11 +103,9 @@ other.
 ```ts
 type VaultScope = {
   vault_id: string;
-  // PH-MEMOS-5 (v0.2.0+draft, RKOI round-1 WARNING 3): "principal_private"
-  // and "principal_passport" added -- API-010's msp_vault_resolve mints
-  // both, and §4.10's access_context amendment already names them as the
-  // vault_type values that make access_context mandatory on the nine
-  // msp_memory_* tools below, so the type this VaultScope allows must
+  // PH-MEMOS-5 (v0.3.0+draft): "principal_private" and
+  // "principal_passport" are minted by API-010 and are authorized by the
+  // signed access grant described in §4.11, so the type this VaultScope allows must
   // legally include them, not just informally require them.
   vault_type: "shared" | "workspace_private" | "global_private" | "principal_private" | "principal_passport";
 };
@@ -142,22 +140,23 @@ type SearchHit = {
   matched_by: Array<"exact" | "fts" | "vector">;
 };
 
-// PH-MEMOS-5 (v0.2.0+draft): optional on every msp_memory_* tool below,
-// mandatory when the target vault is principal_private/principal_passport
-// (API-010's msp_vault_resolve, docs/API-010-Vault-Resolve-Contract.md,
-// mints these two new vault types). Field names/casing deliberately match
-// msp_vault_resolve's own access_context object field-for-field, so a
-// caller that already builds one for that tool can reuse it verbatim for
-// every msp_memory_* call in the same turn -- extra keys beyond the five
-// below (e.g. msp_vault_resolve's own business_id/instance_id/thread_id/
-// session_id/policy_version/project_id) are accepted and silently ignored,
-// never a validation_failed.
-type AccessContext = {
-  tenant_id: string;
-  principal_id: string;
-  agent_id?: string;        // required only when the target vault is principal_private
-  workspace_id?: string;    // required only when the target vault is principal_private
-  allow_passport?: boolean; // default false; must be true to touch a principal_passport vault
+// PH-MEMOS-5 (v0.3.0+draft): optional on every msp_memory_* tool below.
+// Principal targets require a verified SignedVaultAccess grant; legacy
+// shared/workspace targets ignore an attached access object. A global_private
+// grant is agent-scoped and uses the tenantless key/nonce partition.
+type SignedVaultAccess = {
+  grant: {
+    operation: string;       // exact dispatched tool name
+    expiresAt: number;       // epoch milliseconds, now < expiresAt <= now + 65s
+    payloadHash: string;     // SHA-256(JSON.stringify(request without access))
+    tenantId?: string;       // required for principal targets
+    principalId?: string;    // required for principal targets
+    agentId?: string;        // required for principal_private/global_private
+    workspaceId?: string;    // required for principal_private
+    allowPassport?: boolean; // literal true required for principal_passport
+    nonce?: string;          // required for nonce protected writes
+  };
+  signature: string;         // HMAC-SHA256(JSON.stringify(grant)), hex
 };
 ```
 
@@ -345,7 +344,7 @@ This tool is caller/cron-triggered only; the runtime has no internal
 scheduler. `dry_run: true` computes and returns the transitions that would
 occur without persisting them.
 
-**`pinned` (PH-MEMOS-5, v0.2.0+draft):** reads the target vault's own
+**`pinned` (PH-MEMOS-5, v0.3.0+draft):** reads the target vault's own
 `decay_policy` -- `true` only for a `principal_passport` vault, `false` for
 every other vault type including `principal_private`. When `pinned: true`,
 `evaluated` is always `0` and `transitioned` is always `[]`, **regardless of
@@ -388,7 +387,12 @@ Response:
 { "link": { "from_entity_id": "string", "to_entity_id": "string", "link_type": "string" } }
 ```
 
-### 4.10 The `access_context` amendment (PH-MEMOS-5, v0.2.0+draft)
+### 4.10 Superseded `access_context` amendment (PH-MEMOS-5, historical)
+
+> **Superseded by the current signed-grant contract below.** The unsigned
+> `access_context` mechanism and its `access_context_required`/
+> `access_context_denied` outcomes are retained only as implementation
+> history. The current §5.0 authority uses top-level signed `access`.
 
 Every tool in §4.1-§4.9 above gains one new, optional request field,
 `access_context: AccessContext` (§3). It is accepted and ignored for a
@@ -420,6 +424,44 @@ Full mechanism, every named call site, and the multi-agent vault rules this
 amendment composes with are specified in
 `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` §5, §5.1-§5.6.
 
+### 4.11 Current signed vault access (PH-MEMOS-5, §5.0.5-§5.0.11)
+
+Every tool in §4.1-§4.9 accepts an optional top-level
+`access: { grant, signature }`. The request body used for `grant.payloadHash`
+is the complete tool input with that top-level `access` member removed.
+`signature` is an HMAC-SHA256 over the exact JSON grant object. The shared
+verifier checks the dispatched operation name, signature, expiry window,
+payload hash, and target-specific required claim strings (at most 128
+characters).
+
+For `principal_private`, the required claims are `tenantId`, `principalId`,
+`agentId`, and `workspaceId`. For `principal_passport`, `tenantId`,
+`principalId`, and `allowPassport: true` are required. A principal grant is
+compared with the resolved vault row before any nonce is consumed. Every
+missing, malformed, expired, mismatched, unconfigured, replayed, or
+tuple-incompatible grant failure collapses to the same `not_found` response
+as an unknown target. Legacy `shared` and `workspace_private` targets ignore
+`access` entirely.
+
+For `global_private`, the grant carries only `agentId` (plus the common
+claims); `tenantId`, `principalId`, `workspaceId`, and `allowPassport` are
+ignored if present. Verification uses the global/default key even if an
+extra tenant claim is supplied. A present grant whose `agentId` does not
+match the target is always `vault_scope_denied`. The optional
+`MSP_GLOBAL_PRIVATE_GRANT_REQUIRED=1` setting makes a valid matching grant
+mandatory for the nine memory tools, `msp_memory_promote`, and the agent
+branch of `msp_vault_status`; the default remains off.
+
+Nonce-protected writes (`upsert`, `forget`, `links_create`, and non-dry-run
+`decay_tick`) consume a verified grant nonce in the same transaction as the
+mutation. Read-only tools and `decay_tick` with `dry_run: true` do not consume
+nonces. The nonce schema amendment for the tenantless global partition is
+tracked separately and remains a ship dependency until approved.
+
+`msp_memory_promote` is excluded from principal-vault classification but
+participates in the global-private gate above. `msp_vault_mount` continues to
+return the same `not_found` as an unknown vault for principal vault ids.
+
 ## 5. Errors
 
 | Code | Meaning | Recovery |
@@ -430,8 +472,12 @@ amendment composes with are specified in
 | `conflict` | A concurrent write raced this request under the same `(vault_id, category, key)` | Retry with the latest `current_version` |
 | `gks_provider_unconfigured` | Shared-scope knowledge/memory promotion was requested | Not recoverable in v1; shared promotion is an explicit, documented exclusion until a GKS provider exists |
 | `db_unavailable` | SQLite connection or migration state is invalid | Operator action required; see `docs/operations/runbooks/RUNBOOK-Persistent-Memory-Runtime.md` |
-| `access_context_required` (PH-MEMOS-5, v0.2.0+draft) | §4.10 | Send a matching `access_context` |
-| `access_context_denied` (PH-MEMOS-5, v0.2.0+draft) | §4.10 | Confirm the caller's own `tenant_id`/`principal_id`/`agent_id`/`workspace_id`/`allow_passport` claim against the actual target vault |
+| `grant_signature_invalid` | Principal grant is missing, malformed, signed for another operation, or has an invalid claim type | Present a valid signed `access` envelope |
+| `grant_expired` | The grant is outside the accepted expiry window | Mint a fresh grant |
+| `grant_payload_mismatch` | The grant was signed for a different request body or owner tuple | Sign the exact request body and tuple |
+| `grant_unconfigured` | No service key is configured for a present grant | Configure the MSP grant key |
+| `grant_nonce_required` / `grant_replayed` | A nonce is missing or already consumed on a nonce-protected write | Supply a fresh nonce and retry |
+| `access_context_required` / `access_context_denied` | Historical codes retained for compatibility; no current API-009 tool emits them | Use signed `access` |
 
 ## 6. Security
 
@@ -517,6 +563,7 @@ independently verified before any real multi-agent use of
 
 | Version | Date | Summary |
 |---|---|---|
+| 0.3.0+draft | 2026-09-17 | PH-MEMOS-5 alignment with design §5.0: replaced the unsigned API-009 `access_context` path with signed top-level `access`, added target-specific grant claims, nonce/replay semantics, the global-private gate, and the pinned decay response. |
 | 0.2.0+draft | 2026-09-16 | PH-MEMOS-5 (`BL-MEMOS-063`, `DEC-MEMOS-47`): added the `access_context` amendment (§4.10) — optional on all nine `msp_memory_*` tools, mandatory when the target vault is one of the two new `principal_private`/`principal_passport` types API-010's `msp_vault_resolve` mints; two new error codes, `access_context_required`/`access_context_denied` (§5); `msp_memory_decay_tick` gains a `pinned` response field (§4.7) reflecting the target vault's own `decay_policy`. `vault_scope_denied` is unchanged, not broadened. `msp_memory_promote` (API-006) is explicitly out of this amendment's scope. |
 | 0.1.3+draft | 2026-09-15 | RKOI ruling (merge-blocking, TASK-MEMOS-002 stage 2): added §6's transport-level escaped-object-key refusal, which applies to every tool in this contract (any inbound request whose object keys contain a JSON escape sequence, at any nesting depth, is refused before parsing). Defends against a real V8 `JSON.parse` engine bug; see `docs/NOTES.md`. |
 | 0.1.2+draft | 2026-09-08 | Added the GenesisRAG17 relay pointer, nine-tool names, machine-schema source, exact ownership boundary and pinned zuri-ai contract/acceptance links. The existing `msp_memory_*` and legacy `msp_*` shapes remain unchanged. |

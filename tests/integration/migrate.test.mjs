@@ -344,7 +344,7 @@ describe("db/migrate (AC-03)", () => {
   // real child tables: vault_mounts, entities, promotions, links) is the
   // expected case, not an edge case. Both a fresh database and one already
   // populated through 0010 must apply 0011 cleanly.
-  it("0011_principal_vaults.sql applies cleanly on a fresh database: widened CHECK, new indexes, provision_epoch present", () => {
+  it("0011_principal_vaults.sql applies cleanly on a fresh database: widened CHECK and new indexes", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
@@ -353,23 +353,22 @@ describe("db/migrate (AC-03)", () => {
 
     const vaultCols = db.prepare("PRAGMA table_info(vaults)").all().map((col) => col.name);
     expect(vaultCols).toEqual(
-      expect.arrayContaining(["tenant_id", "principal_id", "decay_policy", "provision_epoch", "status"]),
+      expect.arrayContaining(["tenant_id", "principal_id", "decay_policy", "status"]),
     );
-    // No principal_hmac column: round 3's own removal (design §12.4) --
-    // the epoch scheme is found by probing vault_id's own PRIMARY KEY
-    // directly, never by a lookup keyed on any stored, owner-keyed column.
+    // No principal_hmac or provision_epoch columns: principal ids are random
+    // and carry no owner-keyed correlation or generation counter.
     expect(vaultCols).not.toContain("principal_hmac");
 
     // A direct INSERT/UPDATE producing an unexpected vaults.status value
     // outside ('active', 'erased') is refused by the widened CHECK.
     expect(() =>
       db.prepare(
-        "INSERT INTO vaults (vault_id, vault_type, project_id, status, decay_policy, provision_epoch, created_at) VALUES (?,?,?,?,?,?,?)",
-      ).run("vault-bad-status", "shared", "project-bad-status", "pending", "ebbinghaus", 0, "2026-01-01T00:00:00.000Z"),
+        "INSERT INTO vaults (vault_id, vault_type, project_id, status, decay_policy, created_at) VALUES (?,?,?,?,?,?)",
+      ).run("vault-bad-status", "shared", "project-bad-status", "pending", "ebbinghaus", "2026-01-01T00:00:00.000Z"),
     ).toThrow();
   });
 
-  it("0011_principal_vaults.sql applies cleanly on a database already populated through 0010: pre-existing rows survive, vault_mounts/entities/promotions/links REFERENCES vaults still name vaults (not vaults_old), every pre-0011 row backfills provision_epoch = 0", () => {
+  it("0011_principal_vaults.sql applies cleanly on a database already populated through 0010: pre-existing rows survive and child REFERENCES still name vaults", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNamesThrough0010 = readdirSync(rootMigrationsDir)
       .filter((name) => /^\d{4}_.*\.sql$/.test(name))
@@ -426,13 +425,12 @@ describe("db/migrate (AC-03)", () => {
     expect(second0011.currentVersion).toBe(11);
     expect(db0011.pragma("foreign_key_check")).toEqual([]);
 
-    // Every pre-existing row survives, byte-for-byte, and provision_epoch
-    // backfills to 0 for every pre-0011 row (round 2's INSERT ... SELECT
-    // carries the new column).
-    const sharedRow = db0011.prepare("SELECT status, provision_epoch, tenant_id, principal_id FROM vaults WHERE vault_id = ?").get("vault-shared-precedes-0011");
-    expect(sharedRow).toEqual({ status: "active", provision_epoch: 0, tenant_id: null, principal_id: null });
-    const workspaceRow = db0011.prepare("SELECT status, provision_epoch, decay_policy FROM vaults WHERE vault_id = ?").get("vault-workspace-precedes-0011");
-    expect(workspaceRow).toEqual({ status: "active", provision_epoch: 0, decay_policy: "ebbinghaus" });
+    // Every pre-existing row survives with its legacy owner fields intact;
+    // principal-only columns are not added to legacy rows.
+    const sharedRow = db0011.prepare("SELECT status, tenant_id, principal_id FROM vaults WHERE vault_id = ?").get("vault-shared-precedes-0011");
+    expect(sharedRow).toEqual({ status: "active", tenant_id: null, principal_id: null });
+    const workspaceRow = db0011.prepare("SELECT status, decay_policy FROM vaults WHERE vault_id = ?").get("vault-workspace-precedes-0011");
+    expect(workspaceRow).toEqual({ status: "active", decay_policy: "ebbinghaus" });
     expect(db0011.prepare("SELECT entity_id FROM entities WHERE entity_id = ?").get("entity-precedes-0011")).toBeTruthy();
     expect(db0011.prepare("SELECT promotion_ref FROM promotions WHERE promotion_ref = ?").get("promotion-precedes-0011")).toBeTruthy();
     expect(db0011.prepare("SELECT link_id FROM links WHERE link_id = ?").get("link-precedes-0011")).toBeTruthy();
@@ -457,8 +455,8 @@ describe("db/migrate (AC-03)", () => {
     // exercised end to end with a real principal_private row below.
     const principalVaultId = "vault-principal-precedes-0011-test";
     db0011.prepare(
-      "INSERT INTO vaults (vault_id, vault_type, tenant_id, principal_id, agent_id, workspace_id, decay_policy, status, provision_epoch, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-    ).run(principalVaultId, "principal_private", "tenant-1", "principal-1", "agent-1", "workspace-1", "ebbinghaus", "active", 0, nowIso);
+      "INSERT INTO vaults (vault_id, vault_type, tenant_id, principal_id, agent_id, workspace_id, decay_policy, status, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    ).run(principalVaultId, "principal_private", "tenant-1", "principal-1", "agent-1", "workspace-1", "ebbinghaus", "active", nowIso);
     expect(() =>
       db0011.prepare("UPDATE vaults SET project_id = ? WHERE vault_id = ?").run("some-project", principalVaultId),
     ).toThrow(/vaults rows may only backfill project_id/);
@@ -483,8 +481,8 @@ describe("db/migrate (AC-03)", () => {
 
     const principalVaultId2 = "vault-principal-precedes-0011-test-2";
     db0011.prepare(
-      "INSERT INTO vaults (vault_id, vault_type, tenant_id, principal_id, agent_id, workspace_id, decay_policy, status, provision_epoch, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-    ).run(principalVaultId2, "principal_private", "tenant-2", "principal-2", "agent-2", "workspace-2", "ebbinghaus", "active", 0, nowIso);
+      "INSERT INTO vaults (vault_id, vault_type, tenant_id, principal_id, agent_id, workspace_id, decay_policy, status, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    ).run(principalVaultId2, "principal_private", "tenant-2", "principal-2", "agent-2", "workspace-2", "ebbinghaus", "active", nowIso);
     db0011.prepare(
       "UPDATE vaults SET status = 'erased', principal_id = NULL, tenant_id = NULL, agent_id = NULL, workspace_id = NULL WHERE vault_id = ?",
     ).run(principalVaultId2);

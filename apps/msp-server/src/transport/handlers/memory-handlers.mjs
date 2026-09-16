@@ -38,24 +38,17 @@
 // vault_scope_denied enforcement on top of this without changing the data
 // scoping already enforced here.
 //
-// PH-MEMOS-5 amendment (design §5.1, BL-MEMOS-063, DEC-MEMOS-49): that
-// "future phase" is this one, but only for the two NEW principal vault
-// types (principal_private/principal_passport) -- the paragraph above is
-// otherwise unchanged and still governs every legacy vault_id. Each tool
-// below gains one new call site, immediately after its own existing
-// requireKnownVault/requireEntityById lookup, via this file's own
-// checkAccessContext() helper (vaultRegistry.classifyPrincipalAccess +
-// contracts/vault-scope-guard.mjs's new assertAccessContext) -- never a
-// reuse of assertVaultScope's own signature/meaning, which stays exactly
-// what it is today (msp_memory_links_create's pre-existing endpoint-
-// consistency check, below, unchanged). A legacy vault_id is completely
-// unaffected: classifyPrincipalAccess returns null for it and
-// checkAccessContext is then a no-op, so the "no caller-ownership check
-// exists for legacy vaults" property this header already documents is
-// unchanged for those three types.
+// PH-MEMOS-5 current design §5.0.6: principal vault calls carry an optional
+// signed top-level access envelope. The handler resolves the vault first,
+// verifies target-specific claims against that already-fetched row, and
+// collapses every principal-grant failure to the same not_found response.
+// Legacy shared/workspace targets ignore an attached grant. Global-private
+// targets use the dedicated agent check and deployment gate in this module.
 import { runDecayTick, touch } from "@freshair129/msp-core/decay-engine";
-import { MemoryNotFoundError, ValidationError } from "@freshair129/msp-contracts/errors";
-import { assertAccessContext, assertVaultScope } from "@freshair129/msp-contracts/vault-scope-guard";
+import { consumeGrantNonce } from "@freshair129/msp-core/grant-nonces";
+import { MemoryNotFoundError, ValidationError, VaultScopeDeniedError } from "@freshair129/msp-contracts/errors";
+import { assertVaultScope } from "@freshair129/msp-contracts/vault-scope-guard";
+import { assertGlobalPrivateGrant, requireGrantNonce, verifyVaultGrant } from "@freshair129/msp-contracts/vault-grant-guard";
 import { vectorToBlob } from "@freshair129/msp-retrieval/vector";
 
 const VALID_SEARCH_MODES = new Set(["hybrid", "fts", "vector"]);
@@ -84,7 +77,7 @@ function toWireEntity(entity) {
   return entity;
 }
 
-export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore }) {
+export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore, keyFor, globalPrivateGrantRequired = false, now = Date.now }) {
   const upsertEmbedding = db.prepare(`
     INSERT INTO embeddings (entity_id, collection, model, dim, vector, content_hash, created_at)
     VALUES (@entity_id, @collection, @model, @dim, @vector, @content_hash, @created_at)
@@ -119,24 +112,61 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     return entity;
   }
 
-  // PH-MEMOS-5 (design §5.1, BL-MEMOS-063, DEC-MEMOS-49): the new call
-  // site every msp_memory_* tool below adds, immediately after that tool's
-  // own existing requireKnownVault/requireEntityById lookup -- always with
-  // the SAME vault row that lookup already fetched, never a second SELECT
-  // (vaultRegistry.classifyPrincipalAccess takes the row directly). A
-  // legacy vault (shared/workspace_private/global_private) returns null
-  // from classifyPrincipalAccess and this is a complete no-op, exactly as
-  // it is today for every one of these nine tools -- this amendment adds
-  // no new refusal for a legacy vault_id.
-  function checkAccessContext(vault, args, toolName) {
-    const outcome = vaultRegistry.classifyPrincipalAccess(vault, args.access_context);
-    // The literal outcome string ("access_context_required"/
-    // "access_context_denied") is embedded in the message, not only
-    // carried in `.code` -- the JSON-RPC tool-call error envelope only
-    // carries `.message` on the wire (transport/stdio-jsonrpc-server.mjs),
-    // mirroring VaultScopeDeniedError's own documented reason for doing
-    // the same thing.
-    assertAccessContext(outcome, `${toolName}: ${outcome}: access_context is required for, and must match, this principal vault's owner tuple.`);
+  // The access check for each tool runs immediately after its existing
+  // vault/entity lookup and reuses that row. Legacy targets are left alone;
+  // principal targets use the shared grant verifier and row classifier.
+  function principalNotFound(vaultId, entityId = null) {
+    if (entityId) return new MemoryNotFoundError(`No memory entity found for entity_id "${entityId}".`);
+    return new MemoryNotFoundError(
+      `msp_memory_*: unknown vault_id "${vaultId}". Provision it first via msp_workspace_register / ` +
+        `msp_vault_status / msp_memory_promote before referencing it here.`,
+    );
+  }
+
+  function checkAccess(vault, args, toolName, { nonceRequired = false, entityId = args.entity_id ?? args.from_entity_id } = {}) {
+    if (vault.vault_type === "shared" || vault.vault_type === "workspace_private") return null;
+    const { access, ...input } = args;
+    if (vault.vault_type === "global_private") {
+      let grant = null;
+      try {
+        if (access !== undefined) grant = verifyVaultGrant(toolName, input, access, keyFor, { vaultType: "global_private", now: now() });
+      } catch {
+        throw new VaultScopeDeniedError("vault_scope_denied: a matching global-private grant is required.");
+      }
+      if (grant) {
+        assertGlobalPrivateGrant(vault, grant);
+        if (nonceRequired) requireGrantNonce(grant);
+      }
+      if (globalPrivateGrantRequired && !grant) throw new VaultScopeDeniedError("vault_scope_denied: a matching global-private grant is required.");
+      return grant;
+    }
+
+    try {
+      if (access === undefined) throw new Error("missing access");
+      const grant = verifyVaultGrant(toolName, input, access, keyFor, { vaultType: vault.vault_type, now: now() });
+      if (vaultRegistry.classifyPrincipalAccess(vault, grant) !== "ok") throw new Error("tuple mismatch");
+      if (vault.vault_type === "principal_passport" && grant.allowPassport !== true) throw new Error("passport grant required");
+      if (nonceRequired) requireGrantNonce(grant);
+      return grant;
+    } catch {
+      throw principalNotFound(vault.vault_id, entityId);
+    }
+  }
+
+  function consumeAuthorizedGrant(vault, grant, entityId = null) {
+    if (!grant) return;
+    try {
+      consumeGrantNonce(db, {
+        tenantId: vault.vault_type === "global_private" ? null : grant.tenantId,
+        nonce: grant.nonce,
+        expiresAt: grant.expiresAt,
+      });
+    } catch (error) {
+      if (error?.code === "grant_replayed" && (vault.vault_type === "principal_private" || vault.vault_type === "principal_passport")) {
+        throw principalNotFound(vault.vault_id, entityId);
+      }
+      throw error;
+    }
   }
 
   // WP-15 Bounded Scope item 7: computes and stores an embedding for a
@@ -166,8 +196,10 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
       const vaultArg = args.vault && typeof args.vault === "object" ? args.vault : {};
       const vaultId = requireString(vaultArg.vault_id, "vault.vault_id");
       const vault = requireKnownVault(vaultId);
-      checkAccessContext(vault, args, "msp_memory_upsert");
-      const category = requireString(args.category, "category");
+      const grant = checkAccess(vault, args, "msp_memory_upsert", { nonceRequired: true });
+      if (typeof args.category !== "string" || !args.category.trim()) throw new ValidationError("category is required.");
+      if (args.category.includes(" ")) throw new ValidationError("category must not contain spaces.");
+      const category = args.category.trim();
       const key = requireString(args.key, "key");
       const bodyJson = args.body_json && typeof args.body_json === "object" && !Array.isArray(args.body_json) ? args.body_json : {};
       const epistemicState = optionalString(args.epistemic_state) ?? "hypothesis";
@@ -176,17 +208,20 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
       const validTo = optionalString(args.valid_to);
       const actor = resolveActor(args);
 
-      const { entity, created, changed } = entityStore.upsert({
-        vaultId,
-        category,
-        key,
-        bodyJson,
-        epistemicState,
-        confidence,
-        validFrom,
-        validTo,
-        actor,
-      });
+      const { entity, created, changed } = db.transaction(() => {
+        consumeAuthorizedGrant(vault, grant);
+        return entityStore.upsert({
+          vaultId,
+          category,
+          key,
+          bodyJson,
+          epistemicState,
+          confidence,
+          validFrom,
+          validTo,
+          actor,
+        });
+      })();
 
       if (changed) {
         await embedOnWrite(entity);
@@ -208,7 +243,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     async msp_memory_get(args = {}) {
       const vaultId = requireString(args.vault_id, "vault_id");
       const vault = requireKnownVault(vaultId);
-      checkAccessContext(vault, args, "msp_memory_get");
+      checkAccess(vault, args, "msp_memory_get");
       const category = requireString(args.category, "category");
       const key = requireString(args.key, "key");
       const asOfValidAt = optionalString(args.as_of_valid_at);
@@ -236,7 +271,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     async msp_memory_list(args = {}) {
       const vaultId = requireString(args.vault_id, "vault_id");
       const vault = requireKnownVault(vaultId);
-      checkAccessContext(vault, args, "msp_memory_list");
+      checkAccess(vault, args, "msp_memory_list");
       const category = optionalString(args.category);
       const lifecycleState = optionalString(args.lifecycle_state);
       const pageToken = optionalString(args.page_token);
@@ -259,7 +294,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     async msp_memory_history(args = {}) {
       const entityId = requireString(args.entity_id, "entity_id");
       const current = requireEntityById(entityId);
-      checkAccessContext(vaultRegistry.getVaultById(current.vault_id), args, "msp_memory_history");
+      checkAccess(vaultRegistry.getVaultById(current.vault_id), args, "msp_memory_history");
 
       const historyDesc = entityStore.history({ vaultId: current.vault_id, category: current.category, key: current.key });
       // API-009 SS4.4: "history is returned in ascending version order ...
@@ -308,16 +343,19 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
       const entityId = requireString(args.entity_id, "entity_id");
       const reason = requireString(args.reason, "reason");
       const current = requireEntityById(entityId);
-      checkAccessContext(vaultRegistry.getVaultById(current.vault_id), args, "msp_memory_forget");
+      const grant = checkAccess(vaultRegistry.getVaultById(current.vault_id), args, "msp_memory_forget", { nonceRequired: true });
       const actor = resolveActor(args);
 
-      const forgotten = entityStore.forget({
-        vaultId: current.vault_id,
-        category: current.category,
-        key: current.key,
-        reason,
-        actor,
-      });
+      const forgotten = db.transaction(() => {
+        consumeAuthorizedGrant(vaultRegistry.getVaultById(current.vault_id), grant, current.entity_id);
+        return entityStore.forget({
+          vaultId: current.vault_id,
+          category: current.category,
+          key: current.key,
+          reason,
+          actor,
+        });
+      })();
 
       journal.append({
         actor,
@@ -335,7 +373,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     async msp_memory_search(args = {}) {
       const vaultId = requireString(args.vault_id, "vault_id");
       const vault = requireKnownVault(vaultId);
-      checkAccessContext(vault, args, "msp_memory_search");
+      checkAccess(vault, args, "msp_memory_search");
       const query = requireString(args.query, "query");
       const mode = VALID_SEARCH_MODES.has(args.mode) ? args.mode : "hybrid";
       const limit = typeof args.limit === "number" ? args.limit : undefined;
@@ -374,12 +412,12 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     async msp_memory_decay_tick(args = {}) {
       const vaultId = requireString(args.vault_id, "vault_id");
       const vault = requireKnownVault(vaultId);
-      checkAccessContext(vault, args, "msp_memory_decay_tick");
       const dryRun = args.dry_run === true;
+      const grant = checkAccess(vault, args, "msp_memory_decay_tick", { nonceRequired: !dryRun });
       const actor = resolveActor(args);
       const now = new Date().toISOString();
 
-      // PH-MEMOS-5 (design §5.1, DEC-MEMOS-45): `pinned` reads the target
+      // PH-MEMOS-5 (design §5.0.6): `pinned` reads the target
       // vault's own decay_policy column directly (never re-derived from
       // vault_type a second time) -- true only for a principal_passport
       // vault. When pinned, evaluated is always 0 and transitioned is
@@ -388,20 +426,20 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
       // to persist -- a distinct statement from dry_run's own "computed
       // but not persisted" contract, never conflated with it.
       const pinned = vault.decay_policy === "pinned";
-      const { evaluated, transitioned } = pinned ? { evaluated: 0, transitioned: [] } : runDecayTick(db, { vaultId, dryRun, now });
-
-      // API-009 SS6: "every mutating call (... decay_tick with
-      // dry_run: false ...) is recorded"; this packet's Bounded Scope item 5
-      // additionally requires a journal row for dry_run calls too (an
-      // operator asking "what would this do" is itself an auditable event).
-      journal.append({
-        actor,
-        toolName: "msp_memory_decay_tick",
-        ref: null,
-        workspaceId: null,
-        payload: { vault_id: vaultId, dry_run: dryRun, evaluated, transitioned_count: transitioned.length, pinned },
-        policyDecision: "allow",
-      });
+      const result = db.transaction(() => {
+        if (!dryRun) consumeAuthorizedGrant(vault, grant);
+        const decay = pinned ? { evaluated: 0, transitioned: [] } : runDecayTick(db, { vaultId, dryRun, now });
+        journal.append({
+          actor,
+          toolName: "msp_memory_decay_tick",
+          ref: null,
+          workspaceId: null,
+          payload: { vault_id: vaultId, dry_run: dryRun, evaluated: decay.evaluated, transitioned_count: decay.transitioned.length, pinned },
+          policyDecision: "allow",
+        });
+        return decay;
+      })();
+      const { evaluated, transitioned } = result;
 
       return { evaluated, transitioned, dry_run: dryRun, pinned };
     },
@@ -415,7 +453,7 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
     async msp_memory_links_list(args = {}) {
       const entityId = requireString(args.entity_id, "entity_id");
       const linksListEntity = requireEntityById(entityId);
-      checkAccessContext(vaultRegistry.getVaultById(linksListEntity.vault_id), args, "msp_memory_links_list");
+      checkAccess(vaultRegistry.getVaultById(linksListEntity.vault_id), args, "msp_memory_links_list");
       const direction = ["outgoing", "incoming", "both"].includes(args.direction) ? args.direction : "both";
 
       const links = linksStore.list({ entityId, direction });
@@ -451,37 +489,41 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
       const actor = resolveActor(args);
 
       const fromEntity = requireEntityById(fromEntityId);
+      const fromGrant = checkAccess(vaultRegistry.getVaultById(fromEntity.vault_id), args, "msp_memory_links_create", { nonceRequired: true });
       const toEntity = requireEntityById(toEntityId);
+      const toGrant = checkAccess(vaultRegistry.getVaultById(toEntity.vault_id), args, "msp_memory_links_create", { nonceRequired: true, entityId: toEntityId });
+      const grant = fromGrant ?? toGrant;
       assertVaultScope(
         fromEntity.vault_id === toEntity.vault_id,
-        `msp_memory_links_create: from_entity_id and to_entity_id belong to different vaults ` +
-          `("${fromEntity.vault_id}" vs "${toEntity.vault_id}"); a link may not cross a vault boundary.`,
+        "msp_memory_links_create: endpoints belong to different vaults; a link may not cross a vault boundary.",
       );
-      // PH-MEMOS-5 (design §5.1, case 3): the pre-existing endpoint-
+      // PH-MEMOS-5 (design §5.0.6, links_create): the pre-existing endpoint-
       // consistency check above already refuses a link whose two endpoints
       // resolve to DIFFERENT vault_ids -- a link therefore always has
       // exactly ONE vault to classify, never two. Resolved via
       // from_entity_id's own vault, unchanged by which endpoint is named.
-      checkAccessContext(vaultRegistry.getVaultById(fromEntity.vault_id), args, "msp_memory_links_create");
 
-      const { link, created } = linksStore.create({
-        vaultId: fromEntity.vault_id,
-        fromEntityId,
-        toEntityId,
-        linkType,
-        validFrom: new Date().toISOString(),
-      });
-
-      if (created) {
-        journal.append({
-          actor,
-          toolName: "msp_memory_links_create",
-          ref: link.link_id,
-          workspaceId: null,
-          payload: { vault_id: link.vault_id, from_entity_id: fromEntityId, to_entity_id: toEntityId, link_type: linkType },
-          policyDecision: "allow",
+      const { link, created } = db.transaction(() => {
+        consumeAuthorizedGrant(vaultRegistry.getVaultById(fromEntity.vault_id), grant, fromEntityId);
+        const createdLink = linksStore.create({
+          vaultId: fromEntity.vault_id,
+          fromEntityId,
+          toEntityId,
+          linkType,
+          validFrom: new Date().toISOString(),
         });
-      }
+        if (createdLink.created) {
+          journal.append({
+            actor,
+            toolName: "msp_memory_links_create",
+            ref: createdLink.link.link_id,
+            workspaceId: null,
+            payload: { vault_id: createdLink.link.vault_id, from_entity_id: fromEntityId, to_entity_id: toEntityId, link_type: linkType },
+            policyDecision: "allow",
+          });
+        }
+        return createdLink;
+      })();
 
       return { link: { from_entity_id: link.from_entity_id, to_entity_id: link.to_entity_id, link_type: link.link_type } };
     },

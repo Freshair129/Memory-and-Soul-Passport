@@ -85,7 +85,7 @@ describe("API-009 machine contract", () => {
     const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
     expect(schema.contract).toMatchObject({
       doc_id: "API-009-PERSISTENT-MEMORY-CONTRACT",
-      version: "0.2.0+draft",
+      version: "0.3.0+draft",
     });
     expect(schema.tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
     for (const tool of schema.tools) expect(tool.inputSchema).toMatchObject({ type: "object" });

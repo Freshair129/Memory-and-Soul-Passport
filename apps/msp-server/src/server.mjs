@@ -69,8 +69,9 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const vectorClient = createVectorClient();
   const retrievalService = createRetrievalService({ db, vectorClient });
   const gksProvider = createGksProviderFromEnvironment(env);
+  const globalPrivateGrantRequired = env.MSP_GLOBAL_PRIVATE_GRANT_REQUIRED === "1";
 
-  const vaultHandlers = createVaultHandlers({ vaultRegistry, journal });
+  const vaultHandlers = createVaultHandlers({ vaultRegistry, journal, keyFor: threadServiceKeyFor, globalPrivateGrantRequired });
   // PH-MEMOS-5 (design §5.3, DEC-MEMOS-51): MSP_IDENTITY_HMAC_KEY is
   // mandatory for msp_vault_resolve as a whole -- read here, not defaulted
   // to a placeholder; the handler itself refuses identity_hmac_unconfigured
@@ -80,10 +81,11 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
     vaultRegistry,
     journal,
     identityHmacKey: env.MSP_IDENTITY_HMAC_KEY ?? null,
+    keyFor: threadServiceKeyFor,
   });
-  const contextHandlers = createContextHandlers({ db, journal });
-  const lifecycleHandlers = createLifecycleHandlers({ db, entityStore, vaultRegistry, journal, gksProvider });
-  const memoryHandlers = createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore });
+  const contextHandlers = createContextHandlers({ db, journal, keyFor: threadServiceKeyFor, now: Date.now });
+  const lifecycleHandlers = createLifecycleHandlers({ db, entityStore, vaultRegistry, journal, gksProvider, keyFor: threadServiceKeyFor, globalPrivateGrantRequired });
+  const memoryHandlers = createMemoryHandlers({ db, entityStore, vaultRegistry, journal, retrievalService, vectorClient, linksStore, keyFor: threadServiceKeyFor, globalPrivateGrantRequired });
   const pipelineHandlers = createPipelineHandlers({ gksProvider, journal, env });
 
   // W1: whether a caller-supplied `now` may ever reach the thread-memory

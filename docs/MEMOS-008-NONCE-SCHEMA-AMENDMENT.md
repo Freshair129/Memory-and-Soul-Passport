@@ -2,7 +2,7 @@
 version: "0.1.1b"
 created_at: "2026-09-17T01:51:07+07:00,RWANG,bfe7c9d"
 last_update: "2026-09-17T02:28:00+07:00,RWANG"
-status: candidate
+status: beta
 superseded_by: null
 attributes:
   domain: mission-state-protocol
@@ -12,9 +12,8 @@ attributes:
 
 # MEMOS-008 nonce schema amendment
 
-Approval status: CANDIDATE. This amendment is not implementation authority
-until the owner approves it. The current request authorizes alignment to
-design v0.9.9b; this document proposes the additional correction needed to
+Approval status: APPROVED by the owner on 2026-09-17 ("ลุย").
+The current request authorizes alignment to design v0.9.9b; this amendment adds the correction needed to
 make its global nonce partition enforceable. Risk: HIGH; complexity: C-3.
 
 ## Parent and peer alignment

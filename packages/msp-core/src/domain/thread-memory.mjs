@@ -20,6 +20,7 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 
 import { mintRef } from "./ids.mjs";
+import { consumeGrantNonce } from "./grant-nonces.mjs";
 import {
   AgentNotCurrentError,
   CompactionLeaseConflictError,
@@ -59,12 +60,6 @@ const MAX_SOURCE_REFS = 200;
 // stage-1 ownership/status check. A third, distinguishable code (the
 // round-1 fix's own thread_scope_denied) would itself have been an oracle.
 const SUPERSESSION_REFUSAL = "supersedes_record_id does not name a record this caller can supersede";
-
-// PH-MEMOS-3 stage 2 (BL-MEMOS-048, RKOI stage-2 review round 2, defense
-// in depth): the sanity bound #consumeNonce enforces on `grantExpiresAt`,
-// well outside verifyThreadGrant's own 65-second expiry window -- see
-// #consumeNonce's own comment for why this exists at all.
-const TEN_YEARS_MS = 10 * 365 * 24 * 60 * 60 * 1000;
 
 // PH-MEMOS-4 (BL-MEMOS-054, design Sec.11.2, DEC-MEMOS-29): the five
 // content tables msp_thread_retention_tick's age-based pass tombstones,
@@ -537,35 +532,7 @@ export class ThreadMemoryStore {
   // enforcement point and already refuses anything this check would catch
   // before ever reaching this method.
   #consumeNonce(tenantId, nonce, grantExpiresAt) {
-    if (typeof nonce !== "string" || nonce.length < 1 || nonce.length > 128) {
-      throw new ThreadMemoryValidationError("nonce must be a string of 1 to 128 characters.");
-    }
-    // RKOI review (stage-2 revision round 2, defense in depth): a bare
-    // `Number.isFinite` check let `grantExpiresAt` reach `new
-    // Date(grantExpiresAt).toISOString()` below with any finite number at
-    // all -- including something like `1e20`, which is OUTSIDE the native
-    // `Date` object's own representable range and makes `toISOString()`
-    // throw a raw, untyped `RangeError: Invalid time value` instead of
-    // this module's own typed vocabulary. Refused here instead, before
-    // that call ever runs: `grantExpiresAt` must be a finite INTEGER
-    // (epoch milliseconds, matching how `verifyThreadGrant` itself
-    // produces `grant.expiresAt`) within TEN_YEARS_MS of the real server
-    // clock -- comfortably wider than `verifyThreadGrant`'s own 65-second
-    // expiry window, so this is a sanity bound against a malformed or
-    // hostile caller, not a second copy of that check. A negative value,
-    // or any value astronomically far from "now" in either direction, is
-    // always outside this window and refused by the same single check.
-    if (!Number.isInteger(grantExpiresAt) || Math.abs(grantExpiresAt - Date.now()) > TEN_YEARS_MS) {
-      throw new ThreadMemoryValidationError("grantExpiresAt must be a finite integer (epoch milliseconds) within 10 years of the server clock.");
-    }
-    this.#db.prepare("DELETE FROM grant_nonces WHERE rowid IN (SELECT rowid FROM grant_nonces WHERE expires_at < ? LIMIT 200)").run(new Date().toISOString());
-    const expiresAt = new Date(grantExpiresAt).toISOString();
-    try {
-      this.#db.prepare("INSERT INTO grant_nonces (tenant_id, nonce, expires_at) VALUES (?, ?, ?)").run(tenantId, nonce, expiresAt);
-    } catch (error) {
-      if (!String(error?.message).includes("UNIQUE")) throw error;
-      throw new GrantReplayedError();
-    }
+    return consumeGrantNonce(this.#db, { tenantId, nonce, expiresAt: grantExpiresAt });
   }
 
   #journalAppend(entry) {

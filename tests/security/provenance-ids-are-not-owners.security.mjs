@@ -1,4 +1,4 @@
-// PH-MEMOS-5 (design v0.9.1b §5, §5.1, §15, GATE-MEMOS-5): provenance ids
+// PH-MEMOS-5 (design v0.9.9b §5.0.6, GATE-MEMOS-5): provenance ids
 // (instance_id/thread_id/session_id inside an access_context, or anywhere
 // else) never widen vault scope, and a wrong tenant/principal/agent/
 // workspace claim -- or a missing/false allow_passport for a passport
@@ -7,6 +7,7 @@
 // earlier design revision's §15 by mistake; the plan and GATE-MEMOS-5 both
 // still name this suite. Real stdio child process throughout.
 import assert from "node:assert/strict";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -32,12 +33,31 @@ function tempDbPath() {
 }
 
 function spawnRuntime(dbPath) {
-  return createMspStdioCaller({
+  const transport = createMspStdioCaller({
     command: process.execPath,
     args: [binPath],
-    env: { ...process.env, MSP_DB_PATH: dbPath, MSP_IDENTITY_HMAC_KEY: HMAC_KEY },
+    env: { ...process.env, MSP_DB_PATH: dbPath, MSP_IDENTITY_HMAC_KEY: HMAC_KEY, MSP_THREAD_SERVICE_KEY: HMAC_KEY },
     timeoutMs: 10_000,
   });
+  // Explicit scope fixtures are independently signed; absent scope stays
+  // unsigned to preserve the missing-authority attack direction.
+  const call = (name, input) => {
+    if (!input.access_context) return transport(name, input);
+    const scope = input.access_context;
+    const grant = {
+      operation: name, expiresAt: Date.now() + 60_000,
+      payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+      tenantId: scope.tenant_id, principalId: scope.principal_id,
+      agentId: scope.agent_id, workspaceId: scope.workspace_id,
+      allowPassport: name === 'msp_vault_resolve' ? input.authorization.allow_passport : scope.allow_passport,
+      nonce: randomUUID(),
+      instanceId: scope.instance_id, threadId: scope.thread_id, sessionId: scope.session_id,
+    };
+    const signature = createHmac('sha256', HMAC_KEY).update(JSON.stringify(grant)).digest('hex');
+    return transport(name, { ...input, access: { grant, signature } });
+  };
+  call.close = () => transport.close();
+  return call;
 }
 
 const CORRECT_TUPLE = { tenant_id: "tenant-prov", principal_id: "principal-prov", agent_id: "agent-prov", workspace_id: "workspace-prov" };
@@ -128,7 +148,7 @@ const WRONG_TUPLES = [
   { label: "wrong workspace_id", ...CORRECT_TUPLE, workspace_id: "WRONG-workspace" },
 ];
 
-test("msp_memory_upsert/get/list/search/decay_tick (vault-identifying tools): a wrong tenant/principal/agent/workspace access_context is access_context_denied; absent access_context is access_context_required", async () => {
+test("msp_memory_upsert/get/list/search/decay_tick (vault-identifying tools): a wrong tenant/principal/agent/workspace access_context is not_found; absent access_context is not_found", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath);
   try {
@@ -141,13 +161,13 @@ test("msp_memory_upsert/get/list/search/decay_tick (vault-identifying tools): a 
       ["msp_memory_decay_tick", { vault_id: fixture.privateVaultId, dry_run: true }],
     ];
     for (const [tool, baseArgs] of cases) {
-      await assert.rejects(call(tool, baseArgs), /access_context_required/, `${tool}: absent access_context must be access_context_required`);
+      await assert.rejects(call(tool, baseArgs), /unknown vault_id|No memory entity found/, `${tool}: absent access_context must be not_found`);
       for (const wrong of WRONG_TUPLES) {
         const { label, ...accessContext } = wrong;
         await assert.rejects(
           call(tool, { ...baseArgs, access_context: accessContext }),
-          /access_context_denied/,
-          `${tool}: ${label} must be access_context_denied`,
+          /unknown vault_id|No memory entity found/,
+          `${tool}: ${label} must be not_found`,
         );
       }
       // control case: the exact correct tuple succeeds.
@@ -159,36 +179,36 @@ test("msp_memory_upsert/get/list/search/decay_tick (vault-identifying tools): a 
   }
 });
 
-test("msp_memory_history/forget/links_list (entity-id-only tools, resolved via the entity's own vault_id): a wrong access_context is access_context_denied; absent is access_context_required", async () => {
+test("msp_memory_history/forget/links_list (entity-id-only tools, resolved via the entity's own vault_id): a wrong access_context is not_found; absent is not_found", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath);
   try {
     const fixture = await seedFixture(call);
 
-    await assert.rejects(call("msp_memory_history", { entity_id: fixture.privateEntityId }), /access_context_required/);
-    await assert.rejects(call("msp_memory_links_list", { entity_id: fixture.privateEntityId }), /access_context_required/);
+    await assert.rejects(call("msp_memory_history", { entity_id: fixture.privateEntityId }), /unknown vault_id|No memory entity found/);
+    await assert.rejects(call("msp_memory_links_list", { entity_id: fixture.privateEntityId }), /unknown vault_id|No memory entity found/);
     for (const wrong of WRONG_TUPLES) {
       const { label, ...accessContext } = wrong;
       await assert.rejects(
         call("msp_memory_history", { entity_id: fixture.privateEntityId, access_context: accessContext }),
-        /access_context_denied/,
+        /unknown vault_id|No memory entity found/,
         `msp_memory_history: ${label}`,
       );
       await assert.rejects(
         call("msp_memory_links_list", { entity_id: fixture.privateEntityId, access_context: accessContext }),
-        /access_context_denied/,
+        /unknown vault_id|No memory entity found/,
         `msp_memory_links_list: ${label}`,
       );
     }
     // forget is destructive -- exercised last, once, after the two
     // read-only checks above against a SEPARATE entity so forgetting it
     // does not disturb fixtures the other assertions still need.
-    await assert.rejects(call("msp_memory_forget", { entity_id: fixture.privateEntity2Id, reason: "test" }), /access_context_required/);
+    await assert.rejects(call("msp_memory_forget", { entity_id: fixture.privateEntity2Id, reason: "test" }), /unknown vault_id|No memory entity found/);
     for (const wrong of WRONG_TUPLES) {
       const { label, ...accessContext } = wrong;
       await assert.rejects(
         call("msp_memory_forget", { entity_id: fixture.privateEntity2Id, reason: "test", access_context: accessContext }),
-        /access_context_denied/,
+        /unknown vault_id|No memory entity found/,
         `msp_memory_forget: ${label}`,
       );
     }
@@ -201,19 +221,19 @@ test("msp_memory_history/forget/links_list (entity-id-only tools, resolved via t
   }
 });
 
-test("msp_memory_links_create: resolved via from_entity_id's vault under the pre-existing same-vault-as-to_entity_id refusal; a wrong access_context is access_context_denied; absent is access_context_required", async () => {
+test("msp_memory_links_create: resolved via from_entity_id's vault under the pre-existing same-vault-as-to_entity_id refusal; a wrong access_context is not_found; absent is not_found", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath);
   try {
     const fixture = await seedFixture(call);
     const linkArgs = { from_entity_id: fixture.privateEntityId, to_entity_id: fixture.privateEntity2Id, link_type: "relates_to" };
 
-    await assert.rejects(call("msp_memory_links_create", linkArgs), /access_context_required/);
+    await assert.rejects(call("msp_memory_links_create", linkArgs), /unknown vault_id|No memory entity found/);
     for (const wrong of WRONG_TUPLES) {
       const { label, ...accessContext } = wrong;
       await assert.rejects(
         call("msp_memory_links_create", { ...linkArgs, access_context: accessContext }),
-        /access_context_denied/,
+        /unknown vault_id|No memory entity found/,
         `msp_memory_links_create: ${label}`,
       );
     }
@@ -225,7 +245,7 @@ test("msp_memory_links_create: resolved via from_entity_id's vault under the pre
   }
 });
 
-test("principal_passport target: a missing or false allow_passport is access_context_denied, the SAME code as a tuple mismatch, deliberately -- exercised on all nine msp_memory_* tools reachable against a passport vault", async () => {
+test("principal_passport target: a missing or false allow_passport is not_found, the SAME code as a tuple mismatch, deliberately -- exercised on all nine msp_memory_* tools reachable against a passport vault", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath);
   try {
@@ -237,11 +257,11 @@ test("principal_passport target: a missing or false allow_passport is access_con
     for (const accessContext of [passportTuple, { ...passportTuple, allow_passport: false }]) {
       await assert.rejects(
         call("msp_memory_get", { vault_id: fixture.passportVaultId, category: "soul", key: "fact-1", access_context: accessContext }),
-        /access_context_denied/,
+        /unknown vault_id|No memory entity found/,
       );
       await assert.rejects(
         call("msp_memory_history", { entity_id: fixture.passportEntityId, access_context: accessContext }),
-        /access_context_denied/,
+        /unknown vault_id|No memory entity found/,
       );
     }
 
@@ -257,7 +277,7 @@ test("principal_passport target: a missing or false allow_passport is access_con
   }
 });
 
-test("an access_context whose tuple exactly matches an ERASED principal vault's own still-populated tuple columns is access_context_denied, not ok", async () => {
+test("an access_context whose tuple exactly matches an ERASED principal vault's own still-populated tuple columns is not_found, not ok", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath);
   try {
@@ -279,7 +299,7 @@ test("an access_context whose tuple exactly matches an ERASED principal vault's 
         vault_id: fixture.privateVaultId, category: "note", key: "fact-1",
         access_context: { ...CORRECT_TUPLE },
       }),
-      /access_context_denied/,
+      /unknown vault_id|No memory entity found/,
     );
   } finally {
     await call.close();
