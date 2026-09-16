@@ -886,7 +886,7 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
     expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
   });
 
-  it("trailing whitespace after an otherwise-exact directive on line 1 is refused as misplaced, not accepted via trim()", () => {
+  it("trailing whitespace after an otherwise-exact directive on line 1 is refused as misplaced", () => {
     const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
     const db = freshDb();
 
@@ -916,6 +916,22 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
     addMigration0002(migrationsDir, withDirective(parentRebuildBody()).toUpperCase());
 
     expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_directive_misplaced:/);
+  });
+
+  it("an exact directive on line 1 ends header scanning; a later marker comment does not override the directive", () => {
+    const migrationsDir = setupMigrationsDir({ "0001_parent_child.sql": parentChildInit });
+    const db = freshDb();
+
+    initAndPopulate(migrationsDir, db);
+    addMigration0002(
+      migrationsDir,
+      [FOREIGN_KEYS_OFF_DIRECTIVE, "-- msp-migration: later header text", parentRebuildBody()].join("\n"),
+    );
+
+    const result = runMigrations(db, migrationsDir);
+    expect(result.appliedCount).toBe(1);
+    expect(db.prepare("SELECT id, kind FROM parent ORDER BY id").all()).toEqual([{ id: "p1", kind: "a" }, { id: "p2", kind: "a" }]);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
   });
 
   // RKOI review of WP-E0, warning 2: classifyForeignKeysDirective() used to
@@ -2071,11 +2087,10 @@ describe("db/migrate a foreign key to a shadow table's own NON-key column is ref
     expect(() => runMigrations(db, migrationsDir)).toThrow(/^migration_foreign_key_check_failed:.*"child".*foreign key mismatch/is);
   });
 
-  // rtree is compiled into the better-sqlite3 build this workspace pins
-  // (confirmed against the actual bundled binary below); if it were ever
-  // unavailable, this falls back to a second FTS5 non-key shape so the
-  // "some other virtual-table family's shadow tables" case is still
-  // covered.
+  // rtree is compiled into the better-sqlite3 build this workspace pins in
+  // the supported test environment. If a different SQLite build omits it,
+  // keep the test visible as skipped rather than silently changing the shape
+  // under test to an FTS5 case.
   function probeRtreeAvailable() {
     const db = freshDb();
     try {
@@ -2086,20 +2101,11 @@ describe("db/migrate a foreign key to a shadow table's own NON-key column is ref
     }
   }
 
-  it("refuses a foreign key to an rtree virtual table's own shadow table's non-key column (geo_node_node(data)) on the plain path", () => {
-    const rtreeAvailable = probeRtreeAvailable();
-    expect(rtreeAvailable).toBe(true); // confirmed compiled into the bundled better-sqlite3; see the fallback below if this ever changes
+  const rtreeAvailable = probeRtreeAvailable();
 
-    const parentSql = rtreeAvailable
-      ? "CREATE VIRTUAL TABLE geo_node USING rtree(id, minX, maxX, minY, maxY);"
-      : ["CREATE VIRTUAL TABLE items_fts USING fts5(body);", "INSERT INTO items_fts(rowid, body) VALUES (1, 'hello world');"].join("\n");
-    const childSql = rtreeAvailable
-      ? "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val REFERENCES geo_node_node(data));"
-      : "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val REFERENCES items_fts_content(c0));";
-    if (!rtreeAvailable) {
-      // eslint-disable-next-line no-console
-      console.warn("rtree is NOT available in this bundled SQLite build -- fell back to a second FTS5 non-key shape (items_fts_content(c0))");
-    }
+  it.skipIf(!rtreeAvailable)("refuses a foreign key to an rtree virtual table's own shadow table's non-key column (geo_node_node(data)) on the plain path", () => {
+    const parentSql = "CREATE VIRTUAL TABLE geo_node USING rtree(id, minX, maxX, minY, maxY);";
+    const childSql = "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val REFERENCES geo_node_node(data));";
 
     const migrationsDir = setupMigrationsDir({ "0001_parent.sql": parentSql });
     const db = freshDb();
@@ -2114,14 +2120,9 @@ describe("db/migrate a foreign key to a shadow table's own NON-key column is ref
     expect(rows).toEqual([{ version: 1 }]);
   });
 
-  it("refuses the same rtree (or fallback FTS5) non-key shadow column on the directive path too", () => {
-    const rtreeAvailable = probeRtreeAvailable();
-    const parentSql = rtreeAvailable
-      ? "CREATE VIRTUAL TABLE geo_node USING rtree(id, minX, maxX, minY, maxY);"
-      : ["CREATE VIRTUAL TABLE items_fts USING fts5(body);", "INSERT INTO items_fts(rowid, body) VALUES (1, 'hello world');"].join("\n");
-    const childSql = rtreeAvailable
-      ? "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val REFERENCES geo_node_node(data));"
-      : "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val REFERENCES items_fts_content(c0));";
+  it.skipIf(!rtreeAvailable)("refuses the same rtree non-key shadow column on the directive path too", () => {
+    const parentSql = "CREATE VIRTUAL TABLE geo_node USING rtree(id, minX, maxX, minY, maxY);";
+    const childSql = "CREATE TABLE child (id INTEGER PRIMARY KEY, fk_val REFERENCES geo_node_node(data));";
 
     const migrationsDir = setupMigrationsDir({ "0001_parent.sql": parentSql });
     const db = freshDb();
