@@ -284,6 +284,24 @@
       }
     },
     {
+      "name": "msp_pipeline_product_query",
+      "roles": ["source", "worker"],
+      "inputSchema": {
+        "allOf": [{"$ref": "#/$defs/envelope"}],
+        "required": ["productSchemaVersion", "operation", "corpusContext"],
+        "properties": {
+          "productSchemaVersion": {"const": "published-products.v1"},
+          "operation": {"enum": ["search", "price", "budget"]},
+          "query": {"type": "string", "minLength": 1, "maxLength": 16000},
+          "code": {"type": "string", "minLength": 1, "maxLength": 256},
+          "quantity": {"type": ["integer", "null"], "minimum": 1},
+          "maxPriceThb": {"type": "number", "minimum": 0},
+          "topK": {"type": "integer", "minimum": 1, "maximum": 20},
+          "corpusContext": {"type": "object"}
+        }
+      }
+    },
+    {
       "name": "msp_pipeline_query",
       "roles": [
         "source",
