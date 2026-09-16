@@ -7,7 +7,8 @@
   principal/global grant and erasure-receipt contracts.
 - The generic stdio caller supports the three Phase 6 tools without changing
   its public call interface. Phase 6 authorization is enforced by the server.
-- Package validation is a local dry-run; no npm publication is implied.
+- Document all eighteen supported runtime environment variables.
+- Local package validation does not imply npm publication.
 
 ## 0.2.6
 
