@@ -179,6 +179,7 @@ async function runThreadMatrix() {
   const threadByKey = new Map();
   const threadMeta = new Map();
   const vaultLegs = new Map();
+  const phase6Legs = [];
   try {
     for (const tenantId of tenants) {
       for (const audienceKind of audiences) {
@@ -286,6 +287,7 @@ async function runThreadMatrix() {
                   ),
                 );
                 assert(record.recordId, `${legId}: memory record did not return recordId`);
+                phase6Legs.push({ tenantId, principalId, agentId, workspaceId, room, threadId: resolved.thread.threadId, recordId: record.recordId, claims });
                 legEvidence.push("record.pass");
               } else {
                 await expectDenied(call, "msp_thread_context", contextInput, claims, /thread_scope_denied/, `${legId}: GROUP context`);
@@ -441,7 +443,7 @@ async function runThreadMatrix() {
     } catch (error) {
       summaryEvidence = status("BL083.summary", "FAIL", "real stdio sweep -> claim -> commit", errorText(error));
     }
-    const phase6 = await runPhase6Acceptance(call, dbPath);
+    const phase6 = await runPhase6Acceptance(call, dbPath, phase6Legs);
     return { matrix: legs, directed, summary: summaryEvidence, phase6 };
   } finally {
     await call.close();
@@ -449,181 +451,141 @@ async function runThreadMatrix() {
   }
 }
 
-async function runPhase6Acceptance(call, dbPath) {
-  const tenantId = "phase7-phase6-tenant";
-  const principalId = "phase7-phase6-principal";
-  const agentId = "phase7-phase6-agent";
-  const workspaceId = "phase7-phase6-workspace";
-  const room = "phase7-phase6-direct";
-  const claims = makeClaims({
-    tenantId,
-    principalId,
-    agentId,
-    workspaceId,
-    room,
-    audienceKind: "DIRECT",
-    readPrivate: true,
-    writePrivate: true,
-    confirmMemory: true,
-    assertParticipants: true,
-    assertAgents: true,
-    allowPassport: true,
-    dataSubjectAccess: true,
-  });
+async function runPhase6Acceptance(call, dbPath, phase6Legs) {
+  const consolidationResults = new Map();
+  const principalGroups = new Map();
+  const expectedDirectLegs = tenants.length * principals.length * agents.length;
+  let consolidationEvidence;
 
   try {
-    const vault = await call(
-      "msp_vault_resolve",
-      signed(
+    assert(phase6Legs.length === expectedDirectLegs, `Phase6 acceptance requires every DIRECT matrix leg (got ${phase6Legs.length}, expected ${expectedDirectLegs})`);
+
+    for (const [index, leg] of phase6Legs.entries()) {
+      const claims = { ...leg.claims, allowPassport: true };
+      const vault = await call(
         "msp_vault_resolve",
-        {
-          actor: "phase7-phase6-acceptance",
-          access_context: {
-            tenant_id: tenantId,
-            principal_id: principalId,
-            agent_id: agentId,
-            workspace_id: workspaceId,
-            project_id: "phase7-phase6-project",
-            policy_version: policyRevision,
+        signed(
+          "msp_vault_resolve",
+          {
+            actor: "phase7-phase6-matrix-acceptance",
+            access_context: {
+              tenant_id: leg.tenantId,
+              principal_id: leg.principalId,
+              agent_id: leg.agentId,
+              workspace_id: leg.workspaceId,
+              project_id: `phase7-phase6-${leg.tenantId}`,
+              policy_version: policyRevision,
+            },
+            authorization: {
+              allowed: true,
+              read: true,
+              write_private: true,
+              write_shared: false,
+              allow_passport: true,
+            },
           },
-          authorization: {
-            allowed: true,
-            read: true,
-            write_private: true,
-            write_shared: false,
-            allow_passport: true,
-          },
-        },
-        claims,
-      ),
-    );
-    assert(vault.principalPrivateVaultId, "Phase6 acceptance must resolve a principal private vault");
+          claims,
+        ),
+      );
+      assert(vault.principalPrivateVaultId && vault.principalPassportVaultId, `${leg.tenantId}/${leg.principalId}/${leg.agentId}: principal vault resolve incomplete`);
 
-    const resolved = await call(
-      "msp_thread_resolve",
-      signed(
-        "msp_thread_resolve",
-        {
-          thread_kind: "DIRECT",
-          audience_kind: "DIRECT",
-          channel_type: "TEST",
-          channel_account_id: `phase7-${tenantId}`,
-          external_room_ref: room,
-          tenant_id: tenantId,
-        },
-        claims,
-      ),
-    );
-    const threadId = resolved.thread?.threadId;
-    assert(threadId, "Phase6 acceptance must resolve a DIRECT thread");
+      const ownerKey = `${leg.tenantId}:${leg.principalId}`;
+      const group = principalGroups.get(ownerKey) ?? { tenantId: leg.tenantId, principalId: leg.principalId, legs: [], vaultIds: new Set(), entities: [] };
+      group.legs.push(leg);
+      group.vaultIds.add(vault.principalPrivateVaultId);
+      group.vaultIds.add(vault.principalPassportVaultId);
+      principalGroups.set(ownerKey, group);
 
-    const inbound = await call(
-      "msp_thread_message_append",
-      signed(
-        "msp_thread_message_append",
-        {
-          thread_id: threadId,
-          source_event_id: "phase7-phase6-source-event",
-          speaker_id: principalId,
-          speaker_kind: "HUMAN",
-          identity_assurance: "VERIFIED",
-          person_id: principalId,
-          direction: "INBOUND",
-          text: "phase7 phase6 source",
-        },
-        claims,
-      ),
-    );
-    const sessionId = inbound.session?.sessionId;
-    const messageId = inbound.message?.messageId;
-    assert(sessionId && messageId, "Phase6 acceptance must create a source session and message");
+      const consolidationInput = {
+        source_record_id: leg.recordId,
+        target_vault_id: vault.principalPrivateVaultId,
+        entity_category: "preference",
+        entity_key: `phase7-${leg.tenantId}-${leg.principalId}-${leg.agentId}`,
+        idempotency_key: `phase7-phase6-consolidation-${index}`,
+      };
+      const consolidated = await call(
+        "msp_memory_consolidate",
+        signed("msp_memory_consolidate", consolidationInput, claims),
+      );
+      assert(consolidated.decision === "consolidated" && consolidated.entity_id && consolidated.provenance_id, `${leg.tenantId}/${leg.principalId}/${leg.agentId}: DIRECT consolidation did not commit`);
+      const digest = await call(
+        "msp_memory_context_digest",
+        signed("msp_memory_context_digest", { limit: 50 }, claims),
+      );
+      assert(digest.items.some((item) => item.entity_id === consolidated.entity_id), `${leg.tenantId}/${leg.principalId}/${leg.agentId}: digest omitted its consolidated entity`);
 
-    const record = await call(
-      "msp_thread_memory_record",
-      signed(
-        "msp_thread_memory_record",
-        {
-          thread_id: threadId,
-          session_id: sessionId,
-          kind: "PREFERENCE",
-          asserted_by_speaker_id: principalId,
-          subject_person_id: principalId,
-          body: { phase7: "consolidation-source" },
-          scope: {},
-          source_message_refs: [messageId],
-          verification_state: "CONFIRMED",
-          visibility: "AGENT",
-          confidence: 0.95,
-        },
-        claims,
-      ),
-    );
-    assert(record.recordId, "Phase6 acceptance must create a protected source record");
+      const result = { ...leg, claims, vault, consolidated };
+      consolidationResults.set(`${leg.tenantId}:${leg.principalId}:${leg.agentId}`, result);
+      group.entities.push(result);
+    }
+    assert(principalGroups.size === tenants.length * principals.length, `Phase6 acceptance must cover every tenant/principal erase scope (got ${principalGroups.size})`);
+    consolidationEvidence = status("BL083.phase6.consolidation", "PASS", "real stdio consolidation + digest across every DIRECT matrix leg", {
+      directLegs: phase6Legs.length,
+      tenantPrincipalScopes: principalGroups.size,
+      entities: consolidationResults.size,
+    });
+  } catch (error) {
+    consolidationEvidence = status("BL083.phase6.consolidation", "FAIL", "real stdio consolidation + digest across every DIRECT matrix leg", errorText(error));
+    return [consolidationEvidence, status("BL083.phase6.vault-erasure", "NOT_RUN", "BL083.phase6.consolidation", "vault erasure was not attempted after consolidation failure")];
+  }
 
-    const consolidationInput = {
-      source_record_id: record.recordId,
-      target_vault_id: vault.principalPrivateVaultId,
-      entity_category: "preference",
-      entity_key: "phase7",
-      idempotency_key: "phase7-phase6-consolidation",
-    };
-    const consolidated = await call(
-      "msp_memory_consolidate",
-      signed("msp_memory_consolidate", consolidationInput, claims),
-    );
-    assert(consolidated.decision === "consolidated" && consolidated.entity_id, "Phase6 acceptance must consolidate the DIRECT source");
-
-    const digest = await call(
-      "msp_memory_context_digest",
-      signed("msp_memory_context_digest", { limit: 50 }, claims),
-    );
-    assert(digest.items.some((item) => item.entity_id === consolidated.entity_id), "Phase6 digest must expose the consolidated entity before erasure");
-
-    const erased = await call(
-      "msp_thread_principal_erase",
-      signed(
+  try {
+    const erasureResults = [];
+    for (const [ownerKey, group] of principalGroups.entries()) {
+      const claims = { ...group.legs[0].claims, allowPassport: true, dataSubjectAccess: true };
+      const erased = await call(
         "msp_thread_principal_erase",
-        { idempotency_key: "phase7-phase6-erasure", erase_vault: true },
-        claims,
-      ),
-    );
-    assert(erased.replay === false, "Phase6 vault erasure must be a first execution");
+        signed(
+          "msp_thread_principal_erase",
+          { idempotency_key: `phase7-phase6-erasure-${ownerKey.replaceAll(":", "-")}`, erase_vault: true },
+          claims,
+        ),
+      );
+      assert(erased.replay === false, `${ownerKey}: vault erasure was not the first execution`);
+      erasureResults.push({ ownerKey, erased });
+    }
 
     const db = openDatabase(dbPath);
     try {
-      const vaultRows = db.prepare("SELECT status, tenant_id, principal_id, agent_id, workspace_id FROM vaults WHERE vault_id IN (?, ?)")
-        .all(vault.principalPrivateVaultId, vault.principalPassportVaultId);
-      assert(vaultRows.length >= 1 && vaultRows.every((row) => row.status === "erased" && row.tenant_id === null && row.principal_id === null && row.agent_id === null && row.workspace_id === null), "vault erasure must clear every principal owner tuple");
+      let historyRows = 0;
+      let provenanceRows = 0;
+      for (const group of principalGroups.values()) {
+        const vaultIds = [...group.vaultIds];
+        const vaultPlaceholders = vaultIds.map(() => "?").join(",");
+        const vaultRows = db.prepare(`SELECT status, tenant_id, principal_id, agent_id, workspace_id FROM vaults WHERE vault_id IN (${vaultPlaceholders})`).all(...vaultIds);
+        assert(vaultRows.length === vaultIds.length && vaultRows.every((row) => row.status === "erased" && row.tenant_id === null && row.principal_id === null && row.agent_id === null && row.workspace_id === null), `${group.tenantId}/${group.principalId}: erasure must clear every principal owner tuple`);
 
-      const entity = db.prepare("SELECT lifecycle_state, body_json, epistemic_state, confidence FROM entities WHERE entity_id=?")
-        .get(consolidated.entity_id);
-      assert(entity && entity.lifecycle_state === "forgotten" && entity.body_json === "{}" && entity.epistemic_state === "deprecated" && entity.confidence === 0, "vault erasure must forget the consolidated entity");
+        for (const result of group.entities) {
+          const entity = db.prepare("SELECT lifecycle_state, body_json, epistemic_state, confidence FROM entities WHERE entity_id=?").get(result.consolidated.entity_id);
+          assert(entity && entity.lifecycle_state === "forgotten" && entity.body_json === "{}" && entity.epistemic_state === "deprecated" && entity.confidence === 0, `${result.tenantId}/${result.principalId}/${result.agentId}: entity was not forgotten`);
 
-      const history = db.prepare("SELECT redaction_state, body_json, epistemic_state, confidence FROM entity_history WHERE entity_id=?")
-        .all(consolidated.entity_id);
-      assert(history.length > 0 && history.every((row) => row.redaction_state === "tombstoned" && row.body_json === "{}" && row.epistemic_state === "deprecated" && row.confidence === 0), "vault erasure must tombstone every entity history row");
+          const history = db.prepare("SELECT redaction_state, body_json, epistemic_state, confidence FROM entity_history WHERE entity_id=?").all(result.consolidated.entity_id);
+          assert(history.length > 0 && history.every((row) => row.redaction_state === "tombstoned" && row.body_json === "{}" && row.epistemic_state === "deprecated" && row.confidence === 0), `${result.tenantId}/${result.principalId}/${result.agentId}: entity history was not fully tombstoned`);
+          historyRows += history.length;
 
-      const provenance = db.prepare("SELECT redaction_state, source_message_refs_json FROM entity_provenance WHERE provenance_id=?")
-        .get(consolidated.provenance_id);
-      assert(provenance && provenance.redaction_state === "tombstoned" && provenance.source_message_refs_json === "[]", "vault erasure must tombstone provenance and clear message references");
+          const provenance = db.prepare("SELECT redaction_state, source_message_refs_json FROM entity_provenance WHERE provenance_id=?").get(result.consolidated.provenance_id);
+          assert(provenance && provenance.redaction_state === "tombstoned" && provenance.source_message_refs_json === "[]", `${result.tenantId}/${result.principalId}/${result.agentId}: provenance was not redacted`);
+          provenanceRows += 1;
 
-      const sourceRow = db.prepare("SELECT redaction_state, body_json, scope_json FROM protected_memory_records WHERE record_id=?")
-        .get(record.recordId);
-      assert(sourceRow && sourceRow.redaction_state === "tombstoned" && sourceRow.body_json === "{}" && sourceRow.scope_json === "{}", "principal erasure must tombstone the source record");
-      assert(db.prepare("SELECT COUNT(*) AS count FROM entities_fts WHERE entity_id=?").get(consolidated.entity_id).count === 0, "vault erasure must remove the FTS projection");
-
-      return status("BL083.phase6.consolidation-erasure", "PASS", "real stdio consolidation + digest + principal erase + direct DB tombstones", {
-        entityId: consolidated.entity_id,
-        provenanceId: consolidated.provenance_id,
-        vaults: vaultRows.length,
-        historyRows: history.length,
-        eraseTables: erased.tablesAffected,
-      });
+          const sourceRow = db.prepare("SELECT redaction_state, body_json, scope_json FROM protected_memory_records WHERE record_id=?").get(result.recordId);
+          assert(sourceRow && sourceRow.redaction_state === "tombstoned" && sourceRow.body_json === "{}" && sourceRow.scope_json === "{}", `${result.tenantId}/${result.principalId}/${result.agentId}: source record was not tombstoned`);
+          assert(db.prepare("SELECT COUNT(*) AS count FROM entities_fts WHERE entity_id=?").get(result.consolidated.entity_id).count === 0, `${result.tenantId}/${result.principalId}/${result.agentId}: FTS projection survived erasure`);
+        }
+      }
+      return [
+        consolidationEvidence,
+        status("BL083.phase6.vault-erasure", "PASS", "real stdio principal erase + direct DB tombstones across every tenant/principal scope", {
+          tenantPrincipalScopes: principalGroups.size,
+          erasures: erasureResults.length,
+          historyRows,
+          provenanceRows,
+        }),
+      ];
     } finally {
       db.close();
     }
   } catch (error) {
-    return status("BL083.phase6.consolidation-erasure", "FAIL", "real stdio Phase6 tools", errorText(error));
+    return [consolidationEvidence, status("BL083.phase6.vault-erasure", "FAIL", "real stdio principal erase + direct DB tombstones across every tenant/principal scope", errorText(error))];
   }
 }
 
@@ -640,7 +602,7 @@ async function main() {
   assert(existsSync(binPath), `server entrypoint is missing: ${binPath}`);
   const results = [legacyShapeEvidence(), await runLegacyVaultCase()];
   const threadRun = await runThreadMatrix();
-  results.push(...threadRun.matrix, ...threadRun.directed, threadRun.summary, threadRun.phase6, ...dependencyStatuses());
+  results.push(...threadRun.matrix, ...threadRun.directed, threadRun.summary, ...threadRun.phase6, ...dependencyStatuses());
 
   const counts = results.reduce((out, row) => {
     out[row.result] = (out[row.result] ?? 0) + 1;
