@@ -202,13 +202,15 @@ export function createContextHandlers({ db, journal }) {
       // principals, no single access_context can match both, so the
       // mismatch fires naturally on whichever row it does not match -- no
       // separate cross-principal-diff rule is needed.
+      const baseOutcome = classifyContextAccess(baseRow, args.access_context);
       assertContextAccess(
-        classifyContextAccess(baseRow, args.access_context),
-        "msp_context_diff: access_context is required for, and must match, base_context_id's own scoped context.",
+        baseOutcome,
+        `msp_context_diff: ${baseOutcome}: access_context is required for, and must match, base_context_id's own scoped context.`,
       );
+      const targetOutcome = classifyContextAccess(targetRow, args.access_context);
       assertContextAccess(
-        classifyContextAccess(targetRow, args.access_context),
-        "msp_context_diff: access_context is required for, and must match, target_context_id's own scoped context.",
+        targetOutcome,
+        `msp_context_diff: ${targetOutcome}: access_context is required for, and must match, target_context_id's own scoped context.`,
       );
       // include_payload is refused UNCONDITIONALLY for a scoped row, even
       // with a correctly-matching access_context (design §5.4) -- defense
@@ -262,9 +264,10 @@ export function createContextHandlers({ db, journal }) {
       // that was actually found, mirroring requireKnownVault's own
       // existence-first precedent.
       if (contextRow) {
+        const outcome = classifyContextAccess(contextRow, args.access_context);
         assertContextAccess(
-          classifyContextAccess(contextRow, args.access_context),
-          "msp_context_audit: access_context is required for, and must match, this scoped context.",
+          outcome,
+          `msp_context_audit: ${outcome}: access_context is required for, and must match, this scoped context.`,
         );
       }
       const entries = journal.read({ contextId, cacheId, injectionId });
@@ -321,9 +324,10 @@ export function createContextHandlers({ db, journal }) {
       const contextRow = selectContext.get(contextId);
       // PH-MEMOS-5 (design §5.4, BL-MEMOS-064): identical single-row check.
       if (contextRow) {
+        const outcome = classifyContextAccess(contextRow, args.access_context);
         assertContextAccess(
-          classifyContextAccess(contextRow, args.access_context),
-          "msp_context_replay: access_context is required for, and must match, this scoped context.",
+          outcome,
+          `msp_context_replay: ${outcome}: access_context is required for, and must match, this scoped context.`,
         );
       }
 

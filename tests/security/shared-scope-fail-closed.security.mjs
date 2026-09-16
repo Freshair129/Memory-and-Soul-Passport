@@ -215,3 +215,102 @@ test("AC-03: msp_memory_promote(target_scope=shared) always responds isError:tru
     cleanup();
   }
 });
+
+// PH-MEMOS-5 (design §5.6, §15, DEC-MEMOS-52): the prior revision's claim
+// that a principal vault's own entities are "eligible for
+// msp_memory_promote's existing GKS-target promotion path with no
+// special-casing" is false about the tool's actual mechanics --
+// runGlobalPrivatePromotion never reads a source entity or vault at all.
+// Proven here: a source_memory_ref naming a REAL entity inside a
+// principal_private vault still writes only into the caller's own
+// global_private vault, identically to a source_memory_ref naming no real
+// entity at all -- confirming the tool performs no source-vault read of
+// any kind, principal or otherwise, not merely that principal vaults are
+// "unaffected".
+test("DEC-MEMOS-52: msp_memory_promote(target_scope=global_private) never reads a source_memory_ref naming an entity inside a principal_private vault -- it writes only into the caller's own global_private vault, exactly as it would for any other source_memory_ref value", async () => {
+  const { dbPath, cleanup } = tempDbPath();
+  try {
+    // Needs MSP_IDENTITY_HMAC_KEY (msp_vault_resolve's own deployment
+    // prerequisite, DEC-MEMOS-51) -- unlike spawnRuntime() above, which
+    // never sets it, since none of this file's other tests call
+    // msp_vault_resolve.
+    const call = createMspStdioCaller({
+      command: process.execPath,
+      args: [binPath],
+      env: { ...process.env, MSP_DB_PATH: dbPath, MSP_IDENTITY_HMAC_KEY: "a".repeat(32) },
+      timeoutMs: 10_000,
+    });
+    try {
+      // Provision a real principal_private vault and a real entity inside
+      // it, through the real process.
+      const resolved = await call("msp_vault_resolve", {
+        actor: "zuri-agent",
+        access_context: {
+          tenant_id: "tenant-promote-sec", principal_id: "principal-promote-sec",
+          agent_id: "agent-promote-sec", workspace_id: "workspace-promote-sec",
+          project_id: "project-promote-sec",
+        },
+        authorization: { allowed: true, read: true, write_private: true, write_shared: false },
+      });
+      const principalVaultId = resolved.principalPrivateVaultId;
+      assert.ok(principalVaultId, "a real principal_private vault_id must be provisioned");
+
+      const upserted = await call("msp_memory_upsert", {
+        vault: { vault_id: principalVaultId, vault_type: "principal_private" },
+        category: "secret", key: "principal-only-content",
+        body_json: { content: "This must never leak into a promotion." },
+        access_context: {
+          tenant_id: "tenant-promote-sec", principal_id: "principal-promote-sec",
+          agent_id: "agent-promote-sec", workspace_id: "workspace-promote-sec",
+        },
+      });
+      const principalEntityId = upserted.entity.entity_id;
+
+      const promoted = await call("msp_memory_promote", {
+        schema_version: "govibe-memory-promotion/v1",
+        actor: "boss",
+        agent_id: "agent-promote-sec-promoter",
+        workspace_id: "workspace-promote-sec-promoter",
+        source_memory_ref: principalEntityId,
+        target_scope: "global_private",
+        candidate: { note: "caller-supplied candidate, not derived from source_memory_ref" },
+        evidence_refs: ["msp:proof/promote-sec-1"],
+        reason: "security test: source_memory_ref names a real principal-vault entity",
+        idempotency_key: "promo-principal-sec-1",
+      });
+
+      // The promoted entity lands in the promoting agent's OWN
+      // global_private vault (target_ref is a NEW entity_id, distinct from
+      // the principal vault's own entity), never inside the principal
+      // vault, and the principal vault's own content is byte-for-byte
+      // unchanged.
+      assert.notEqual(promoted.target_ref, principalEntityId);
+      const status = await call("msp_vault_status", {
+        actor: "boss", workspace_id: "workspace-promote-sec-promoter",
+        workspace_path: "/workspace/promote-sec-promoter", agent_id: "agent-promote-sec-promoter",
+      });
+      const globalPrivateVault = status.vaults.find((v) => v.vault_type === "global_private");
+      assert.ok(globalPrivateVault, "the promoting agent must have a real global_private vault");
+
+      const promotedEntity = await call("msp_memory_get", {
+        vault_id: globalPrivateVault.vault_id, category: "memory-promotion", key: "promo-principal-sec-1",
+      });
+      assert.equal(promotedEntity.entity.entity_id, promoted.target_ref);
+      assert.equal(promotedEntity.entity.vault_id, globalPrivateVault.vault_id);
+      assert.notEqual(promotedEntity.entity.vault_id, principalVaultId);
+
+      const stillIntact = await call("msp_memory_get", {
+        vault_id: principalVaultId, category: "secret", key: "principal-only-content",
+        access_context: {
+          tenant_id: "tenant-promote-sec", principal_id: "principal-promote-sec",
+          agent_id: "agent-promote-sec", workspace_id: "workspace-promote-sec",
+        },
+      });
+      assert.equal(stillIntact.entity.body_json.content, "This must never leak into a promotion.");
+    } finally {
+      await call.close();
+    }
+  } finally {
+    cleanup();
+  }
+});

@@ -130,7 +130,13 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
   // no new refusal for a legacy vault_id.
   function checkAccessContext(vault, args, toolName) {
     const outcome = vaultRegistry.classifyPrincipalAccess(vault, args.access_context);
-    assertAccessContext(outcome, `${toolName}: access_context is required for, and must match, this principal vault.`);
+    // The literal outcome string ("access_context_required"/
+    // "access_context_denied") is embedded in the message, not only
+    // carried in `.code` -- the JSON-RPC tool-call error envelope only
+    // carries `.message` on the wire (transport/stdio-jsonrpc-server.mjs),
+    // mirroring VaultScopeDeniedError's own documented reason for doing
+    // the same thing.
+    assertAccessContext(outcome, `${toolName}: ${outcome}: access_context is required for, and must match, this principal vault's owner tuple.`);
   }
 
   // WP-15 Bounded Scope item 7: computes and stores an embedding for a
