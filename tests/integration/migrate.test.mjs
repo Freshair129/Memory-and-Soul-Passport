@@ -97,7 +97,7 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(12);
+    expect(result.appliedCount).toBe(14);
     const tables = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN " +
@@ -136,7 +136,7 @@ describe("db/migrate (AC-03)", () => {
     runMigrations(db, migrationsDir);
     const second = runMigrations(db, migrationsDir);
     expect(second.appliedCount).toBe(0);
-    expect(second.currentVersion).toBe(12);
+    expect(second.currentVersion).toBe(14);
   });
 
   // TASK-MEMOS-002 stage 1: 0008_thread_memory.sql is a real, non-directive
@@ -149,8 +149,8 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(12);
-    expect(result.currentVersion).toBe(12);
+    expect(result.appliedCount).toBe(14);
+    expect(result.currentVersion).toBe(14);
     expect(db.pragma("foreign_key_check")).toEqual([]);
     const threadTables = db
       .prepare(
@@ -176,8 +176,8 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(12);
-    expect(result.currentVersion).toBe(12);
+    expect(result.appliedCount).toBe(14);
+    expect(result.currentVersion).toBe(14);
     expect(db.pragma("foreign_key_check")).toEqual([]);
     const agentTables = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('thread_agents','grant_nonces')")
@@ -196,7 +196,8 @@ describe("db/migrate (AC-03)", () => {
       .filter((name) => !name.startsWith("0009_"))
       .filter((name) => !name.startsWith("0010_"))
       .filter((name) => !name.startsWith("0011_"))
-      .filter((name) => !name.startsWith("0012_"));
+      .filter((name) => !name.startsWith("0012_"))
+      .filter((name) => !name.startsWith("0013_") && !name.startsWith("0014_"));
     expect(migrationFileNamesThrough0008).toHaveLength(8);
     const filesThrough0008 = Object.fromEntries(migrationFileNamesThrough0008.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]));
     const migrationsDir0009 = setupMigrationsDir(filesThrough0008);
@@ -252,14 +253,24 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(12);
-    expect(result.currentVersion).toBe(12);
+    expect(result.appliedCount).toBe(14);
+    expect(result.currentVersion).toBe(14);
     expect(db.pragma("foreign_key_check")).toEqual([]);
     const erasureTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'erasure_receipts'").all();
     expect(erasureTables).toHaveLength(1);
     const erasureCols = db.prepare("PRAGMA table_info(erasure_receipts)").all().map((col) => col.name);
     expect(erasureCols).toEqual(
-      expect.arrayContaining(["erasure_receipt_id", "tenant_id", "principal_id", "idempotency_key", "requested_by_agent_id", "tables_affected_json", "created_at"]),
+      expect.arrayContaining([
+        "erasure_receipt_id",
+        "tenant_id",
+        "principal_hmac",
+        "principal_hmac_salt",
+        "identity_key_version",
+        "idempotency_key",
+        "requested_by_agent_id",
+        "tables_affected_json",
+        "created_at",
+      ]),
     );
   });
 
@@ -269,7 +280,8 @@ describe("db/migrate (AC-03)", () => {
       .filter((name) => /^\d{4}_.*\.sql$/.test(name))
       .filter((name) => !name.startsWith("0010_"))
       .filter((name) => !name.startsWith("0011_"))
-      .filter((name) => !name.startsWith("0012_"));
+      .filter((name) => !name.startsWith("0012_"))
+      .filter((name) => !name.startsWith("0013_") && !name.startsWith("0014_"));
     expect(migrationFileNamesThrough0009).toHaveLength(9);
     const filesThrough0009 = Object.fromEntries(migrationFileNamesThrough0009.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]));
     const migrationsDir0010 = setupMigrationsDir(filesThrough0009);
@@ -348,7 +360,7 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(12);
+    expect(result.appliedCount).toBe(14);
     expect(db.pragma("foreign_key_check")).toEqual([]);
 
     const vaultCols = db.prepare("PRAGMA table_info(vaults)").all().map((col) => col.name);
@@ -373,7 +385,8 @@ describe("db/migrate (AC-03)", () => {
     const migrationFileNamesThrough0010 = readdirSync(rootMigrationsDir)
       .filter((name) => /^\d{4}_.*\.sql$/.test(name))
       .filter((name) => !name.startsWith("0011_"))
-      .filter((name) => !name.startsWith("0012_"));
+      .filter((name) => !name.startsWith("0012_"))
+      .filter((name) => !name.startsWith("0013_") && !name.startsWith("0014_"));
     expect(migrationFileNamesThrough0010).toHaveLength(10);
     const filesThrough0010 = Object.fromEntries(
       migrationFileNamesThrough0010.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
@@ -506,7 +519,7 @@ describe("db/migrate (AC-03)", () => {
     const migrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const db = freshDb();
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(12);
+    expect(result.appliedCount).toBe(14);
     expect(db.pragma("foreign_key_check")).toEqual([]);
 
     const contextCols = db.prepare("PRAGMA table_info(contexts)").all().map((col) => col.name);
@@ -539,7 +552,8 @@ describe("db/migrate (AC-03)", () => {
       .filter((name) => !name.startsWith("0009_"))
       .filter((name) => !name.startsWith("0010_"))
       .filter((name) => !name.startsWith("0011_"))
-      .filter((name) => !name.startsWith("0012_"));
+      .filter((name) => !name.startsWith("0012_"))
+      .filter((name) => !name.startsWith("0013_") && !name.startsWith("0014_"));
     expect(migrationFileNames).toHaveLength(7);
     const files = Object.fromEntries(migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]));
     const migrationsDir = setupMigrationsDir(files);
@@ -1016,7 +1030,7 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
   it("the real root migrations 0001-0007, copied into a temp directory, apply with no directive classification error -- none of their leading comment blocks mentions msp-migration", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
     const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
-    expect(migrationFileNames).toHaveLength(12);
+    expect(migrationFileNames).toHaveLength(14);
 
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
@@ -1025,8 +1039,8 @@ describe("db/migrate foreign-keys=off mode (WP-E0)", () => {
     const db = freshDb();
 
     const result = runMigrations(db, migrationsDir);
-    expect(result.appliedCount).toBe(12);
-    expect(result.currentVersion).toBe(12);
+    expect(result.appliedCount).toBe(14);
+    expect(result.currentVersion).toBe(14);
   });
 
   it("idempotency: a second runMigrations over the same directory applies 0 migrations and leaves foreign_keys at 1", () => {
@@ -1251,7 +1265,9 @@ describe("db/migrate structural foreign-key check on the plain path (RKOI follow
 
   it("applies the real root migrations 0001-0007 cleanly under the new plain-path structural check, then a follow-on plain migration 0008 too -- an ordinary follow-on migration is not rejected", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
-    const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
+    const migrationFileNames = readdirSync(rootMigrationsDir)
+      .filter((name) => /^\d{4}_.*\.sql$/.test(name))
+      .filter((name) => !name.startsWith("0013_") && !name.startsWith("0014_"));
     expect(migrationFileNames).toHaveLength(12);
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),
@@ -1959,7 +1975,9 @@ describe("db/migrate foreign-key target type resolution via PRAGMA table_list (R
 
   it("applies the real root migrations 0001-0007 -- including the real entities_fts virtual table and its shadow tables -- then a follow-on plain migration and a follow-on directive migration too, under the new type-aware check", () => {
     const rootMigrationsDir = fileURLToPath(new URL("../../migrations", import.meta.url));
-    const migrationFileNames = readdirSync(rootMigrationsDir).filter((name) => /^\d{4}_.*\.sql$/.test(name));
+    const migrationFileNames = readdirSync(rootMigrationsDir)
+      .filter((name) => /^\d{4}_.*\.sql$/.test(name))
+      .filter((name) => !name.startsWith("0013_") && !name.startsWith("0014_"));
     expect(migrationFileNames).toHaveLength(12);
     const files = Object.fromEntries(
       migrationFileNames.map((name) => [name, readFileSync(path.join(rootMigrationsDir, name), "utf8")]),

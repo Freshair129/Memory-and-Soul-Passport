@@ -17,7 +17,7 @@
 // and writes nothing (checked before any DB mutation) -- identical fail-
 // closed shape to how contracts/errors.mjs's GksProviderUnconfiguredError
 // already works for the GKS bridge.
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 
 import { mintRef } from "./ids.mjs";
 import { consumeGrantNonce } from "./grant-nonces.mjs";
@@ -75,6 +75,11 @@ const RETENTION_TABLES = [
   { key: "threadPendingDeliveries", table: "thread_pending_deliveries", idColumn: "receipt_id", ageColumn: "recorded_at", tombstoneSql: "redaction_state = 'tombstoned', text = ''" },
 ];
 const RETENTION_ROW_BOUND = 200;
+const ERASURE_RECEIPT_KDF_PREFIX = "erasure-receipt:";
+const ERASURE_RECEIPT_SALT_BYTES = 16;
+const ERASURE_RECEIPT_KEY_BYTES = 32;
+const ERASURE_RECEIPT_SCRYPT_OPTIONS = Object.freeze({ N: 16_384, r: 8, p: 1 });
+const MAX_IDENTITY_KEY_VERSION_LENGTH = 128;
 
 export class ThreadMemoryValidationError extends ThreadValidationError {}
 export class ThreadMemoryConflictError extends ThreadConflictError {}
@@ -485,12 +490,16 @@ export class ThreadMemoryStore {
   #db;
   #journal;
   #identityHmacKey;
+  #identityHmacKeyVersion;
+  #identityHmacKeyring;
 
-  constructor(db, journal, { identityHmacKey = null } = {}) {
+  constructor(db, journal, { identityHmacKey = null, identityHmacKeyVersion = null, identityHmacKeyring = null } = {}) {
     if (!db || typeof db.prepare !== "function") throw new TypeError("ThreadMemoryStore requires a database.");
     this.#db = db;
     this.#journal = journal;
     this.#identityHmacKey = identityHmacKey;
+    this.#identityHmacKeyVersion = identityHmacKeyVersion;
+    this.#identityHmacKeyring = identityHmacKeyring && typeof identityHmacKeyring === "object" ? identityHmacKeyring : Object.create(null);
   }
 
   #hmacRoomRef(fields) {
@@ -499,6 +508,46 @@ export class ThreadMemoryStore {
 
   #hmacPrincipal(speakerId) {
     return hmacPrincipal(this.#identityHmacKey, speakerId);
+  }
+
+  // PH-MEMOS-6 / BL-MEMOS-076 (design §12.5): erasure receipts use a
+  // domain-separated HMAC as the scrypt password, then a per-row random salt.
+  // The result is stored as hex because the migration's wire-neutral SQLite
+  // columns are TEXT. The active key is used only for new receipts; old
+  // versions are consulted only when matching an existing idempotency row.
+  #erasureReceiptPrincipalHmac(key, principalId, saltHex) {
+    if (typeof key !== "string" || key.length < 32) throw new IdentityHmacUnconfiguredError();
+    if (typeof saltHex !== "string" || !/^[0-9a-f]{32}$/i.test(saltHex)) return null;
+    const stage1 = createHmac("sha256", key).update(`${ERASURE_RECEIPT_KDF_PREFIX}${principalId}`, "utf8").digest();
+    const derived = scryptSync(stage1, Buffer.from(saltHex, "hex"), ERASURE_RECEIPT_KEY_BYTES, ERASURE_RECEIPT_SCRYPT_OPTIONS);
+    return derived.toString("hex");
+  }
+
+  #assertErasureReceiptIdentityConfig() {
+    if (typeof this.#identityHmacKey !== "string" || this.#identityHmacKey.length < 32) {
+      throw new IdentityHmacUnconfiguredError();
+    }
+    if (typeof this.#identityHmacKeyVersion !== "string" || this.#identityHmacKeyVersion.length < 1 || this.#identityHmacKeyVersion.length > MAX_IDENTITY_KEY_VERSION_LENGTH) {
+      throw new IdentityHmacUnconfiguredError("MSP_IDENTITY_HMAC_KEY_VERSION must be configured for erasure receipts.");
+    }
+  }
+
+  #erasureReceiptKeyForVersion(version) {
+    if (version === this.#identityHmacKeyVersion) return this.#identityHmacKey;
+    if (typeof version === "string" && Object.hasOwn(this.#identityHmacKeyring, version)) return this.#identityHmacKeyring[version];
+    return null;
+  }
+
+  #erasureReceiptPrincipalMatchStatus(receipt, principalId) {
+    const key = this.#erasureReceiptKeyForVersion(receipt.identity_key_version);
+    // A pruned historical key is an honest "cannot match" result, not a
+    // principal mismatch. The caller uses this distinction to avoid claiming
+    // that a receipt belongs to another principal when its version is simply
+    // no longer available for verification.
+    if (typeof key !== "string" || key.length < 32) return "unavailable_key";
+    const expected = this.#erasureReceiptPrincipalHmac(key, principalId, receipt.principal_hmac_salt);
+    if (typeof expected !== "string" || !/^[0-9a-f]{64}$/i.test(receipt.principal_hmac)) return "mismatch";
+    return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(receipt.principal_hmac, "hex")) ? "matched" : "mismatch";
   }
 
   // PH-MEMOS-3 stage 2 (BL-MEMOS-048, DEC-MEMOS-20, Sec.6.1.1): consumes a
@@ -1933,13 +1982,23 @@ export class ThreadMemoryStore {
     const workspace = requiredString(workspaceId, "workspaceId");
     const timestamp = iso(now);
 
-    // DEC-MEMOS-27: idempotency, before any write. Found, SAME
-    // principal_id: return the stored receipt unchanged (replay: true),
-    // no writes at all -- not even a no-op UPDATE pass. Found, DIFFERENT
-    // principal_id: refuse conflict.
+    // BL-MEMOS-076: every erasure call needs the active receipt-key version.
+    // This check is before the idempotency read so an unconfigured process
+    // cannot turn a receipt row into a partially completed compliance call.
+    this.#assertErasureReceiptIdentityConfig();
+
+    // DEC-MEMOS-27, revised by DEC-MEMOS-53: idempotency, before any write.
+    // A receipt no longer stores raw principal_id; same-principal replay is
+    // established by matching the keyed-then-scrypt value with the row's
+    // recorded key version and salt. If a retired key was pruned, the row is
+    // deliberately not matchable and the safe result is conflict.
     const existingReceipt = this.#db.prepare("SELECT * FROM erasure_receipts WHERE tenant_id = ? AND idempotency_key = ?").get(tenant, key);
     if (existingReceipt) {
-      if (existingReceipt.principal_id !== principal) {
+      const principalMatch = this.#erasureReceiptPrincipalMatchStatus(existingReceipt, principal);
+      if (principalMatch !== "matched") {
+        if (principalMatch === "unavailable_key") {
+          throw new ThreadMemoryConflictError("idempotency_key cannot be matched because its identity-key version is unavailable.");
+        }
         throw new ThreadMemoryConflictError("idempotency_key was already used for a different principal_id.");
       }
       // RKOI PH-MEMOS-4 review round 4, REQUIRED item 1: this is the ONE
@@ -1974,7 +2033,10 @@ export class ThreadMemoryStore {
       // dropped response) -- is unaffected: its nonce is new, consumeNonce
       // succeeds, and the replay:true return below still applies exactly
       // as before.
-      this.#db.transaction(() => this.#consumeNonce(tenant, nonce, grantExpiresAt))();
+      this.#db.transaction(() => {
+        this.#assertErasureReceiptIdentityConfig();
+        this.#consumeNonce(tenant, nonce, grantExpiresAt);
+      })();
 
       const tablesAffected = parseJson(existingReceipt.tables_affected_json, {});
       this.#journalAppend({
@@ -1997,6 +2059,11 @@ export class ThreadMemoryStore {
     let result;
     try {
       result = this.#db.transaction(() => {
+        // BL-MEMOS-076: keep the identity-key prerequisite inside the same
+        // transaction as the tombstones and receipt insert. The pre-check
+        // above protects the idempotency read; this is the atomic write-path
+        // guard required by the design.
+        this.#assertErasureReceiptIdentityConfig();
         this.#consumeNonce(tenant, nonce, grantExpiresAt);
 
         // Stage 1: RESOLVE every matching row set first (Sec.11.2,
@@ -2061,14 +2128,17 @@ export class ThreadMemoryStore {
         };
 
         const receiptId = ref("erasure-receipt");
-        // DEC-MEMOS-27/28: raw principal_id, like every other content
-        // table's speaker/person columns -- W5 pseudonymization is scoped
-        // to the journal entry below, not this table.
+        const principalHmacSalt = randomBytes(ERASURE_RECEIPT_SALT_BYTES).toString("hex");
+        const principalHmac = this.#erasureReceiptPrincipalHmac(this.#identityHmacKey, principal, principalHmacSalt);
+        // DEC-MEMOS-53: no raw principal_id at rest. The domain-separated
+        // HMAC plus per-row scrypt salt is the only receipt identity value;
+        // the active key generation is recorded for future matching after a
+        // controlled key rotation.
         this.#db
           .prepare(
-            "INSERT INTO erasure_receipts (erasure_receipt_id, tenant_id, principal_id, idempotency_key, requested_by_agent_id, tables_affected_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO erasure_receipts (erasure_receipt_id, tenant_id, principal_hmac, principal_hmac_salt, identity_key_version, idempotency_key, requested_by_agent_id, tables_affected_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           )
-          .run(receiptId, tenant, principal, key, agent, JSON.stringify(tablesAffected), timestamp);
+          .run(receiptId, tenant, principalHmac, principalHmacSalt, this.#identityHmacKeyVersion, key, agent, JSON.stringify(tablesAffected), timestamp);
 
         return { erasureReceiptId: receiptId, tablesAffected };
       })();
@@ -2076,9 +2146,9 @@ export class ThreadMemoryStore {
       translateTriggerError(error);
     }
 
-    // W5: pseudonym only -- actor is principalHmac of the erased
-    // principal, never the raw id. This is distinct from erasure_receipts
-    // itself, which DOES store the raw principal_id (DEC-MEMOS-28).
+    // W5: pseudonym only -- actor is the journal's existing principalHmac
+    // convention. It is deliberately domain-separated from the receipt's
+    // principal_hmac so a journal reader cannot correlate the two for free.
     this.#journalAppend({
       actor: this.#hmacPrincipal(principal),
       toolName: "msp_thread_principal_erase",

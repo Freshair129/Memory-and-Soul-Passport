@@ -29,6 +29,7 @@ import { createLifecycleHandlers } from "./transport/handlers/lifecycle-handlers
 import { createMemoryHandlers } from "./transport/handlers/memory-handlers.mjs";
 import { createPipelineHandlers } from "./transport/handlers/pipeline-handlers.mjs";
 import { createGksProviderFromEnvironment } from "./providers/gks-stdio-provider.mjs";
+import { resolveIdentityHmacConfig } from "./config/identity-hmac-keyring.mjs";
 import { resolveThreadServiceKeyFor } from "./config/thread-service-keyring.mjs";
 import { createThreadGuard } from "./transport/handlers/thread-guard.mjs";
 import { createThreadHandlers } from "./transport/handlers/thread-handlers.mjs";
@@ -58,6 +59,11 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   // file, and must never leave an in-process caller holding an open DB
   // handle it never asked for and has no way to close.
   const threadServiceKeyFor = resolveThreadServiceKeyFor(env);
+  // PH-MEMOS-6 / BL-MEMOS-076: parse the optional retired identity-key
+  // ring before opening the database. The active key/version pair remains
+  // request-gated by msp_thread_principal_erase so existing room/journal
+  // callers keep their prior startup behavior.
+  const identityHmacConfig = resolveIdentityHmacConfig(env);
 
   const db = open(dbPath);
   runMigrations(db, migrationsDir);
@@ -72,15 +78,13 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const globalPrivateGrantRequired = env.MSP_GLOBAL_PRIVATE_GRANT_REQUIRED === "1";
 
   const vaultHandlers = createVaultHandlers({ vaultRegistry, journal, keyFor: threadServiceKeyFor, globalPrivateGrantRequired });
-  // PH-MEMOS-5 (design §5.3, DEC-MEMOS-51): MSP_IDENTITY_HMAC_KEY is
-  // mandatory for msp_vault_resolve as a whole -- read here, not defaulted
-  // to a placeholder; the handler itself refuses identity_hmac_unconfigured
-  // when this is absent or too short, before any resolution logic runs.
+  // Signed principal resolution needs the identity key for its audit actor.
+  // Unsigned legacy resolution does not require identity or service keys.
   const vaultResolveHandler = createVaultResolveHandler({
     db,
     vaultRegistry,
     journal,
-    identityHmacKey: env.MSP_IDENTITY_HMAC_KEY ?? null,
+    identityHmacKey: identityHmacConfig.key,
     keyFor: threadServiceKeyFor,
   });
   const contextHandlers = createContextHandlers({ db, journal, keyFor: threadServiceKeyFor, now: Date.now });
@@ -108,7 +112,9 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const threadHandlers = createThreadHandlers({
     db,
     journal,
-    identityHmacKey: env.MSP_IDENTITY_HMAC_KEY ?? null,
+    identityHmacKey: identityHmacConfig.key,
+    identityHmacKeyVersion: identityHmacConfig.version,
+    identityHmacKeyring: identityHmacConfig.keyring,
     idleTimeoutMinutes: parsePositiveEnv("MSP_THREAD_IDLE_TIMEOUT_MINUTES", 30),
     recentExchangeCount: parsePositiveEnv("MSP_THREAD_RECENT_EXCHANGES", 6),
     allowTestClock,
@@ -126,7 +132,7 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
     key: threadServiceKeyFor,
     // RKOI review (2nd round), WARNING 1: the guard recomputes a grant's own
     // room hash to compare against a resolved thread's stored one.
-    identityHmacKey: env.MSP_IDENTITY_HMAC_KEY ?? null,
+    identityHmacKey: identityHmacConfig.key,
   });
 
   const toolRegistry = new ToolRegistry();

@@ -18,8 +18,8 @@ import { ThreadValidationError } from "@freshair129/msp-core/errors";
  *   in the whole runtime that decides whether a caller may steal or extend
  *   a lease by lying about the time.
  */
-export function createThreadHandlers({ db, journal, identityHmacKey = null, idleTimeoutMinutes = 30, recentExchangeCount = 6, allowTestClock = false, retentionDays = 0 }) {
-  const store = new ThreadMemoryStore(db, journal, { identityHmacKey });
+export function createThreadHandlers({ db, journal, identityHmacKey = null, identityHmacKeyVersion = null, identityHmacKeyring = null, idleTimeoutMinutes = 30, recentExchangeCount = 6, allowTestClock = false, retentionDays = 0 }) {
+  const store = new ThreadMemoryStore(db, journal, { identityHmacKey, identityHmacKeyVersion, identityHmacKeyring });
   const now = (args) => (allowTestClock ? args.now : undefined);
   const bounded = (value, ceiling, label) => {
     if (value === undefined || value === null) return ceiling;

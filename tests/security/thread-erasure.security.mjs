@@ -21,6 +21,7 @@ const packageRoot = path.resolve(here, "..", "..");
 const binPath = path.join(packageRoot, "apps", "msp-server", "bin", "msp-server.mjs");
 const SERVICE_KEY = "thread-erasure-security-test-key-32bytes";
 const IDENTITY_KEY = "thread-erasure-security-test-hmac-key-32b";
+const IDENTITY_KEY_VERSION = "identity-v1";
 
 function tempDbPath(label) {
   const dir = mkdtempSync(path.join(tmpdir(), `msp-erasure-${label}-`));
@@ -41,7 +42,14 @@ function spawnRuntime(dbPath, extraEnv = {}) {
   return createMspStdioCaller({
     command: process.execPath,
     args: [binPath],
-    env: { ...process.env, MSP_DB_PATH: dbPath, MSP_THREAD_SERVICE_KEY: SERVICE_KEY, MSP_IDENTITY_HMAC_KEY: IDENTITY_KEY, ...extraEnv },
+    env: {
+      ...process.env,
+      MSP_DB_PATH: dbPath,
+      MSP_THREAD_SERVICE_KEY: SERVICE_KEY,
+      MSP_IDENTITY_HMAC_KEY: IDENTITY_KEY,
+      MSP_IDENTITY_HMAC_KEY_VERSION: IDENTITY_KEY_VERSION,
+      ...extraEnv,
+    },
     timeoutMs: 10_000,
   });
 }
@@ -308,6 +316,124 @@ test("erase: idempotent -- a second call with the SAME (tenant_id, idempotency_k
   }
 });
 
+test("erase: receipt stores only the domain-separated scrypt pseudonym, row salt, and key generation", async () => {
+  const { dbPath, cleanup } = tempDbPath("erase-receipt-pseudonym");
+  const call = spawnRuntime(dbPath);
+  try {
+    const claims = directClaims({ externalRoomRef: "dm-erase-receipt-pseudonym" });
+    await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-erase-receipt-pseudonym" }, claims),
+    );
+
+    const result = await call("msp_thread_principal_erase", signed("msp_thread_principal_erase", { idempotency_key: "k-receipt-pseudonym" }, { ...claims, dataSubjectAccess: true }));
+    const receipt = await row(
+      dbPath,
+      "SELECT erasure_receipt_id, tenant_id, principal_hmac, principal_hmac_salt, identity_key_version, idempotency_key, requested_by_agent_id, tables_affected_json, created_at FROM erasure_receipts WHERE erasure_receipt_id = ?",
+      result.erasureReceiptId,
+    );
+    const journal = await row(dbPath, "SELECT actor FROM journal WHERE tool_name = 'msp_thread_principal_erase' AND ref = ?", result.erasureReceiptId);
+
+    assert.deepEqual(Object.keys(receipt), [
+      "erasure_receipt_id",
+      "tenant_id",
+      "principal_hmac",
+      "principal_hmac_salt",
+      "identity_key_version",
+      "idempotency_key",
+      "requested_by_agent_id",
+      "tables_affected_json",
+      "created_at",
+    ]);
+    assert.match(receipt.principal_hmac, /^[0-9a-f]{64}$/);
+    assert.match(receipt.principal_hmac_salt, /^[0-9a-f]{32}$/);
+    assert.equal(receipt.identity_key_version, IDENTITY_KEY_VERSION);
+    assert.ok(!JSON.stringify(receipt).includes("alice"), "the stored receipt must not contain the raw principal id");
+    assert.notEqual(receipt.principal_hmac, journal.actor, "receipt KDF output must be domain-separated from the journal actor pseudonym");
+    assert.equal(await row(dbPath, "SELECT COUNT(*) AS count FROM pragma_table_info('erasure_receipts') WHERE name = 'principal_id'").then((value) => value.count), 0);
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("erase: missing receipt-key version refuses atomically before tombstones, receipt insert, or journal append", async () => {
+  const { dbPath, cleanup } = tempDbPath("erase-receipt-missing-version");
+  const call = spawnRuntime(dbPath, { MSP_IDENTITY_HMAC_KEY_VERSION: undefined });
+  try {
+    const claims = directClaims({ externalRoomRef: "dm-erase-receipt-missing-version" });
+    const { thread } = await call(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-erase-receipt-missing-version" }, claims),
+    );
+    await call(
+      "msp_thread_message_append",
+      signed("msp_thread_message_append", { thread_id: thread.threadId, source_event_id: "in-1", speaker_id: "alice", speaker_kind: "HUMAN", identity_assurance: "VERIFIED", direction: "INBOUND", text: "must remain" }, claims),
+    );
+
+    await assert.rejects(
+      call("msp_thread_principal_erase", signed("msp_thread_principal_erase", { idempotency_key: "k-missing-version" }, { ...claims, dataSubjectAccess: true })),
+      /identity_hmac_unconfigured/,
+    );
+    assert.deepEqual(await row(dbPath, "SELECT redaction_state, text FROM thread_messages WHERE thread_id = ?", thread.threadId), { redaction_state: "none", text: "must remain" });
+    assert.equal((await row(dbPath, "SELECT COUNT(*) AS count FROM erasure_receipts")).count, 0);
+    assert.equal((await row(dbPath, "SELECT COUNT(*) AS count FROM journal WHERE tool_name = 'msp_thread_principal_erase'")).count, 0);
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("erase: a retired receipt key in MSP_IDENTITY_HMAC_KEYRING permits same-principal idempotency replay after rotation", async () => {
+  const { dbPath, cleanup } = tempDbPath("erase-receipt-rotation");
+  const firstCall = spawnRuntime(dbPath, { MSP_IDENTITY_HMAC_KEY_VERSION: "identity-v1" });
+  const rotatedKey = "thread-erasure-rotated-hmac-key-32bytes";
+  try {
+    const claims = directClaims({ externalRoomRef: "dm-erase-receipt-rotation" });
+    await firstCall(
+      "msp_thread_resolve",
+      signed("msp_thread_resolve", { thread_kind: "DIRECT", audience_kind: "DIRECT", ...ROOM_REQUEST, external_room_ref: "dm-erase-receipt-rotation" }, claims),
+    );
+    const first = await firstCall("msp_thread_principal_erase", signed("msp_thread_principal_erase", { idempotency_key: "k-rotation" }, { ...claims, dataSubjectAccess: true }));
+    assert.equal(first.replay, false);
+  } finally {
+    await firstCall.close();
+  }
+
+  const rotatedCall = spawnRuntime(dbPath, {
+    MSP_IDENTITY_HMAC_KEY: rotatedKey,
+    MSP_IDENTITY_HMAC_KEY_VERSION: "identity-v2",
+    MSP_IDENTITY_HMAC_KEYRING: JSON.stringify({ "identity-v1": IDENTITY_KEY }),
+  });
+  try {
+    const claims = directClaims({ externalRoomRef: "dm-erase-receipt-rotation" });
+    const replay = await rotatedCall("msp_thread_principal_erase", signed("msp_thread_principal_erase", { idempotency_key: "k-rotation" }, { ...claims, dataSubjectAccess: true }));
+    assert.equal(replay.replay, true);
+  } finally {
+    await rotatedCall.close();
+  }
+
+  const prunedKeyCall = spawnRuntime(dbPath, {
+    MSP_IDENTITY_HMAC_KEY: rotatedKey,
+    MSP_IDENTITY_HMAC_KEY_VERSION: "identity-v2",
+    // An empty configured ring is invalid startup configuration. Omitting
+    // the optional ring models the operationally equivalent pruning state:
+    // identity-v1 is no longer retained, so its receipt cannot be matched.
+    MSP_IDENTITY_HMAC_KEYRING: undefined,
+  });
+  try {
+    const claims = directClaims({ externalRoomRef: "dm-erase-receipt-rotation" });
+    await assert.rejects(
+      prunedKeyCall("msp_thread_principal_erase", signed("msp_thread_principal_erase", { idempotency_key: "k-rotation" }, { ...claims, dataSubjectAccess: true })),
+      /conflict:.*cannot be matched.*identity-key version is unavailable/i,
+      "a receipt whose historical key was pruned must report unavailable matching, not a principal mismatch",
+    );
+  } finally {
+    await prunedKeyCall.close();
+    cleanup();
+  }
+});
+
 test("erase: a LITERAL replay of the exact same signed request (same nonce, same idempotency_key) is refused grant_replayed from the second call onward -- only the very first call is ever accepted, and no refused call ever journals", async () => {
   // RKOI review round 5, WARNING 2: reproduces RKOI's own probe exactly.
   // Before this round's fix, the erasure replay arm never reached
@@ -383,7 +509,7 @@ test("erase: the SAME idempotency_key with a DIFFERENT principal_id is refused c
         "msp_thread_principal_erase",
         signed("msp_thread_principal_erase", { idempotency_key: "k-collision", principal_id: "bob" }, { ...claims, dataSubjectAccess: true, dataSubjectAdmin: true }),
       ),
-      /conflict/,
+      /conflict:.*different principal_id/i,
     );
   } finally {
     await call.close();
