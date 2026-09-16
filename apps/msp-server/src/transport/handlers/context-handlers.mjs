@@ -60,6 +60,13 @@ export function createContextHandlers({ db, journal }) {
     VALUES (@context_id, @cache_id, @workspace_id, @agent_id, @tenant_id, @principal_id, @refs_json, @source_hash, @policy_decision, @recorded_at)
   `);
   const selectContext = db.prepare("SELECT * FROM contexts WHERE context_id = ?");
+  // RKOI round-1 CRITICAL 1 fix: msp_context_audit's own cache_id/injection_id
+  // ownership check (below) needs to resolve an injection_id back to the
+  // context_id it was actually recorded against, straight from the same
+  // `state` row msp_context_injection_record writes -- never trusting the
+  // caller's own claim that a given injection_id belongs to a given
+  // context_id.
+  const selectStateByKey = db.prepare("SELECT value_json FROM state WHERE state_key = ?");
   const upsertState = db.prepare(`
     INSERT INTO state (state_key, value_json, expires_at, updated_at)
     VALUES (@state_key, @value_json, @expires_at, @updated_at)
@@ -270,14 +277,87 @@ export function createContextHandlers({ db, journal }) {
           `msp_context_audit: ${outcome}: access_context is required for, and must match, this scoped context.`,
         );
       }
-      const entries = journal.read({ contextId, cacheId, injectionId });
 
-      // A real hash check, not a fabricated boolean: recompute the source
-      // hash of the persisted refs_json and compare against the stored
-      // column. hashValid is false if the context is unknown (nothing to
-      // validate) or if the two ever disagree.
+      // RKOI round-1 CRITICAL 1: the gate immediately above only ever runs
+      // against contextId's OWN row -- but journal.read() below (by design,
+      // for the injection-record lookup this function needs) ORs cache_id
+      // and injection_id in as ADDITIONAL, independently-matched search
+      // terms, each also a substring match against payload_json. Passing
+      // either straight through from the caller would let the gate be
+      // stepped around completely just by moving the id someone does not
+      // own into cache_id or injection_id -- with a real, resolving
+      // context_id (defeating the gate's own match check) or, worse, with a
+      // context_id that does not resolve at all (skipping the gate
+      // entirely, since it only runs `if (contextRow)`).
+      //
+      // Both ids are therefore verified to belong to THIS SAME contextId --
+      // the one the gate above just authorized, or refused to authorize --
+      // before either is allowed anywhere near journal.read()'s filter.
+      // cache_id is checked against the contexts row's OWN cache_id column
+      // (never the caller's claim); injection_id is resolved back to the
+      // context_id its msp_context_injection_record call actually recorded,
+      // straight from the persisted `state` row, never the caller's claim
+      // either. This holds even when context_id itself does not resolve:
+      // an unresolvable context_id has no cache_id/injection_id it could
+      // ever legitimately own, so supplying either alongside one is refused
+      // outright, not silently ignored -- closing the exact "bogus
+      // context_id + a real cache_id/injection_id" shape RKOI's probe used.
+      if (cacheId !== null && (!contextRow || cacheId !== contextRow.cache_id)) {
+        throw new ValidationError(
+          "msp_context_audit: context_identifier_mismatch: cache_id must be the cache_id msp_context_resolve returned for this same context_id.",
+          "context_identifier_mismatch",
+        );
+      }
+      if (injectionId !== null) {
+        const stateRow = selectStateByKey.get(`injection:${injectionId}`);
+        let recordedContextId = null;
+        if (stateRow) {
+          try {
+            recordedContextId = JSON.parse(stateRow.value_json)?.context_id ?? null;
+          } catch {
+            recordedContextId = null;
+          }
+        }
+        if (!contextRow || recordedContextId !== contextId) {
+          throw new ValidationError(
+            "msp_context_audit: context_identifier_mismatch: injection_id must name an injection record recorded against this same context_id.",
+            "context_identifier_mismatch",
+          );
+        }
+      }
+
+      // Independent-review finding (fold-in, same round): the gate above
+      // only ever constrains what happens when contextId DOES resolve to a
+      // real `contexts` row -- but journal.read()'s WHERE is
+      // `(ref = ? OR payload_json LIKE ?)` over the WHOLE journal table,
+      // matched against RAW contextId with no ownership check of any kind.
+      // A `contexts.context_id` is never the only thing that can sit in
+      // that column: a principal vault's vault_id equality-matches a
+      // msp_vault_resolve receipt's own `ref` directly (journal.append's
+      // `ref: principalPrivateVault.vault_id`), and a bare guessable
+      // string (a tenant id, an entity id, any msp_memory_* ref) LIKE-
+      // matches any payload_json that happens to mention it -- for EVERY
+      // tool that ever journals, not just this one. None of that is
+      // "moving an id into another field" (CRITICAL 1's original shape,
+      // fixed above); it is contextId itself, unverified, doing the
+      // damage alone, with cache_id/injection_id both left null. The
+      // cache_id/injection_id ownership checks above cannot catch this --
+      // they only run when one of those two fields is non-null.
+      //
+      // The only correct constraint: journal.read() must never run against
+      // an unverified contextId at all. contextId's sole legitimate job is
+      // naming a `contexts` row; when it does not (contextRow is null),
+      // there is nothing it was ever entitled to search, so the search
+      // itself does not happen -- not "search anyway and hope nothing
+      // matches." A real, resolved contextId (legacy, or scoped and
+      // already gated above) is the only value ever handed to journal.read().
+      let entries = [];
       let hashValid = false;
       if (contextRow) {
+        entries = journal.read({ contextId, cacheId, injectionId });
+        // A real hash check, not a fabricated boolean: recompute the
+        // source hash of the persisted refs_json and compare against the
+        // stored column.
         hashValid = sha256Hex(contextRow.refs_json) === contextRow.source_hash;
       }
 
