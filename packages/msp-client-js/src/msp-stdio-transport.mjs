@@ -20,6 +20,9 @@ function encode(payload) {
  *   MSP_IDENTITY_HMAC_KEY          apps/msp-server/src/server.mjs (API-011 room-ref/journal-actor HMAC)
  *   MSP_THREAD_IDLE_TIMEOUT_MINUTES, MSP_THREAD_RECENT_EXCHANGES
  *                                  apps/msp-server/src/server.mjs (API-011 per-deployment ceilings)
+ *   MSP_THREAD_RETENTION_DAYS     apps/msp-server/src/server.mjs (PH-MEMOS-4,
+ *                                  msp_thread_retention_tick's deployment-wide
+ *                                  horizon; absent or 0 is a documented no-op)
  *
  * Neither MSP_THREAD_SERVICE_KEY, MSP_THREAD_SERVICE_KEYRING, nor
  * MSP_IDENTITY_HMAC_KEY is ever journaled or echoed back to a caller (see
@@ -43,6 +46,7 @@ export const MSP_RUNTIME_ENV_NAMES = Object.freeze([
   "MSP_IDENTITY_HMAC_KEY",
   "MSP_THREAD_IDLE_TIMEOUT_MINUTES",
   "MSP_THREAD_RECENT_EXCHANGES",
+  "MSP_THREAD_RETENTION_DAYS",
 ]);
 
 /**

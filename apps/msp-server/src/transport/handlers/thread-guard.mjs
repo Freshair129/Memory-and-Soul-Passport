@@ -21,7 +21,10 @@ const ASSURANCE_RANK = { UNRESOLVED: 0, PENDING: 1, VERIFIED: 2 };
 // PH-MEMOS-3 stage 2 (BL-MEMOS-048, Sec.6.1.1): every mutating tool except
 // msp_thread_message_append (source_event_id already gives it replay
 // protection -- a second layer would be redundant) and msp_thread_context
-// (read-only, nothing to replay).
+// (read-only, nothing to replay). PH-MEMOS-4 (Sec.7.1/Sec.8.6/Sec.11.2)
+// adds all five new tools EXCEPT msp_thread_retention_tick, whose nonce
+// requirement is conditional on dry_run (DEC-MEMOS-35, checked separately
+// below, not a blanket membership in this set).
 const NONCE_REQUIRED_TOOLS = new Set([
   "msp_thread_resolve",
   "msp_thread_memory_record",
@@ -31,7 +34,19 @@ const NONCE_REQUIRED_TOOLS = new Set([
   "msp_session_compaction_claim",
   "msp_session_compaction_commit",
   "msp_session_compaction_retry",
+  "msp_thread_participant_lifecycle",
+  "msp_thread_agent_detach",
+  "msp_thread_principal_erase",
+  "msp_thread_principal_export",
 ]);
+
+// PH-MEMOS-4 (Sec.11.2): the three new tools that are NOT thread-bound --
+// tenant/principal-scoped (erase/export) or tenant-scoped (retention),
+// never routed through threadLookupFor. Named explicitly here, the same
+// way NONCE_REQUIRED_TOOLS is already named as one guard edit site, so the
+// deny-all fall-through below excludes them by name instead of refusing
+// them unconditionally the instant they are registered.
+const NON_THREAD_BOUND_TOOLS = new Set(["msp_session_sweep", "msp_thread_delivery_record", "msp_thread_principal_erase", "msp_thread_retention_tick", "msp_thread_principal_export"]);
 
 // RKOI review (2nd round), WARNING 3: the SAME message for "no thread
 // resolves at all" and "a thread resolves, but not to this grant's scope" --
@@ -73,7 +88,7 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
       validateThreadContract(name, args);
 
       // PH-MEMOS-3 stage 2 (§8.4): agentId/workspaceId are required on
-      // every one of the ten tools (verifyThreadGrant, BL-MEMOS-040) and
+      // every one of the fifteen tools (verifyThreadGrant, BL-MEMOS-040) and
       // several domain-layer methods need the calling agent's own id for
       // reasons beyond currency (the journal actor on an agent-attributable
       // entry, the speaker id on a resolved-path delivery, the agent_id
@@ -97,7 +112,14 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
       // type problem, never silently coerced. The value is used EXACTLY as
       // given -- never trimmed -- so `" padnonce "` and `"padnonce"` are
       // two distinct nonces, not the same one collapsed by trimming.
-      if (NONCE_REQUIRED_TOOLS.has(name)) {
+      // PH-MEMOS-4 (Sec.11.2, DEC-MEMOS-35): msp_thread_retention_tick's
+      // nonce is required only when dry_run is NOT true -- a dry_run:true
+      // call is fully read-only with respect to mutation and replay, the
+      // same exemption msp_thread_context already has for being genuinely
+      // read-only, so it is checked here as an addition to the set rather
+      // than a blanket member of it.
+      const nonceRequired = NONCE_REQUIRED_TOOLS.has(name) || (name === "msp_thread_retention_tick" && input.dry_run !== true);
+      if (nonceRequired) {
         if (grant.nonce === undefined || grant.nonce === null) throw new GrantNonceRequiredError();
         if (typeof grant.nonce !== "string") {
           throw new ThreadValidationError(`nonce must be a string, got ${typeof grant.nonce}.`);
@@ -242,8 +264,76 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
         if (!registry.findCurrentAgent(thread.threadId, grant.agentId, grant.workspaceId)) {
           throw new AgentNotCurrentError();
         }
-      } else if (!["msp_session_sweep", "msp_thread_delivery_record"].includes(name)) {
+      } else if (!NON_THREAD_BOUND_TOOLS.has(name)) {
         assertThreadScope(false, SCOPE_MESSAGE);
+      }
+
+      // PH-MEMOS-4 (BL-MEMOS-050, Sec.7.1): msp_thread_participant_lifecycle
+      // is thread-bound in the guard's ordinary sense (input.thread_id), so
+      // it already received the full generic `else if (thread)` check above
+      // -- both actions only add their own extra checks on top of it, the
+      // same shape msp_thread_memory_record's writePrivate+DIRECT check
+      // already has.
+      if (name === "msp_thread_participant_lifecycle") {
+        // DEC-MEMOS-22: `leave` always requires assertParticipants,
+        // unconditionally, self or third-party -- no self-service
+        // exception. DEC-MEMOS-23: `close_for_relink` requires the SAME
+        // claim, plus assertRelink below -- neither substitutes for the
+        // other, and grant.operator never substitutes for either.
+        assertThreadScope(
+          grant.assertParticipants === true,
+          "thread_scope_denied: participant lifecycle changes require assertParticipants.",
+        );
+        if (input.action === "close_for_relink") {
+          // DEC-MEMOS-23: GROUP/ROOM threads have no single-Person binding
+          // to relink.
+          assertThreadScope(thread.audienceKind === "DIRECT", "thread_scope_denied: close_for_relink is DIRECT-only.");
+          assertThreadScope(
+            grant.assertRelink === true,
+            "thread_scope_denied: close_for_relink requires assertRelink in addition to assertParticipants.",
+          );
+        }
+      }
+
+      // PH-MEMOS-4 (BL-MEMOS-053/054/055, Sec.11.2): the three tenant/
+      // principal-scoped tools -- not thread-bound, so `thread` is always
+      // null here; every check below is a NEW guard branch, name-matched
+      // rather than the generic `else if (thread)` path.
+      if (name === "msp_thread_principal_erase" || name === "msp_thread_principal_export") {
+        // DEC-MEMOS-25: self (principal_id absent or === grant.principalId)
+        // requires dataSubjectAccess; naming a DIFFERENT principal_id
+        // additionally requires dataSubjectAdmin -- both claims together,
+        // dataSubjectAdmin alone is not sufficient. Neither claim is
+        // operator (DEC-MEMOS-26) -- this is not a worker/compaction
+        // concern.
+        assertThreadScope(
+          grant.dataSubjectAccess === true,
+          "thread_scope_denied: this operation requires dataSubjectAccess.",
+        );
+        const requestedPrincipalId = input.principal_id;
+        if (requestedPrincipalId !== undefined && requestedPrincipalId !== null && requestedPrincipalId !== grant.principalId) {
+          assertThreadScope(
+            grant.dataSubjectAdmin === true,
+            "thread_scope_denied: acting on a different principal's data requires dataSubjectAdmin.",
+          );
+        }
+        // Defaults to the grant's own principal -- the self-erasure/export
+        // case (Sec.11.2). Overwritten unconditionally, exactly like
+        // msp_session_sweep already overwrites its own scope fields from
+        // the grant, never trusted from the request body past this point.
+        input.principal_id = requestedPrincipalId ?? grant.principalId;
+        input.tenant_id = grant.tenantId;
+      }
+
+      if (name === "msp_thread_retention_tick") {
+        // DEC-MEMOS-26: retention reuses `operator` via an EXPLICIT name
+        // check, not the `msp_session_` prefix match below -- this tool's
+        // name does not share that prefix.
+        assertThreadScope(grant.operator === true, "thread_scope_denied: this operation requires an operator grant.");
+        // Deliberately whole-tenant, never room-scoped -- every row this
+        // tool touches is WHERE tenant_id = grant.tenantId, with no room/
+        // channel-account filter at all (Sec.11.2, a stated ruling).
+        input.tenant_id = grant.tenantId;
       }
 
       if (name === "msp_thread_context") {
@@ -276,38 +366,66 @@ export function createThreadGuard({ db, key, identityHmacKey, clock = Date.now }
           "thread_scope_denied: person_id must be absent or equal to the grant principal.",
         );
 
+        // BL-MEMOS-058 (design Sec.7 rule 2, PH-MEMOS-4 review round 2,
+        // CRITICAL 1): a THREE-WAY branch, not a modified two-branch
+        // condition -- "no CURRENT row" and "no row at all" are different
+        // questions, and conflating them let a departed principal's very
+        // next plain HUMAN append silently re-create membership through
+        // the claim-free first-membership path below.
+        const everParticipated = registry.hasEverParticipated(thread.threadId, input.speaker_id);
         const current = registry.findCurrentParticipant(thread.threadId, input.speaker_id);
-        if (!current) {
-          // The FIRST-EVER membership for this speaker_id is always bound
-          // to the grant principal -- never caller-asserted, even under
-          // assertParticipants. zuri-ai's frozen flow (resolve, then a
-          // HUMAN append, no separate "join" tool) depends on this
-          // succeeding with no extra claim.
+        if (!everParticipated) {
+          // Case 1: a genuine first-ever join -- unchanged fast path.
+          // Never reads `current` (also null here, but incidentally --
+          // the branch's condition is `everParticipated`, not `current`
+          // truthiness). zuri-ai's frozen flow (resolve, then a HUMAN
+          // append, no separate "join" tool) depends on this succeeding
+          // with no extra claim.
           assertThreadScope(
             input.speaker_id === grant.principalId,
             "thread_scope_denied: the first HUMAN membership on a thread must be created by the grant principal.",
           );
+        } else if (current === null) {
+          // Case 2: a REJOIN -- a row existed before (current or
+          // departed), but none is open now. Unconditional
+          // assertParticipants, no DEC-MEMOS-15 self-upgrade exception,
+          // and `current.personId` (or any other field of `current`) is
+          // NEVER read -- `current` is null by this branch's own
+          // definition, there is no stored row to compare against. Case
+          // 2b (intended, design Sec.7 rule 2 round 3): this condition is
+          // keyed on speakerId alone, not `speakerId ===
+          // grant.principalId`, so a Tier-1 caller with assertParticipants
+          // can also re-attach a DIFFERENT departed third party to a
+          // GROUP/ROOM thread -- refused unconditionally on DIRECT by the
+          // existing single-HUMAN schema trigger (Sec.6.3).
+          assertThreadScope(
+            grant.assertParticipants === true,
+            "thread_scope_denied: rejoining a thread after leaving requires assertParticipants.",
+          );
         } else if (input.speaker_id !== grant.principalId) {
-          // Never self -- ANY touch to someone else's participant row,
-          // changed or not, requires an explicit assertion.
+          // Case 3a: a current row exists, third-party change. Never
+          // self -- ANY touch to someone else's participant row, changed
+          // or not, requires an explicit assertion.
           assertThreadScope(
             grant.assertParticipants === true,
             "thread_scope_denied: creating, upgrading or reassigning a HUMAN participant requires assertParticipants.",
           );
         } else {
-          // input.speaker_id === grant.principalId, and the REQUESTED
-          // person_id is already constrained above to {null,
-          // grant.principalId}. RKOI review (docs round 4), item 3
-          // (tightening DEC-MEMOS-15): the STORED row's person_id must be
-          // checked too, not just the value this request sends -- a self
-          // upgrade is free only when the participant record was not
-          // already linked to some OTHER person (however that happened).
-          // If it was, this still needs an explicit assertion even though
-          // speaker_id and the REQUESTED person_id both look self-
-          // referential. A downgrade (VERIFIED -> PENDING) reaches this
-          // same branch and is likewise never gated on its own --
-          // ThreadMemoryStore#applyHumanParticipant already treats a
-          // downgrade as no change at all, so it is accepted here and
+          // Case 3b: a current row exists, self (input.speaker_id ===
+          // grant.principalId, and the REQUESTED person_id is already
+          // constrained above to {null, grant.principalId}). RKOI review
+          // (docs round 4), item 3 (tightening DEC-MEMOS-15): the STORED
+          // row's person_id must be checked too, not just the value this
+          // request sends -- a self upgrade is free only when the
+          // participant record was not already linked to some OTHER
+          // person (however that happened). If it was, this still needs
+          // an explicit assertion even though speaker_id and the
+          // REQUESTED person_id both look self-referential. Safe to read
+          // `current.personId` here: `current` is non-null by this
+          // branch's own construction. A downgrade (VERIFIED -> PENDING)
+          // reaches this same branch and is likewise never gated on its
+          // own -- ThreadMemoryStore#applyHumanParticipant already treats
+          // a downgrade as no change at all, so it is accepted here and
           // silently ignored there, never refused and never stored.
           const storedPerson = current.personId ?? null;
           if (storedPerson !== null && storedPerson !== grant.principalId) {

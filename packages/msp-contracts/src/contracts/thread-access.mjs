@@ -116,7 +116,7 @@ export function verifyThreadGrant(name, input, access, keyFor, now = Date.now())
   // shipped check already treats "signature is fine but a required claim
   // is absent" as grant_signature_invalid, not a scope question, since the
   // grant itself is malformed before scope is even evaluated. Required on
-  // every one of the ten API-011 tools, with no charset constraint beyond
+  // every one of the fifteen API-011 tools, with no charset constraint beyond
   // non-emptiness and the 128-character bound (MSP has no agent/workspace
   // identity registry of its own, mirroring principalId's own treatment as
   // an opaque Tier-1-owned string).

@@ -18,7 +18,7 @@ import { ThreadValidationError } from "@freshair129/msp-core/errors";
  *   in the whole runtime that decides whether a caller may steal or extend
  *   a lease by lying about the time.
  */
-export function createThreadHandlers({ db, journal, identityHmacKey = null, idleTimeoutMinutes = 30, recentExchangeCount = 6, allowTestClock = false }) {
+export function createThreadHandlers({ db, journal, identityHmacKey = null, idleTimeoutMinutes = 30, recentExchangeCount = 6, allowTestClock = false, retentionDays = 0 }) {
   const store = new ThreadMemoryStore(db, journal, { identityHmacKey });
   const now = (args) => (allowTestClock ? args.now : undefined);
   const bounded = (value, ceiling, label) => {
@@ -192,6 +192,89 @@ export function createThreadHandlers({ db, journal, identityHmacKey = null, idle
         policyRevision: args.policy_revision,
         modelRef: args.model_ref,
         state: args.state,
+        nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
+        now: now(args),
+      });
+    },
+
+    // PH-MEMOS-4 (BL-MEMOS-050, Sec.7.1): thread-guard.mjs verifies and
+    // injects grant_agent_id/grant_workspace_id/grant_nonce -- this handler
+    // never reads a raw claim off the wire directly, matching every other
+    // handler in this file.
+    async msp_thread_participant_lifecycle(args = {}) {
+      return store.participantLifecycle({
+        threadId: args.thread_id,
+        action: args.action,
+        speakerId: args.speaker_id,
+        agentId: args.grant_agent_id,
+        workspaceId: args.grant_workspace_id,
+        nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
+        now: now(args),
+      });
+    },
+
+    // PH-MEMOS-4 (BL-MEMOS-051, Sec.8.6): self-only, no agent_id request
+    // field at all -- the row closed is always (thread_id, grant.agentId,
+    // grant.workspaceId).
+    async msp_thread_agent_detach(args = {}) {
+      return store.detachAgent({
+        threadId: args.thread_id,
+        agentId: args.grant_agent_id,
+        workspaceId: args.grant_workspace_id,
+        nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
+        now: now(args),
+      });
+    },
+
+    // PH-MEMOS-4 (BL-MEMOS-053, Sec.11.2): tenant_id/principal_id are
+    // guard-resolved (defaulted to the grant's own principal, or the
+    // named principal once dataSubjectAdmin is verified) -- never trusted
+    // from the raw request body past the guard.
+    async msp_thread_principal_erase(args = {}) {
+      return store.erasePrincipal({
+        principalId: args.principal_id,
+        tenantId: args.tenant_id,
+        idempotencyKey: args.idempotency_key,
+        agentId: args.grant_agent_id,
+        workspaceId: args.grant_workspace_id,
+        nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
+        now: now(args),
+      });
+    },
+
+    // PH-MEMOS-4 (BL-MEMOS-054, Sec.11.2): retentionDays is a deployment
+    // ceiling (MSP_THREAD_RETENTION_DAYS), read once at the composition
+    // root (server.mjs) and threaded down here -- this handler never reads
+    // process.env itself, the same W1-style convention idleTimeoutMinutes/
+    // recentExchangeCount already use.
+    async msp_thread_retention_tick(args = {}) {
+      return store.retentionTick({
+        tenantId: args.tenant_id,
+        dryRun: args.dry_run === true,
+        retentionDays,
+        agentId: args.grant_agent_id,
+        workspaceId: args.grant_workspace_id,
+        nonce: args.grant_nonce,
+        grantExpiresAt: args.grant_expires_at,
+        now: now(args),
+      });
+    },
+
+    // PH-MEMOS-4 (BL-MEMOS-055, Sec.11.2): a read, not a mutation -- no
+    // nonce consumption inside the domain method's own write path, but the
+    // guard still requires a nonce claim for replay-bounded-call
+    // discipline (Sec.11.2's own reasoning), consumed alongside the
+    // journal write.
+    async msp_thread_principal_export(args = {}) {
+      return store.exportPrincipal({
+        principalId: args.principal_id,
+        tenantId: args.tenant_id,
+        agentId: args.grant_agent_id,
+        workspaceId: args.grant_workspace_id,
         nonce: args.grant_nonce,
         grantExpiresAt: args.grant_expires_at,
         now: now(args),

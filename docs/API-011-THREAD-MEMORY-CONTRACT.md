@@ -120,6 +120,129 @@ mint or act as a different person's speaker id without it, and `person_id`
 itself may never name anyone but the grant's own principal, even under
 `assertParticipants`.
 
+**PH-MEMOS-4 correction (`BL-MEMOS-058`): a departed principal cannot
+silently rejoin by appending again.** The guard distinguishes three cases
+for a `HUMAN` append's `speaker_id`, not two: (1) no row has ever existed
+for `(thread_id, speaker_id)` — the claim-free first-membership path above,
+unchanged; (2) a row existed before (current or departed) but none is
+open now — a **rejoin**, which **unconditionally** requires
+`assertParticipants`, never reads the departed row's own fields, and never
+falls through to the `DEC-MEMOS-15` self-upgrade exception; (3) a current
+row exists — today's existing third-party/self-upgrade logic, unchanged.
+Case 2 is keyed on `speaker_id` alone, not `speaker_id === principalId`, so
+a Tier-1 caller carrying `assertParticipants` can also re-attach a
+*different* departed third party to a `GROUP`/`ROOM` thread — an intended
+consequence of this shape, refused unconditionally on `DIRECT` by the
+single-`HUMAN`-for-life trigger above.
+
+### Participant and agent lifecycle, relink, erasure, retention and export (PH-MEMOS-4)
+
+Five more tools, none thread-scoped in quite the way the ten above are.
+
+**`msp_thread_participant_lifecycle`** supports two actions on an existing
+thread. `leave` (`thread_id`, `action: 'leave'`, `speaker_id`) closes the
+named `HUMAN` participant's open row (`left_at NULL -> NOT NULL`, the same
+transition the append-only trigger already permits) and **always** requires
+`assertParticipants: true`, self or third-party, with no self-service
+exception — and never itself transitions `threads.status`. Naming a
+`speaker_id` with no open row is `not_found`. `close_for_relink`
+(`thread_id`, `action: 'close_for_relink'`) closes the thread's current
+`HUMAN` row (if any) and transitions `threads.status` `ACTIVE -> CLOSED`
+in one transaction; it is `DIRECT`-only (refused `thread_scope_denied` on
+`GROUP`/`ROOM`) and requires **both** `assertParticipants: true` and a new
+claim, `assertRelink: true` — neither substitutes for the other, and
+`operator` never substitutes for either. `close_for_relink` takes no
+additional request fields: a request supplying `speaker_id` alongside
+`action: 'close_for_relink'` is refused `validation_failed` (previously
+accepted and silently ignored; this is a wire-visible change). The
+`threads` `UPDATE` is
+`WHERE thread_id = ? AND status = 'ACTIVE'`; a concurrent close_for_relink
+racing an in-flight append is refused via the store's own
+transaction-internal re-check (not merely the guard's earlier read) with a
+typed `conflict`, never a raw driver error. Closing a thread never deletes
+its history and never reassigns the channel binding by itself — the same
+binding's very next `msp_thread_resolve` mints a genuinely new `thread_id`
+that inherits none of it (`DEC-MEMOS-11`, unchanged).
+
+**`msp_thread_agent_detach`** (`thread_id`) is self-only, with no third-party
+case and no new grant claim: it closes the calling agent's own
+`thread_agents` row, the direct analogue of `leave` for agents. The generic
+agent-currency gate every thread-bound tool already has guarantees the row
+exists before the handler runs, so a second call from the same (now
+non-current) agent is refused `agent_not_current` at the guard, before the
+tool's own logic runs at all — the agent re-attaches via its own
+`assertAgents` exactly as any other non-current agent would.
+
+**`msp_thread_principal_erase`** (`idempotency_key`, optional `principal_id`
+defaulting to the grant's own principal) is **not thread-bound** — it spans
+every thread the principal has ever touched in the calling grant's own
+`tenantId`. Self-erasure requires `dataSubjectAccess: true`; naming a
+*different* `principal_id` additionally requires `dataSubjectAdmin: true`
+— neither claim is `operator`. Idempotent by `(tenant_id, idempotency_key)`:
+a replay with the same `principal_id` returns the stored receipt and makes
+no change to any content table or to `erasure_receipts` itself — but it is
+not a no-op end to end. The nonce on the replaying request is consumed
+exactly like every other nonce-required call, and a journal entry is
+appended (`replay: true`, the same `tables_affected` snapshot the stored
+receipt already has). A replay carrying a **fresh** nonce (a different
+signed request reusing the same `idempotency_key`, e.g. a caller retrying
+blind after a dropped response) succeeds this way every time. A replay
+that reuses the exact same nonce as a prior call — a literal resend of the
+identical signed request — collides on the same `(tenant_id, nonce)`
+uniqueness every other nonce-required tool enforces and is refused
+`grant_replayed` instead, with no journal row added for the refused
+attempt. The same `idempotency_key` with a different `principal_id` is
+`conflict`.
+An unknown `principal_id` is a trivial zero-count success, never `not_found`
+(avoiding a cross-principal existence oracle). One transaction, three
+stages, always in order: resolve every affected row set, tombstone every
+content table, then close the principal's open `thread_participants` rows
+last. Tombstones the principal's own authored `thread_messages` and every
+`protected_memory_records` row where they are asserter or subject
+(blanking **both** `body_json` and `scope_json`); `session_summaries` and
+`thread_delivery_receipts` are tombstoned only for a thread where the
+principal is, across its **entire** participant history, the thread's
+only-ever `HUMAN` participant **and** the thread carries no
+`thread_messages` row with `speaker_kind NOT IN ('HUMAN', 'AGENT')` — a
+`GROUP`/`ROOM` thread failing either condition is left completely untouched,
+a conservative under-erasure default. `thread_pending_deliveries` is out of
+scope entirely (it holds `AGENT`-authored reply text, not the principal's
+own, with no reliable principal-attribution column). The response's
+`erasureReceiptId` is journaled with a pseudonym (`principalHmac`) only; the
+new `erasure_receipts` table itself stores the raw `principal_id`, like
+every other content table's speaker/person columns.
+
+**`msp_thread_retention_tick`** (optional `dry_run`, default `false`) is
+**not thread-bound**, `operator`-gated via an explicit tool-name check (not
+the `msp_session_` prefix match), and deliberately sweeps the calling
+grant's **whole tenant**, never merely its own room, even under a
+room-claimed operator grant — a stated ruling, not a gap. Age-based and
+principal-agnostic: a single deployment-wide `MSP_THREAD_RETENTION_DAYS`
+environment variable (absent or `0` is a documented, always-callable no-op
+that mutates nothing). `dry_run: true` runs the identical candidate
+`SELECT`s the live pass would `UPDATE` from, issuing no `UPDATE` at all, and
+consumes no nonce — but still writes a journal entry, exactly like
+`dry_run: false`; only the nonce exemption is dry-run-specific. Bounded to
+200 rows per table per call, reusing the nonce-pruning bound. This is the
+only one of the five PH-MEMOS-4 tools whose schema accepts `now`: a synthetic
+clock here moves a tenant-wide mutation horizon (`cutoff = now - days`),
+which is why it carries the same `MSP_TEST_CLOCK`/`allowTestClock`
+test-clock gate every other tool's `now` already has ("Test clock (W1)",
+below) — never honored outside a test composition root, and already
+excluded from `@freshair129/msp-client-js`'s environment allowlist.
+
+**`msp_thread_principal_export`** (optional `principal_id`, defaulting to
+the grant's own principal) is a read, **not thread-bound**, gated by the
+same `dataSubjectAccess`/`dataSubjectAdmin` pair as erasure. Contains only
+the principal's own authored `thread_messages` and own asserted/subject
+`protected_memory_records`, always; `session_summaries` only for the
+identical qualifying-thread set erasure computes. Excludes every
+tombstoned row, including the exporting principal's own previously-erased
+content — once erased, content is permanently unexportable too. Ignores
+agent `visibility` entirely (this tool is principal-scoped, not
+agent-scoped, by construction). An unknown principal is an empty export,
+never `not_found`.
+
 ### Audience and room scope, per tool
 
 `audienceKind` is a **required** grant claim on every thread tool except
@@ -209,6 +332,11 @@ per-request values may reduce those ceilings but cannot increase them.
 | `msp_thread_delivery_record` | reconcile accepted text, durably queue missing inbound, or amend an invalidated summary |
 | `msp_thread_injection_record` | record packet hash and model invocation state without storing the prompt |
 | `msp_session_compaction_retry` | mark a non-terminal compaction job retryable without losing its source range |
+| `msp_thread_participant_lifecycle` | close a HUMAN participant's membership (`leave`), or close a DIRECT thread outright for a relink (`close_for_relink`) |
+| `msp_thread_agent_detach` | close the calling agent's own attachment to a thread |
+| `msp_thread_principal_erase` | tombstone a principal's own content across every thread they have touched in the tenant, idempotently |
+| `msp_thread_retention_tick` | age-based, tenant-wide tombstone sweep past a deployment-wide horizon |
+| `msp_thread_principal_export` | return a principal's own authored content, own protected records and qualifying summaries |
 
 All identifiers in this surface are references returned by MSP or opaque
 values provided by Zuri. There is no filesystem path, raw provider
@@ -249,7 +377,7 @@ CRITICAL 1).
 ### Multi-agent (stage 2, BL-MEMOS-040..048/112, DEC-MEMOS-17..21)
 
 **A hard cutover, no compatibility mode (DEC-MEMOS-17).** Every one of the
-ten tools above now requires two more grant claims: `agentId` and
+fifteen API-011 tools now requires two more grant claims: `agentId` and
 `workspaceId` (non-empty strings, ≤128 characters, unconstrained charset —
 opaque Tier-1-owned identifiers, exactly like `principalId`). Their
 absence is `grant_signature_invalid`, the same "missing required claim"
@@ -335,6 +463,18 @@ equivalent filter: an agent that is current sees every summary the thread
 has, and a departed agent's very next `msp_thread_context` call is already
 refused `agent_not_current` before any summary is ever read.
 
+### New grant claims (PH-MEMOS-4)
+
+Three more optional boolean claims, additive to every claim above, each
+read by its own tool's per-tool guard logic (not part of `verifyThreadGrant`
+itself, exactly like `assertParticipants`/`assertAgents`):
+
+| Claim | Required on | Absent/false → |
+|---|---|---|
+| `assertRelink` | `msp_thread_participant_lifecycle`'s `close_for_relink` action only, additive to `assertParticipants` | `thread_scope_denied` |
+| `dataSubjectAccess` | `msp_thread_principal_erase`/`msp_thread_principal_export`, every call (self or cross-principal) | `thread_scope_denied` |
+| `dataSubjectAdmin` | Same two tools, additive to `dataSubjectAccess`, only when `principal_id` names someone other than the grant's own principal | `thread_scope_denied` |
+
 ### Errors
 
 Every thread tool answers one of a fixed, typed vocabulary, matching the
@@ -342,11 +482,13 @@ repo's existing convention (`vault_scope_denied`, `gks_provider_unconfigured`):
 `validation_failed`, `not_found`, `thread_scope_denied`, `conflict`,
 `identity_hmac_unconfigured`, `payload_too_large`, `thread_audience_mismatch`,
 `record_subject_mismatch`, `compaction_lease_conflict`, `principal_erased`
-(reserved, not raised in stage 1), and four grant-verification-specific
-codes raised by `verifyThreadGrant` before any scope decision is even
-evaluated: `grant_unconfigured` (no key resolves for the grant's tenant),
-`grant_signature_invalid`, `grant_expired`, `grant_payload_mismatch`. No
-error message embeds a raw `external_room_ref` or person id.
+(reserved, not raised in this phase either — erasure removes existing
+content, it does not ban the principal from MSP going forward), and four
+grant-verification-specific codes raised by `verifyThreadGrant` before any
+scope decision is even evaluated: `grant_unconfigured` (no key resolves for
+the grant's tenant), `grant_signature_invalid`, `grant_expired`,
+`grant_payload_mismatch`. No error message embeds a raw `external_room_ref`
+or person id.
 
 Stage 2 adds three more codes (see "Multi-agent" above):
 `agent_not_current` (the grant's `agentId` is not current on the resolved
@@ -355,6 +497,19 @@ thread, or `assertAgents` was needed and absent), `grant_nonce_required`
 `grant_replayed` (that `(tenantId, nonce)` pair was already consumed).
 `thread_keyring_config_invalid` (BL-MEMOS-049, above) is a startup-time
 failure, never returned from a tool call.
+
+**PH-MEMOS-4 introduces no new error codes at all.** Every refusal in the
+five new tools reuses the vocabulary above: `thread_scope_denied` for every
+missing claim (`assertParticipants`, `assertRelink`, `dataSubjectAccess`,
+`dataSubjectAdmin`) and for `close_for_relink` on a non-`DIRECT` thread;
+`not_found` for `leave` naming a non-participant `speaker_id`;
+`agent_not_current` for `msp_thread_agent_detach`'s second call; `conflict`
+for an erasure idempotency-key replay naming a different `principal_id`,
+and for the `close_for_relink`/in-flight-append status race (narrowed to
+the store's own transaction-internal re-check, never a raw driver error);
+`grant_nonce_required`/`grant_replayed` for the universal nonce gate on all
+five new tools (`msp_thread_retention_tick`'s `dry_run: true` call is the
+one exemption — it consumes no nonce, though it still journals).
 
 Beneath all of the above, every thread tool -- like every other tool in
 this runtime -- is also subject to the transport-level escaped-object-key
@@ -521,6 +676,26 @@ Pending intake and leased job state are operational data, not confirmed
 memory.
 
 ## Version history
+
+### PH-MEMOS-4, BL-MEMOS-050..056/058/059, 2026-09-15
+
+Participant lifecycle, relink, agent detach, and thread-scoped erasure/
+retention/export, per docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md
+v0.5.4b (RKOI-approved spec, four review rounds) and DEC-MEMOS-22..35.
+Five new tools: `msp_thread_participant_lifecycle`, `msp_thread_agent_detach`,
+`msp_thread_principal_erase`, `msp_thread_retention_tick`,
+`msp_thread_principal_export` -- see "Participant and agent lifecycle,
+relink, erasure, retention and export" above for the full shape. Corrects
+already-shipped stage-1 code (`BL-MEMOS-058`, CRITICAL 1 from the design's
+own review): a departed principal's very next plain `HUMAN` append no
+longer silently re-creates membership through the claim-free
+first-membership path -- the guard now distinguishes never-participated,
+participated-but-none-current (a rejoin, unconditionally gated) and
+current-row-exists as three distinct cases, not two. New migration
+`migrations/0010_erasure_receipts.sql` (an additive trigger replacement on
+`protected_memory_records` plus the new `erasure_receipts` table). New
+`tests/security/participant-lifecycle-relink.security.mjs` and
+`tests/security/thread-erasure.security.mjs`.
 
 ### TASK-MEMOS-002 stage 2, BL-MEMOS-040..048/112, 2026-09-15
 
