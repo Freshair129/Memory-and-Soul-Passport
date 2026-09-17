@@ -1,7 +1,7 @@
 ---
-version: "1.0.0b"
+version: "1.0.1b"
 created_at: "2026-09-08T00:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-08T00:00:00+07:00,ATHER"
+last_update: "2026-09-18T00:00:00+07:00,RWANG"
 status: "beta"
 superseded_by: null
 attributes:
@@ -134,14 +134,16 @@ security boundary without touching a production database:
 Push-Location $MspRoot
 npm exec vitest run tests/contract/pipeline-relay.test.mjs
 & $Node --test --test-concurrency=1 tests/security/pipeline-vault-scoping.security.mjs
+& $Node --test --test-concurrency=1 tests/security/product-query-vault-scoping.security.mjs
 Pop-Location
 ```
 
 The contract suite checks caller identity replacement, fail-closed provider
 configuration, six-metric evidence validation, loopback-only query routing,
-redirect rejection and ambiguous-grant rejection. The security suite checks
-all six scope fields, nested batch/receipt scopes and source/worker role
-separation before any downstream call.
+product manifest validation, redirect rejection and ambiguous-grant rejection.
+The security suites check all six scope fields, nested batch/receipt scopes,
+product-query citation binding and source/worker role separation before any
+downstream call.
 
 ## Run the real MSP ↔ GKS stdio hop
 
@@ -214,6 +216,15 @@ must contain the same six-field scope and `query`/`topK` values. MSP posts to
 result citation. If the worker is absent, the expected result is a typed
 `pipeline_worker_unconfigured` or `pipeline_worker_unavailable` failure.
 
+For the published-product route, call `msp_pipeline_product_query` against the
+same worker origin. Use `operation: 'search'`, `'price'` or `'budget'` with an
+`edge-published-corpus.v1` context whose scope, manifest hash, source refs and
+expiry are current for the turn. MSP posts to `/products/query`, binds every
+response citation to that manifest and accepts only explicit
+`CATALOG_SNAPSHOT` THB pricing. This local smoke remains synthetic; the
+GenesisBlock P2 companion run is the evidence required for a real worker,
+vector/graph store and catalog snapshot.
+
 ## Cleanup and evidence
 
 Stop the client and all child processes before removing the isolated files:
@@ -240,4 +251,5 @@ entrypoint acceptance.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 1.0.1b | 2026-09-18 | beta | Added the published-product `/products/query` smoke guidance, manifest-bound acceptance checks and product security command. | 2696d4e | RWANG |
 | 1.0.0b | 2026-09-08 | beta | Added an isolated, synthetic-credential MSP ↔ GKS relay smoke with explicit paths, fail-closed query guidance and cleanup. | working-tree | ATHER |
