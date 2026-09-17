@@ -1,7 +1,7 @@
 ---
-version: "0.2.12b"
+version: "0.2.13b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-18T00:00:00+07:00,RWANG"
+last_update: "2026-09-18T02:05:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -516,6 +516,7 @@ anyway.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.13b | 2026-09-18 | beta | Aligned the cross-zuri acceptance gate with the current zuri-ai stage-2 adapter: the real caller now supplies agentId/workspaceId/nonce, resolves a thread through MSP, and passes `npm run test:cross-zuri` 4/4; the former refusal case remains historical evidence only. | 2db7ffb | RWANG |
 | 0.2.12b | 2026-09-18 | beta | Record the owner-approved published-product query relay, manifest-bound snapshot pricing and its contract/security proof. | 2696d4e | RWANG |
 | 0.2.11b | 2026-09-17 | beta | Record approved Phase 6 scope and its remaining summary-ingestion/release boundaries. | working-tree | RWANG |
 | 0.2.10b | 2026-09-17 | beta | Distinguish signed scoped context reads from the retained legacy ownership gap. | working-tree | RWANG |
