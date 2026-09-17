@@ -1,7 +1,7 @@
 ---
-version: "0.1.3b"
+version: "0.1.4b"
 created_at: "2026-09-17T00:00:00+07:00,LUNA"
-last_update: "2026-09-17T03:48:00+07:00,RWANG"
+last_update: "2026-09-17T12:26:06+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -57,23 +57,26 @@ phase-5 behavior is reported as `FAIL` with that contract gap.
 | BL083 consolidation | Signed source consolidation and pre-erasure digest for all 12 DIRECT tenant/principal/agent legs | PASS locally | Protected-record contract; summary-item ingestion remains outside this API |
 | BL083 vault erasure | Six tenant/principal erasures; direct DB owner tuple/content/history/provenance/FTS assertions | PASS locally | Additional named security suite proves embeddings, bounds, replay and rollback |
 | BL084 | Gate A re-baseline | Local document updated | Not executed by the runtime harness; see GATE-A.md |
-| BL085 | Client 0.2.7 candidate, CHANGELOG and pack dry-run | PASS locally, unpublished | Not executed by the runtime harness; actual publication remains separate |
+| BL085 | Client 0.2.7 candidate, CHANGELOG and pack dry-run | PASS locally; GitHub prerelease published | Not executed by the runtime harness; npm publication remains deferred |
 | BL086 | README/architecture/NOTES closure | Local documents updated | Legacy unscoped context and summary-ingestion boundaries remain explicit |
 | BL087 | Existing decision confirmation record | DONE upstream | No Phase 7 code change is needed here |
-| BL088 | Release review and tag | NOT_RUN | Requires BL083–087; this harness never tags or publishes |
+| BL088 | Release review and tag | PASS for GitHub prerelease | `v0.2.7` targets merge `6b99f402`; npm publication remains deferred |
 
 The integrated run is recorded in `.tmp/phase6-final-phase7.log`: 33 PASS,
 0 FAIL, four external NOT_RUN rows, exit 2. The runtime harness does not
 execute document review, npm packaging or release actions, so its external
 rows are not replaced with fabricated runtime passes. The manual document
-and actual pack results above are separate evidence. BL075 merge and BL088
-release remain open. See `../.brain/reviews/PHASE6-REVIEW.md` for full local
-test and independent review evidence.
+and actual pack results above are separate evidence. BL075 merge and the GitHub
+prerelease portion of BL088 are complete. The harness still reports its release
+row as `NOT_RUN` by design; npm publication remains deferred. See
+`../.brain/reviews/PHASE6-REVIEW.md` for full local test and independent review
+evidence.
 
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.4b | 2026-09-17 | beta | Record owner-approved Phase 7 closure: PR #32 merged, hosted CI passed, and GitHub prerelease `v0.2.7` created; retain honest harness `NOT_RUN` and npm-deferred boundaries. | 6b99f402 | RWANG |
 | 0.1.3b | 2026-09-17 | beta | Record real Phase 6 matrix consolidation/erasure and separate runtime results from document/package/release gates. | working-tree | RWANG |
 | 0.1.2b | 2026-09-17 | beta | Record the combined 31-pass result and preserve six Phase 6/release dependencies. | working-tree | RWANG |
 | 0.1.1b | 2026-09-17 | beta | Added deterministic summary timing and directed cross-tenant, cross-principal, cross-agent, and cross-workspace denial cases; the Phase 6 dependency rows remain NOT_RUN until their approved contract exists. | working-tree | LUNA |

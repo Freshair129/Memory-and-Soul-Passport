@@ -1,7 +1,7 @@
 ---
-version: "0.1.31b"
+version: "0.1.32b"
 created_at: "2026-09-14T12:00:00+07:00,Claude Opus 5,working-tree"
-last_update: "2026-09-17T03:49:00+07:00,RWANG"
+last_update: "2026-09-17T12:26:06+07:00,RWANG"
 status: "proposed"
 attributes:
   domain: "mission-state-protocol"
@@ -355,12 +355,12 @@ phase's own PR waits for both.
 | BL-MEMOS-080 | TASK-MEMOS-010 | Policy line in `docs/MIGRATION.md`: no foreign key into FTS5/rtree shadow tables, even when SQLite accepts it | ATHER | — | doc row; RKOI #19 advisory closed | implemented; documented shadow-table FK policy |
 | BL-MEMOS-081 | TASK-MEMOS-010 | rtree runner test uses `it.skipIf(!rtreeAvailable)` instead of a silent FTS5 fallback | JANUS | — | test shows skipped when the module is absent | implemented; visible conditional rtree skip |
 | BL-MEMOS-082 | TASK-MEMOS-010 | Near-miss review follow-ups: document that header scanning stops after an exact line 1, with a test; rename the "not accepted via trim()" test title | JANUS | — | doc and test | implemented; documented/tested exact line-1 directive behavior |
-| BL-MEMOS-083 | TASK-MEMOS-010 | End-to-end acceptance suite through the real process: 2 tenants × 3 principals × 2 agents × DIRECT and GROUP threads, covering resolve, append, context, record, summary, vault resolve, consolidation, erase | GHOST | BL-MEMOS-075 | suite green; isolation matrix recorded | runtime acceptance PASS locally (33 cases); 24 matrix legs, 12 consolidations, 6 erasures, 8 summaries; external release gates open |
+| BL-MEMOS-083 | TASK-MEMOS-010 | End-to-end acceptance suite through the real process: 2 tenants × 3 principals × 2 agents × DIRECT and GROUP threads, covering resolve, append, context, record, summary, vault resolve, consolidation, erase | GHOST | BL-MEMOS-075 | suite green; isolation matrix recorded | runtime acceptance PASS locally (33 cases); 24 matrix legs, 12 consolidations, 6 erasures, 8 summaries; hosted CI and GitHub prerelease evidence recorded; npm/production gates separate |
 | BL-MEMOS-084 | TASK-MEMOS-010 | Gate A re-baseline: "vault and thread isolation" row, suite counts, migration lineage 0008–0011 | ATHER | BL-MEMOS-083 | `docs/GATE-A.md` updated with evidence | local re-baseline updated; hosted CI and production evidence separate |
-| BL-MEMOS-085 | TASK-MEMOS-010 | Client release: `@freshair129/msp-client-js` version, CHANGELOG, env allowlist names, `npm run pack:client` clean | JANUS | BL-MEMOS-083 | pack dry-run output | 0.2.7 candidate prepared; pack dry-run PASS; unpublished |
+| BL-MEMOS-085 | TASK-MEMOS-010 | Client release: `@freshair129/msp-client-js` version, CHANGELOG, env allowlist names, `npm run pack:client` clean | JANUS | BL-MEMOS-083 | pack dry-run output | 0.2.7 candidate prepared; pack and GitHub prerelease PASS; npm unpublished |
 | BL-MEMOS-086 | TASK-MEMOS-010 | Documentation closure: README, ARCHITECTURE layering for thread and vault surfaces, NOTES gaps closed (API-009 caller identity, context-tool ownership) | ATHER | BL-MEMOS-083 | frontmatter and CHANGELOG rows | approved-scope documents updated; retained legacy and summary-ingestion boundaries explicit |
 | BL-MEMOS-087 | TASK-MEMOS-001 | Owner confirms or amends DEC-MEMOS-01..16; ADR status → accepted; amendments re-reviewed | OWNER/RKOI | BL-MEMOS-014 | ADR updated | done for DEC-MEMOS-01..35 (01..16 and 17..21 confirmed separately on 2026-09-14, 22..35 confirmed on 2026-09-15, no amendments); ADR status becomes accepted when BL-MEMOS-013 merges |
-| BL-MEMOS-088 | TASK-MEMOS-010 | Release review and merge; tag the release | RKOI/COORD | BL-MEMOS-083..087 | GATE-MEMOS-7 met | open: final hosted CI, merge/tag/release authorization remain separate |
+| BL-MEMOS-088 | TASK-MEMOS-010 | Release review and merge; tag the release | RKOI/COORD | BL-MEMOS-083..087 | GATE-MEMOS-7 met | GitHub prerelease `v0.2.7` created at `6b99f402`; npm publication deferred; harness release row remains NOT_RUN by design |
 
 ### PH-MEMOS-8 — Channel activation (deferred; TASK-MEMOS-005..007)
 
