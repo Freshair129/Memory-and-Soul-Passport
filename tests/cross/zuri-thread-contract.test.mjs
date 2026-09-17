@@ -7,20 +7,13 @@
 // `npm run test:cross-zuri` runs it) unless that env var is set.
 //
 // PH-MEMOS-3 stage 2 (BL-MEMOS-046, DEC-MEMOS-17, RKOI-approved spec
-// docs/memos-002-stage2-spec@b090a51): rewritten in full. DEC-MEMOS-17 is a
-// HARD CUTOVER -- there is no compatibility mode, and every one of the ten
-// API-011 tools now requires agentId/workspaceId on the grant
-// (BL-MEMOS-040). zuri-ai's real, unmodified adapter (verified by reading
-// apps/server/src/modules/agent/msp-thread-memory-port.js at the root this
-// file is pointed at) builds its grant as
-// `{ ...claims, operation, expiresAt, payloadHash }` with no agentId/
-// workspaceId/nonce anywhere in `claimsFor` or `recordDelivery`'s own
-// claims object -- so its very first call (msp_thread_resolve) is now
-// refused before this stage's change, this same file's previous version
-// drove that same adapter through a full multi-tool conversation
-// end-to-end; that flow is no longer reachable with zuri-ai's code
-// unchanged, which is the point of this rewrite, not a regression this
-// file failed to notice.
+// docs/memos-002-stage2-spec@b090a51): every API-011 tool requires
+// agentId/workspaceId/nonce on the signed grant (BL-MEMOS-040). The real
+// zuri-ai adapter is read from the checkout named by MSP_TEST_ZURI_ROOT and
+// exercised against the real MSP server. Current zuri-ai supplies the stage-2
+// claims; this test therefore proves the live adapter can resolve a thread and
+// that MSP accepts the complete grant instead of relying on a stale refusal
+// fixture from before the zuri-ai caller was upgraded.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -45,31 +38,41 @@ function withServer(run) {
 }
 
 it(
-  "DEC-MEMOS-17 hard cutover: zuri-ai's own unmodified grant is refused with a typed grant error, never silently accepted",
+  "current zuri-ai adapter sends the complete stage-2 grant and resolves a thread",
   withServer(async ({ server, key }) => {
     if (!process.env.MSP_TEST_ZURI_ROOT) throw new Error('MSP_TEST_ZURI_ROOT is required for test:cross-zuri');
     const adapterPath = resolve(process.env.MSP_TEST_ZURI_ROOT, 'apps/server/src/modules/agent/msp-thread-memory-port.js');
     const { createMspThreadMemoryPort } = await import(/* @vite-ignore */ pathToFileURL(adapterPath).href);
-    // zuri-ai's real, unmodified port -- no stage-2 claim is added anywhere
-    // in this construction, matching exactly what origin/main ships today.
-    const port = createMspThreadMemoryPort({ serviceKey: key, transport: (name, args) => server.toolRegistry.dispatch(name, args) });
+    const calls = [];
+    const port = createMspThreadMemoryPort({
+      serviceKey: key,
+      workspaceId: 'workspace-zuri-contract',
+      transport: (name, args) => {
+        calls.push({ name, args });
+        return server.toolRegistry.dispatch(name, args);
+      },
+    });
     const route = { tenantId: 't', businessId: 'b', channelAccountId: 'oa', externalRoomRef: 'opaque-dm', threadKind: 'DIRECT', audienceKind: 'DIRECT', channelType: 'LINE' };
-    await expect(port.resolveThread(route)).rejects.toThrow(/grant_signature_invalid/);
+    const resolved = await port.resolveThread(route);
+    expect(resolved?.thread?.threadId).toEqual(expect.any(String));
+    expect(calls[0]?.name).toBe('msp_thread_resolve');
+    expect(calls[0]?.args?.access?.grant).toMatchObject({
+      agentId: 'zuri-line-agent',
+      workspaceId: 'workspace-zuri-contract',
+      operation: 'msp_thread_resolve',
+    });
+    expect(calls[0]?.args?.access?.grant?.nonce).toEqual(expect.any(String));
+    expect(calls[0]?.args?.access?.signature).toEqual(expect.any(String));
   }),
 );
 
 it(
   'shape-only: MSP responses still satisfy every shape check zuri-ai\'s own adapter code performs, once agentId/workspaceId/nonce are added to the exact same wire requests',
   withServer(async ({ server, key }) => {
-    // Deliberately does NOT import or call zuri-ai's adapter -- DEC-MEMOS-17
-    // is a hard cutover, and zuri-ai's own code is not modified anywhere in
-    // this repo or that one. This proves the *wire shapes* zuri-ai's port
-    // is known to build and to require (transcribed verbatim from
-    // msp-thread-memory-port.js, read at MSP_TEST_ZURI_ROOT below, not
-    // reconstructed from memory) survive stage 2 once the three new claims
-    // are added -- exactly the fixture zuri-ai's own future stage-2 update
-    // will need to satisfy, without this repo ever depending on that
-    // update existing.
+    // Deliberately does NOT call the adapter for this shape matrix. It proves
+    // the exact response shapes the real zuri-ai port reads after the three
+    // stage-2 claims are added, while the first case above exercises that port
+    // end-to-end against MSP.
     if (!process.env.MSP_TEST_ZURI_ROOT) throw new Error('MSP_TEST_ZURI_ROOT is required for test:cross-zuri');
     const adapterPath = resolve(process.env.MSP_TEST_ZURI_ROOT, 'apps/server/src/modules/agent/msp-thread-memory-port.js');
     const adapterSource = await import('node:fs').then((fs) => fs.promises.readFile(adapterPath, 'utf8'));

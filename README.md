@@ -112,14 +112,14 @@ Release review, merge/tag and publication remain separate gates.
 
 MSP is Tier 2 in the isolated `genesisrag17.v1` pipeline. It owns runtime
 grants, exact scope and role checks, authenticated relay transport, downstream
-response validation, count-only journaling, and the explicit Tier 4 query hop.
+response validation, count-only journaling, and the explicit Tier 4 query hops.
 It owns no stage, source payload store, cursor, canonical decision, gate
 verdict, graph/vector write, or publication pointer. Source and worker grants
-are separate: source may submit/evidence/query; worker may claim, send physical
-receipts, request the gate, report worker-stage failure, acknowledge downstream
-publication with its receipt, and query.
+are separate: source may submit/evidence/query/product_query; worker may claim,
+send physical receipts, request the gate, report worker-stage failure,
+acknowledge downstream publication with its receipt, and query/product_query.
 
-Read [GENESISRAG17-RELAY](docs/GENESISRAG17-RELAY.md) for the nine operations
+Read [GENESISRAG17-RELAY](docs/GENESISRAG17-RELAY.md) for the ten operations
 and exact request/response boundary, [ADR-MSP-GENESISRAG17-RELAY](docs/ADR-MSP-GENESISRAG17-RELAY.md)
 for the decision record, and [the isolated local runbook](docs/RUNBOOK-GENESISRAG17-LOCAL.md)
 for synthetic credentials and explicit disposable paths. The machine schema is
@@ -137,6 +137,7 @@ See [docs/NOTES.md](docs/NOTES.md) for extraction evidence and known gaps, and [
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.3.3b | 2026-09-18 | beta | Document the owner-approved published-product query relay, its Tier 4 `/products/query` boundary and snapshot-only pricing evidence. | 2696d4e | RWANG |
 | 0.3.2b | 2026-09-17 | beta | Describe approved Phase 6 APIs, confidence policy and bounded vault erasure; distinguish package candidate from release activation. | working-tree | RWANG |
 | 0.3.1b | 2026-09-17 | beta | Align signed grants, unsigned legacy compatibility, global gate, receipt key versioning and local schema setup; retain Phase 6/release gates. | working-tree | RWANG |
 | 0.3.0b | 2026-09-16 | beta | PH-MEMOS-5: principal vaults (`principal_private`/`principal_passport`, `migrations/0011`), API-010 `msp_vault_resolve`, the API-009 `access_context` amendment on all nine `msp_memory_*` tools, scoped `contexts` receipts (`migrations/0012`), and the multi-agent vault rules. `MSP_IDENTITY_HMAC_KEY` is now a hard deployment prerequisite for `msp_vault_resolve`. | working-tree | KIN |

@@ -1,7 +1,7 @@
 ---
-version: "0.4.2b"
+version: "0.4.3b"
 created_at: "2026-08-29T14:45:00+07:00,Claude Opus 5,working-tree"
-last_update: "2026-09-11T00:00:00+07:00,Claude Opus 5"
+last_update: "2026-09-18T00:00:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "mission-state-protocol"
@@ -62,8 +62,8 @@ stage assignment:
 
 | Grant | Operations | Destination |
 |---|---|---|
-| source | `submit`, `evidence`, `query` | GKS for submit/evidence; Tier 4 loopback for query |
-| worker | `claim`, `graph_receipt`, `write_receipt`, `gate`, `publication_receipt`, `stage_failure`, `query` | GKS for worker lifecycle/receipts; Tier 4 loopback for query |
+| source | `submit`, `evidence`, `query`, `product_query` | GKS for submit/evidence; Tier 4 loopback for query/product query |
+| worker | `claim`, `graph_receipt`, `write_receipt`, `gate`, `publication_receipt`, `stage_failure`, `query`, `product_query` | GKS for worker lifecycle/receipts; Tier 4 loopback for query/product query |
 
 The request must use `schemaVersion: "genesisrag17.v1"` and exactly
 `portfolioId`, `tenantId`, `businessId`, `workspaceId`, `agentId`, and
@@ -85,6 +85,12 @@ writes and publication stay in the GenesisBlock worker and its DB. The [full rel
 and [MSP ADR](ADR-MSP-GENESISRAG17-RELAY.md) define the extension rule: new
 input parsing belongs to zuri-ai, canonical fields belong to GKS, and any new
 wire field requires coordinated contract/schema changes across repositories.
+
+The owner-approved `product_query` extension remains a Tier 2 transport
+boundary. MSP validates the exact scope, the `edge-published-corpus.v1`
+manifest handoff and snapshot-only pricing, then sends the request to the Tier
+4 `/products/query` loopback. It owns no catalog snapshot, product evidence,
+price quote or publication state.
 
 The cross-repository authority is zuri-ai's [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md),
 [stage specification](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-SPEC.md),
@@ -147,6 +153,7 @@ If this file and those disagree, those win.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.4.3b | 2026-09-18 | beta | Added the owner-approved published-product query as a Tier 2 loopback transport boundary; MSP still owns no pipeline stage or catalog state. | 2696d4e | RWANG |
 | 0.4.2b | 2026-09-11 | beta | Every GKS child spawn now builds its environment from an explicit `GKS_*` + OS-basics allowlist instead of forwarding a copy of MSP's own environment with a fixed credential blocklist applied only to the pipeline relay. Security fix. | working-tree | Claude Opus 5 |
 | 0.4.0b | 2026-09-08 | beta | Added the complete authenticated GenesisRAG17 relay boundary, source/worker grant split, Tier 4 query route, extension rules and pinned zuri-ai links; removed local checkout paths. | working-tree | ATHER |
 | 0.2.0b | 2026-09-07 | beta | Added the one relay MSP carries for the evidence pull, `msp_knowledge_evidence_export` — GKS's `gks_stage_evidence_export` validated and handed back, no cursor, no added scope, fail-closed without a provider — with the provider method and the reference fixture that prove it. MSP still owns no stage. | working-tree | Claude Fable 5.1 |

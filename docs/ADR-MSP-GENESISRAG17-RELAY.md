@@ -1,7 +1,7 @@
 ---
-version: "1.0.5b"
+version: "1.0.6b"
 created_at: "2026-09-08T00:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-13T00:00:00+07:00,KIN"
+last_update: "2026-09-18T00:00:00+07:00,RWANG"
 status: "beta"
 superseded_by: null
 attributes:
@@ -37,20 +37,21 @@ the acceptance proof is pinned to
 
 ## Decision
 
-MSP exposes nine authenticated `msp_pipeline_*` relay tools. It validates the
+MSP exposes ten authenticated `msp_pipeline_*` relay tools. It validates the
 outer schema, exact six-field scope, runtime grant, role and nested envelopes,
 then forwards the request to GKS or the explicit Tier 4 query loopback. It
 validates the downstream response and journals identities and counts only.
 MSP keeps no source payload, canonical decision, stage cursor, worker result,
 quality verdict, graph/vector object or publication pointer.
 
-The nine operations are:
+The ten operations are:
 
 | Operation | Allowed role | Destination |
 |---|---|---|
 | `submit` | source | GKS `gks_pipeline_submit` |
 | `evidence` | source | GKS `gks_pipeline_evidence` |
 | `query` | source or worker | Tier 4 loopback `POST /query` |
+| `product_query` | source or worker | Tier 4 loopback `POST /products/query` |
 | `claim` | worker | GKS `gks_pipeline_claim` |
 | `graph_receipt` | worker | GKS `gks_pipeline_graph_receipt` |
 | `write_receipt` | worker | GKS `gks_pipeline_write_receipt` |
@@ -104,7 +105,8 @@ The call sequence is fixed:
    and send `publication_receipt` for Stage 17. A denied policy produces a
    failed Stage 17 evidence record without a publication receipt.
 7. The source pulls evidence with its own cursor. Source or worker queries a
-   single published Tier 4 generation through MSP's loopback route.
+   single published Tier 4 generation through MSP's `/query` route or uses the
+   manifest-bound `/products/query` route for published catalog operations.
 
 MSP does not own any of these stages. A delivery retry retains the original
 `runId`, `pipelineStageId`, `executionStepId`, `attemptId`, batch id and
@@ -112,16 +114,27 @@ idempotency key. MSP keeps no pipeline state between calls beyond its count-only
 journal entry; durable receipt and retry ownership stays with the source/worker
 and the downstream stores.
 
-## Query decision
+## Query decisions
 
-The query relay is not a GKS call. `MSP_PIPELINE_WORKER_URL` must be an
+The query relays are not GKS calls. `MSP_PIPELINE_WORKER_URL` must be an
 explicit loopback HTTP origin at `127.0.0.1` or `::1`; the URL may not include
-credentials, a path, query, hash or redirect target. MSP posts to `/query`
-with `Bearer MSP_PIPELINE_WORKER_TOKEN` and rejects non-2xx, malformed or
-cross-scope results. The worker authenticates the token with
-`GENESIS_WORKER_QUERY_TOKEN`, selects one published generation for the complete
-request, and returns citation fields that point to the Tier 1 source lineage.
-Absent worker configuration is an error, never an empty successful result.
+credentials, a path, query, hash or redirect target. MSP posts to `/query` or
+`/products/query` with `Bearer MSP_PIPELINE_WORKER_TOKEN` and rejects non-2xx,
+malformed or cross-scope results. The worker authenticates the token with
+`GENESIS_WORKER_QUERY_TOKEN` and selects one published generation for the
+complete request. Absent worker configuration is an error, never an empty
+successful result.
+
+`msp_pipeline_product_query` is the owner-approved published-catalog extension.
+Its `published-products.v1` request carries an `edge-published-corpus.v1`
+context with exact scope, corpus generation, manifest hash, bounded expiry and
+source artifact references. `search`, `price` and `budget` are bounded
+operations. MSP validates the manifest identity, response citations and
+snapshot-only THB pricing; unknown expiry, unit, tax and shipping remain
+unknown and are never represented as a live quote. The worker checks
+publication and native evidence, while the Server rechecks live authority
+before disclosure. MSP never calls GKS, SQL or a caller-selected endpoint for
+this route and journals counts only.
 
 ## Extension decision
 
@@ -285,12 +298,14 @@ state, and all four repositories must review a contract change together.
 - Machine schema: [`packages/msp-contracts/schemas/GENESISRAG17.tools.json`](../packages/msp-contracts/schemas/GENESISRAG17.tools.json)
 - Contract proof: [`tests/contract/pipeline-relay.test.mjs`](../tests/contract/pipeline-relay.test.mjs)
 - Scope and role proof: [`tests/security/pipeline-vault-scoping.security.mjs`](../tests/security/pipeline-vault-scoping.security.mjs)
+- Product-query scope proof: [`tests/security/product-query-vault-scoping.security.mjs`](../tests/security/product-query-vault-scoping.security.mjs)
 - Local process runbook: [`RUNBOOK-GENESISRAG17-LOCAL.md`](RUNBOOK-GENESISRAG17-LOCAL.md)
 
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 1.0.6b | 2026-09-18 | beta | Accepted the owner-approved published-product query extension: tenth scoped relay tool, `/products/query` loopback, manifest-bound citations and snapshot-only pricing. | 2696d4e | RWANG |
 | 1.0.0b | 2026-09-08 | beta | Accepted the MSP-only authenticated relay boundary, nine operations, exact grants/scope, ordered execution, Tier 4 query route and coordinated extension rules. | working-tree | ATHER |
 | 1.0.2b | 2026-09-11 | beta | Accepted the GenesisRAG17 structured-record profile (ADR-075 contract revision 2, Option A) as relay-transparent — no MSP code change; recorded deferred Option B (`qualifiers`) as pass-through pending its own four-repo gate, and confirmed the `ontology_v2` rollout order needs nothing from MSP. One of the four repos' acceptance notes gating ADR-075 Phase 2. | working-tree | ATHER |
 | 1.0.3b | 2026-09-11 | beta | Added the recommended structured-batch relay case to `tests/contract/pipeline-relay.test.mjs`: byte-for-byte submit relay of `ontology_v2` chunks/mentions, unchanged claim/write_receipt relay of `PRICED_AT`/`HAS_COMPONENT`/`IN_CATEGORY` facts and a `PRICE_TIER` entity, and a direct proof that `validatePipelineRequest`/`validatePipelineResponse` add no nested validation for the profile (including the deferred `qualifiers` field). Fulfils the C-8 recommendation from the 1.0.2b acceptance note; no code change. | test/structured-batch-relay | CLAUDE |

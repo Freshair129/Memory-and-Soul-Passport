@@ -1,7 +1,7 @@
 ---
-version: "0.2.11b"
+version: "0.2.13b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-17T03:48:00+07:00,RWANG"
+last_update: "2026-09-18T02:05:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -76,8 +76,8 @@ Imports in copied tests may change only to address the new workspace package bou
 - API-009 retains an historical amendment describing missing vault scoping, but the current source contains migrations and tests for WP-14. The extraction gate follows current executable evidence: the baseline security suite passed 30/30.
 - `msp-client.mjs` is not actually a two-file island: it imports `buildBoundedGraphQuery` from `authority-enforcement.mjs`. That file is therefore copied into `msp-client-js` and recorded here rather than inlining or rewriting it.
 - The configured GKS bridge permits `msp_knowledge_promote`; without a provider it fails closed with `gks_provider_unconfigured`. Shared `msp_memory_promote` remains fail-closed. Both behaviors must be tested separately.
-- The `genesisrag17.v1` pipeline relay is a separate nine-tool surface. MSP authenticates exact source/worker runtime grants, validates nested scope and downstream envelopes, journals counts only, and owns no stage, payload, cursor, canonical decision, worker result, gate or publication state. The machine contract is `packages/msp-contracts/schemas/GENESISRAG17.tools.json`, with contract proof in `tests/contract/pipeline-relay.test.mjs` and scope/role proof in `tests/security/pipeline-vault-scoping.security.mjs`.
-- Pipeline input parsing and raw lineage remain in zuri-ai stages 1–8; canonical decisions and quality remain in GKS; physical graph/vector/index writes and publication remain in the GenesisBlock worker and its DB. The Tier 4 query relay is the only pipeline operation that does not call GKS, and requires an explicit loopback worker origin and token.
+- The `genesisrag17.v1` pipeline relay is a separate ten-tool surface. MSP authenticates exact source/worker runtime grants, validates nested scope and downstream envelopes, journals counts only, and owns no stage, payload, cursor, canonical decision, worker result, gate or publication state. The machine contract is `packages/msp-contracts/schemas/GENESISRAG17.tools.json`, with contract proof in `tests/contract/pipeline-relay.test.mjs` and scope/role proof in `tests/security/pipeline-vault-scoping.security.mjs` plus `tests/security/product-query-vault-scoping.security.mjs`.
+- Pipeline input parsing and raw lineage remain in zuri-ai stages 1–8; canonical decisions and quality remain in GKS; physical graph/vector/index writes and publication remain in the GenesisBlock worker and its DB. The Tier 4 `query` and `product_query` relays are the pipeline operations that do not call GKS and require an explicit loopback worker origin and token. `product_query` additionally binds responses to an `edge-published-corpus.v1` manifest and keeps price data snapshot-only.
 - Cross-repository acceptance is pinned to zuri-ai commit [`b64b46df`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257); the wire authority is the [`genesisrag17.v1` contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md).
 - `Freshair129/msp` currently resolves through GitHub CLI to `Freshair129/cognitive_system`. No remote will be attached until repository identity is resolved without overwriting or repurposing that repository.
 - Root migrations 0003 and 0005 rebuild tables (`CREATE ..._new`, `INSERT ... SELECT`, `DROP <table>`, `RENAME <table>_new TO <table>` -- the SAFE order documented in `docs/MIGRATION.md`, never the unsafe "rename the old table away" order) inside the plain `db.transaction(...)` path in `packages/msp-storage/src/db/migrate.mjs`, with `PRAGMA foreign_keys` left `ON` the whole time. Foreign-key risk during a rebuild depends on whether a CHILD row (a row in a table that references the table being rebuilt) exists -- not on rows within the rebuilt table itself, and not at all when nothing references it:
@@ -516,6 +516,8 @@ anyway.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.2.13b | 2026-09-18 | beta | Aligned the cross-zuri acceptance gate with the current zuri-ai stage-2 adapter: the real caller now supplies agentId/workspaceId/nonce, resolves a thread through MSP, and passes `npm run test:cross-zuri` 4/4; the former refusal case remains historical evidence only. | 2db7ffb | RWANG |
+| 0.2.12b | 2026-09-18 | beta | Record the owner-approved published-product query relay, manifest-bound snapshot pricing and its contract/security proof. | 2696d4e | RWANG |
 | 0.2.11b | 2026-09-17 | beta | Record approved Phase 6 scope and its remaining summary-ingestion/release boundaries. | working-tree | RWANG |
 | 0.2.10b | 2026-09-17 | beta | Distinguish signed scoped context reads from the retained legacy ownership gap. | working-tree | RWANG |
 | 0.2.9b | 2026-09-14 | beta | Fixed a pre-existing migration-runner race (RKOI review): two processes cold-starting `runMigrations` against the same fresh database file could have the loser throw a raw `SqliteError` instead of a typed one. `runMigrations` now serializes the whole read-pending-then-apply sequence behind a real cross-process lock (`BEGIN IMMEDIATE` on a dedicated `<dbPath>.migrate-lock` file); a losing process waits and re-reads fresh state, or refuses with the new `migration_concurrent_conflict:` prefix only if waiting is genuinely impossible. Also fixed a related `connection.mjs` race switching a brand-new file to WAL mode. See `docs/MIGRATION.md`'s "Concurrent cold start" section and `tests/integration/migrate-concurrent.test.mjs` (real multi-process coverage, 20-iteration non-flakiness loop). | working-tree | JANUS |

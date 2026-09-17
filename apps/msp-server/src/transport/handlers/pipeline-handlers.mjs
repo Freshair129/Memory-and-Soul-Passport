@@ -12,14 +12,15 @@ export function createPipelineHandlers({ gksProvider, journal, env = process.env
       validatePipelineRequest(args, suffix);
       const { credential, actor, authenticatedPrincipal, relayCredential, ...payload } = args;
       let result;
-      if (suffix === "query") {
+      if (suffix === "query" || suffix === 'product_query') {
         if (!env.MSP_PIPELINE_WORKER_URL || !env.MSP_PIPELINE_WORKER_TOKEN) throw new GksProviderUnconfiguredError("pipeline_worker_unconfigured");
         const url = new URL(env.MSP_PIPELINE_WORKER_URL);
         if (url.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(url.hostname) || url.username || url.password || url.search || url.hash || !["/", ""].includes(url.pathname)) throw new ValidationError("pipeline_worker_url: explicit loopback HTTP origin required");
-        url.pathname = "/query";
+        url.pathname = suffix === 'product_query' ? '/products/query' : '/query';
         let response;
         try {
-          response = await fetchImpl(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(120000), headers: { "content-type": "application/json", authorization: `Bearer ${env.MSP_PIPELINE_WORKER_TOKEN}` }, body: JSON.stringify(payload) });
+          const timeoutMs = suffix === 'product_query' ? Math.max(1, Math.min(5000, Date.parse(args.corpusContext.expiresAt) - Date.now())) : 120000;
+          response = await fetchImpl(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(timeoutMs), headers: { "content-type": "application/json", authorization: `Bearer ${env.MSP_PIPELINE_WORKER_TOKEN}` }, body: JSON.stringify(payload) });
         } catch { throw new GksProviderUnavailableError("pipeline_worker_unavailable"); }
         if (!response.ok) throw new GksProviderUnavailableError(`pipeline_worker_query_failed: ${response.status}`);
         result = await response.json();

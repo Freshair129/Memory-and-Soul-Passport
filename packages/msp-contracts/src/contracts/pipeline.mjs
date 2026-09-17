@@ -1,11 +1,12 @@
 // genesisrag17.v1: authenticated scope is a runtime grant, never a caller actor.
 import { timingSafeEqual } from "node:crypto";
 import { ValidationError, VaultScopeDeniedError, GksProviderInvalidResponseError } from "./errors.mjs";
+import { validateProductQueryRequest, validateProductQueryResponse } from './published-products.mjs';
 
 export const PIPELINE_VERSION = "genesisrag17.v1";
 export const SCOPE_KEYS = ["portfolioId", "tenantId", "businessId", "workspaceId", "agentId", "visibility"];
 export const PIPELINE_ROLES = Object.freeze({
-  submit: ["source"], evidence: ["source"], query: ["source", "worker"],
+  submit: ["source"], evidence: ["source"], query: ["source", "worker"], product_query: ["source", "worker"],
   claim: ["worker"], graph_receipt: ["worker"], write_receipt: ["worker"], gate: ["worker"], publication_receipt: ["worker"], stage_failure: ["worker"],
 });
 const COUNTERS = ["records_in", "records_out", "records_quarantined", "error_count", "retry_count", "duration_ms"];
@@ -64,6 +65,7 @@ export function authorizePipeline(args, suffix, principals) {
 }
 
 export function validatePipelineRequest(args, suffix) {
+  if (suffix === 'product_query') validateProductQueryRequest(args, sameScope);
   const string = (value) => typeof value === "string" && value.length > 0;
   if (suffix === "stage_failure" && ![13, 15, 16].includes(args.stage?.stageNumber)) throw new ValidationError("pipeline_stage_failure_not_worker_owned");
   if (suffix === "stage_failure" && (!string(args.runId) || !string(args.decisionId) || !/^[a-f0-9]{64}$/.test(args.decisionHash) || !args.stage || args.stage.runId !== args.runId || !string(args.stage.pipelineStageId) || !string(args.stage.executionStepId) || !string(args.stage.attemptId) || !args.metrics || COUNTERS.some((key) => !Number.isFinite(args.metrics[key]) || args.metrics[key] < 0) || !Number.isFinite(Date.parse(args.startedAt)) || !Number.isFinite(Date.parse(args.finishedAt)) || Date.parse(args.finishedAt) < Date.parse(args.startedAt) || !string(args.error?.code) || !string(args.error?.message))) throw new ValidationError("pipeline_invalid_stage_failure");
@@ -80,6 +82,7 @@ export function validatePipelineResponse(result, request, suffix) {
   try {
     if (!result || result.schemaVersion !== PIPELINE_VERSION || !sameScope(result.scope, request.scope)) invalid();
     scopedEnvelopes(result, request.scope);
+    if (suffix === 'product_query') validateProductQueryResponse(result, request);
     if (suffix === "stage_failure" && result.accepted !== true) invalid();
     if (suffix === "submit" && (result.batchId !== request.batch.batchId || !(result.decisionId === null || (typeof result.decisionId === "string" && result.decisionId)) || typeof result.status !== "string")) invalid();
     if (suffix === "claim" && (!Array.isArray(result.decisions) || result.decisions.length > 1 || result.decisions.some((d) => !d.decisionId || !/^[a-f0-9]{64}$/.test(d.decisionHash) || d.schemaVersion !== PIPELINE_VERSION || !sameScope(d.scope, request.scope)))) invalid();

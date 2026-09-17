@@ -1,7 +1,7 @@
 ---
-version: "1.4.2b"
+version: "1.4.3b"
 created_at: "2026-09-07T23:00:00+07:00,RWANG,working-tree"
-last_update: "2026-09-11T00:00:00+07:00,KIN"
+last_update: "2026-09-18T00:00:00+07:00,RWANG"
 status: "beta"
 superseded_by: null
 attributes:
@@ -59,6 +59,7 @@ Tier 4 GenesisBlock worker stages 13 / 15 / 16 and publication
         └──────────────────────────────────────────────────┘
 
 Tier 1 source or Tier 4 worker ── query ──► MSP ── loopback POST /query ──► Tier 4
+Tier 1 source or Tier 4 worker ── product_query ──► MSP ── loopback POST /products/query ──► Tier 4
 Tier 4 query response ────────────────────► MSP ───────────────► caller
 ```
 
@@ -132,20 +133,21 @@ The grants are deliberately separate:
 
 | Role | Allowed MSP tools |
 |---|---|
-| `source` | `msp_pipeline_submit`, `msp_pipeline_evidence`, `msp_pipeline_query` |
-| `worker` | `msp_pipeline_claim`, `msp_pipeline_graph_receipt`, `msp_pipeline_write_receipt`, `msp_pipeline_gate`, `msp_pipeline_publication_receipt`, `msp_pipeline_stage_failure`, `msp_pipeline_query` |
+| `source` | `msp_pipeline_submit`, `msp_pipeline_evidence`, `msp_pipeline_query`, `msp_pipeline_product_query` |
+| `worker` | `msp_pipeline_claim`, `msp_pipeline_graph_receipt`, `msp_pipeline_write_receipt`, `msp_pipeline_gate`, `msp_pipeline_publication_receipt`, `msp_pipeline_stage_failure`, `msp_pipeline_query`, `msp_pipeline_product_query` |
 
 The source grant cannot claim a decision, report a physical receipt, request a
 gate, or publish. The worker grant cannot submit source content or pull the
-source evidence cursor. `query` is intentionally available to both because it
-is a read-only, scope-checked Tier 4 operation.
+source evidence cursor. `query` and `product_query` are intentionally available
+to both because they are read-only, scope-checked Tier 4 operations.
 
-## Nine operations
+## Ten operations
 
-The nine `msp_pipeline_*` tools are registered by the MSP composition root and
+The ten `msp_pipeline_*` tools are registered by the MSP composition root and
 served over the existing newline-delimited JSON-RPC `tools/call` transport.
-MSP relays the first eight to the configured GKS stdio provider. Query is the
-exception: it is sent to the explicit Tier 4 loopback HTTP server.
+MSP relays the eight GKS-owned operations to the configured GKS stdio provider.
+`query` and `product_query` are sent to the explicit Tier 4 loopback HTTP
+server.
 
 | MSP tool | Grant | Request payload | Validated response | Downstream owner |
 |---|---|---|---|---|
@@ -158,6 +160,7 @@ exception: it is sent to the explicit Tier 4 loopback HTTP server.
 | `msp_pipeline_stage_failure` | worker | exact stage identity, six measured metrics, times and bounded `{code,message}` error | `accepted` | GKS records a single failed terminal for Stage 13, 15, or 16 |
 | `msp_pipeline_evidence` | source | `runId`, caller-owned `afterCursor`, `limit` from 1–100 | ordered `rows` and `nextCursor` | GKS returns durable stage evidence; MSP stores no cursor |
 | `msp_pipeline_query` | source or worker | `query`, `topK` from 1–100, optional `snapshotId` | one scoped generation and results with four citation ids plus content hash | Tier 4 loopback `/query`, never GKS |
+| `msp_pipeline_product_query` | source or worker | `published-products.v1`, `search`/`price`/`budget`, bounded quantity/budget and `edge-published-corpus.v1` context | snapshot product results, manifest-bound citations and explicit THB snapshot pricing | Tier 4 loopback `/products/query`, never GKS |
 
 The exact nested fields and required properties live in the machine schema. A
 few invariants are repeated here because they define the boundary:
@@ -179,6 +182,13 @@ few invariants are repeated here because they define the boundary:
   and citation fields `sourceId`, `rawArtifactId`, `parsedArtifactId`,
   `chunkId`, and `contentHash`. MSP rejects a scope mismatch, malformed
   response, redirect, non-loopback origin, or missing worker configuration.
+- Product query results require `published-products.v1`, an exact
+  `edge-published-corpus.v1` manifest identity and citations that point back to
+  an entry in that manifest. Price responses use THB minor units and
+  `CATALOG_SNAPSHOT` provenance; missing expiry, unit, tax and shipping remain
+  unknown and are never presented as a live quote. MSP rejects stale or
+  cross-scope context, malformed output, redirect, non-loopback origin, and
+  missing worker configuration before disclosure.
 
 ## Ordered execution and recovery
 
@@ -196,7 +206,8 @@ Worker: asks for GKS gate
   → if allowed, publishes and sends publication receipt for Stage 17
   → if denied, records failed Stage 17 without a publication receipt
 Source: pulls evidence through msp_pipeline_evidence
-Source or worker: queries one published Tier 4 generation through MSP
+Source or worker: queries one published Tier 4 generation through
+msp_pipeline_query or msp_pipeline_product_query
 ```
 
 MSP does not implement a durable queue or cache worker results. The source or
@@ -207,12 +218,14 @@ payload for an existing identity is a conflict. A cursor belongs to the
 evidence puller, so restarting a caller means reopening its own cursor and
 re-reading an already durable page.
 
-The only worker HTTP hop is `POST /query` at
+Worker HTTP hops are `POST /query` and `POST /products/query` at
 `MSP_PIPELINE_WORKER_URL`. It must be an explicit `http://127.0.0.1:<port>` or
 `http://[::1]:<port>` origin with no credentials, path, query, or hash. MSP
 sends `Bearer MSP_PIPELINE_WORKER_TOKEN`, sets redirect handling to `error`,
 and requires the worker to validate `GENESIS_WORKER_QUERY_TOKEN` and the exact
-scope. The worker binds one published generation for the complete query.
+scope. The worker binds one published generation for each complete query; the
+product route also binds the supplied manifest identity and honors its short
+turn deadline.
 
 ## Extension rules
 
@@ -231,7 +244,7 @@ The boundary is extended in this order:
    the authenticated request and validates the result; it does not decide.
 4. MSP changes are limited to runtime grants, role/scope validation, relay
    transport, response validation, count-only journaling, and the explicit
-   Tier 4 query hop. The source/worker grant table must be updated together
+   Tier 4 query hops. The source/worker grant table must be updated together
    with the machine schema and security cases.
 5. Add contract, malformed-response, wrong-scope, credential-separation,
    restart/retry, and cross-repository acceptance evidence. Update this
@@ -253,6 +266,7 @@ and uncoordinated role grants fail closed.
 | Machine-readable request/response surface | [`packages/msp-contracts/schemas/GENESISRAG17.tools.json`](../packages/msp-contracts/schemas/GENESISRAG17.tools.json) |
 | Contract and redirect tests | [`tests/contract/pipeline-relay.test.mjs`](../tests/contract/pipeline-relay.test.mjs) |
 | Scope, role and nested-envelope security tests | [`tests/security/pipeline-vault-scoping.security.mjs`](../tests/security/pipeline-vault-scoping.security.mjs) |
+| Product-query scope and citation security tests | [`tests/security/product-query-vault-scoping.security.mjs`](../tests/security/product-query-vault-scoping.security.mjs) |
 | Real MSP stdio registration and provider boundary | [`tests/security/pipeline-vault-scoping.security.mjs`](../tests/security/pipeline-vault-scoping.security.mjs) starts the MSP child process; [`tests/integration/gks-provider-bridge.test.mjs`](../tests/integration/gks-provider-bridge.test.mjs) proves the configured GKS stdio bridge |
 | Cross-repository raw-to-publication acceptance | [pinned zuri-ai acceptance at `b64b46d`](https://github.com/Freshair129/zuri.ai/blob/b64b46df057d3160c659afa3c34628ee86520257/apps/server/tests/acceptance/genesisrag17-e2e.test.js) |
 
@@ -263,6 +277,11 @@ the matching evidence and, for successful Stage 17, a matching publication
 receipt.
 
 ## Version diff
+
+`1.4.3b` adds the owner-approved tenth operation, `msp_pipeline_product_query`,
+with its published-corpus manifest, `/products/query` loopback, snapshot-only
+pricing and contract/security evidence. The existing nine-operation relay
+remains unchanged.
 
 `1.3.0b` expands the relay record into the complete nine-operation contract,
 states the exact role/scope and credential boundary, documents the ordered
@@ -279,6 +298,7 @@ with no changes to the frozen API-009 memory surface.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 1.4.3b | 2026-09-18 | beta | Added the owner-approved `msp_pipeline_product_query` Tier 4 loopback extension: source/worker grants, published-corpus manifest and citation validation, snapshot-only price semantics, product route and acceptance boundaries. | 2696d4e | RWANG |
 | 1.4.2b | 2026-09-11 | beta | A GKS child process's environment is now built from an explicit allowlist (OS basics + `GKS_*` config) for every spawn, not a copy of MSP's own environment with a fixed credential blocklist applied only to the pipeline relay path. Security fix. | working-tree | KIN |
 | 1.4.0b | 2026-09-08 | beta | Enforce PASS-only publication responses and preserve Pending/null acknowledgement semantics after code audit. | working-tree | RWANG |
 | 1.3.0b | 2026-09-08 | beta | Documented all nine authenticated operations, ownership, exact grants/scope, ordered execution, query loopback, extension rules, code/test paths and pinned zuri-ai acceptance. | working-tree | ATHER |

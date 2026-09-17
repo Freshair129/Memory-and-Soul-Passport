@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { createPipelineHandlers } from "../../apps/msp-server/src/transport/handlers/pipeline-handlers.mjs";
 import { validatePipelineRequest, validatePipelineResponse, parsePrincipals, PIPELINE_VERSION } from "@freshair129/msp-contracts/pipeline";
 
@@ -10,6 +11,71 @@ const env = { MSP_GKS_PIPELINE_CREDENTIAL: "relay-test", MSP_PIPELINE_PRINCIPALS
 ]) };
 const metrics = { records_in: 2, records_out: 1, records_quarantined: 1, error_count: 0, retry_count: 0, duration_ms: 5 };
 const row = { ...envelope, cursor: 1, runId: "run", pipelineStageId: "stage-9", executionStepId: "step-9", attemptId: "attempt-9", stageNumber: 9, outcome: "SUCCEEDED", startedAt: "2026-09-07T00:00:00Z", finishedAt: "2026-09-07T00:00:01Z", metrics, details: {} };
+const genesisSchema = JSON.parse(readFileSync(new URL("../../packages/msp-contracts/schemas/GENESISRAG17.tools.json", import.meta.url), "utf8"));
+const productContext = (overrides = {}) => ({
+  schemaVersion: "edge-published-corpus.v1",
+  scope,
+  corpusId: "catalog-corpus",
+  corpusGeneration: 7,
+  manifestHash: "e".repeat(64),
+  expiresAt: new Date(Date.now() + 40000).toISOString(),
+  entries: [{ sourceId: "catalog-source", snapshotId: "snapshot-7", generation: "7", rawArtifactId: "raw-7", parsedArtifactId: "parsed-7", receiptHash: "f".repeat(64) }],
+  ...overrides,
+});
+const productRequest = (overrides = {}) => ({
+  ...envelope,
+  credential: "source-test",
+  productSchemaVersion: "published-products.v1",
+  operation: "price",
+  code: "PM-A",
+  quantity: 100,
+  corpusContext: productContext(),
+  ...overrides,
+});
+const productReply = (request) => ({
+  ...envelope,
+  productSchemaVersion: "published-products.v1",
+  operation: request.operation,
+  corpusId: request.corpusContext.corpusId,
+  corpusGeneration: request.corpusContext.corpusGeneration,
+  manifestHash: request.corpusContext.manifestHash,
+  results: [],
+  price: { code: request.code, tiers: [], selected: null, status: "PRICE_MISSING" },
+  lanes: { vectorCalls: 0, graphCalls: 0 },
+  priceBasis: "PUBLISHED_CATALOG_SNAPSHOT_NOT_LIVE_QUOTE",
+});
+const productCitation = {
+  sourceId: "catalog-source",
+  snapshotId: "snapshot-7",
+  generation: "7",
+  rawArtifactId: "raw-7",
+  parsedArtifactId: "parsed-7",
+  chunkId: "chunk-7",
+  contentHash: "d".repeat(64),
+};
+const productGraph = {
+  predicate: "PRICED_AT",
+  entityId: "PM-A",
+  targetEntityId: "PRICE-TIER-1",
+  targetCode: "PM-A:1",
+  factId: "fact-1",
+  path: [{ id: "edge-1", from: "PM-A", to: "PRICE-TIER-1", rel: "PRICED_AT" }],
+  citation: productCitation,
+};
+const productTier = {
+  minQty: 1,
+  amountMinor: 10000,
+  currency: "THB",
+  status: "CATALOG_SNAPSHOT",
+  unit: null,
+  validFrom: null,
+  validUntil: null,
+  taxBasis: null,
+  shippingBasis: null,
+  asOf: "2026-09-17",
+  citation: productCitation,
+  graph: productGraph,
+};
 
 describe("genesisrag17 relay contract", () => {
   it("preserves pending submit acknowledgements and enforces PASS-only publication", () => {
@@ -70,6 +136,84 @@ describe("genesisrag17 relay contract", () => {
       const other = createPipelineHandlers({ env: { ...env, MSP_PIPELINE_WORKER_URL: url, MSP_PIPELINE_WORKER_TOKEN: "query-test" }, fetchImpl: () => { throw new Error("called"); } });
       await expect(other.msp_pipeline_query(args)).rejects.toThrow(/loopback/);
     }
+  });
+
+  it("routes a typed product query to the product loopback and journals counts only", async () => {
+    const calls = [], journal = [];
+    const request = productRequest();
+    const handlers = createPipelineHandlers({
+      env: { ...env, MSP_PIPELINE_WORKER_URL: "http://127.0.0.1:1234", MSP_PIPELINE_WORKER_TOKEN: "query-test" },
+      journal: { append: (entry) => journal.push(entry) },
+      fetchImpl: async (url, options) => {
+        calls.push({ url, options });
+        return { ok: true, json: async () => productReply(request) };
+      },
+    });
+    const result = await handlers.msp_pipeline_product_query({ ...request, actor: "forged", relayCredential: "forged", authenticatedPrincipal: { principalId: "forged" } });
+    expect(result).toEqual(productReply(request));
+    expect(calls[0].url.href).toBe("http://127.0.0.1:1234/products/query");
+    expect(calls[0].options.redirect).toBe("error");
+    expect(calls[0].options.headers.authorization).toBe("Bearer query-test");
+    expect(calls[0].options.signal).toBeDefined();
+    const payload = JSON.parse(calls[0].options.body);
+    expect(payload).toEqual({ ...envelope, productSchemaVersion: request.productSchemaVersion, operation: request.operation, code: request.code, quantity: request.quantity, corpusContext: request.corpusContext });
+    expect(payload).not.toHaveProperty("credential");
+    expect(payload).not.toHaveProperty("actor");
+    expect(payload).not.toHaveProperty("relayCredential");
+    expect(JSON.stringify(journal)).not.toMatch(/PM-A|source-test|query-test|forged/);
+    expect(journal[0].payload.rows).toBe(0);
+  });
+
+  it("enforces the product manifest and operation-specific response contract", () => {
+    const request = productRequest();
+    expect(() => validatePipelineRequest(request, "product_query")).not.toThrow();
+    for (const bad of [
+      { ...request, corpusContext: productContext({ expiresAt: "2000-01-01T00:00:00Z" }) },
+      { ...request, corpusContext: productContext({ scope: { ...scope, tenantId: "other" } }) },
+      { ...request, operation: "search" },
+      { ...request, operation: "budget", maxPriceThb: undefined },
+    ]) expect(() => validatePipelineRequest(bad, "product_query")).toThrow(/product_query/);
+    const response = productReply(request);
+    expect(validatePipelineResponse(response, request, "product_query")).toEqual(response);
+    for (const bad of [
+      { ...response, manifestHash: "a".repeat(64) },
+      { ...response, price: { ...response.price, code: "PM-OTHER" } },
+      { ...response, scope: { ...scope, tenantId: "other" } },
+    ]) expect(() => validatePipelineResponse(bad, request, "product_query")).toThrow(/invalid_response/);
+  });
+
+  it("accepts search and budget results with manifest-bound graph and price evidence", () => {
+    const searchRequest = productRequest({ operation: "search", query: "bottle", code: undefined, quantity: undefined });
+    const searchPrice = { code: "PM-A", tiers: [productTier], selected: null, status: "CATALOG_SNAPSHOT" };
+    const searchResponse = {
+      ...productReply(searchRequest),
+      price: undefined,
+      results: [{ code: "PM-A", name: "Product A", score: 0.9, kind: "PRODUCT", graph: [productGraph], citation: productCitation, price: searchPrice }],
+    };
+    expect(validatePipelineResponse(searchResponse, searchRequest, "product_query")).toEqual(searchResponse);
+
+    const budgetRequest = productRequest({ operation: "budget", quantity: 100, maxPriceThb: 200 });
+    const budgetPrice = { code: "PM-A", tiers: [productTier], selected: productTier, status: "CATALOG_SNAPSHOT" };
+    const budgetResponse = {
+      ...productReply(budgetRequest),
+      results: [{ code: "PM-A", name: "Product A", score: 0.9, kind: "PRODUCT", graph: [productGraph], citation: productCitation, price: budgetPrice }],
+    };
+    expect(validatePipelineResponse(budgetResponse, budgetRequest, "product_query")).toEqual(budgetResponse);
+  });
+
+  it("publishes the product query tool with both scoped caller roles", () => {
+    const tool = genesisSchema.tools.find(({ name }) => name === "msp_pipeline_product_query");
+    expect(tool).toMatchObject({
+      roles: ["source", "worker"],
+      inputSchema: {
+        required: expect.arrayContaining(["productSchemaVersion", "operation", "corpusContext"]),
+        properties: {
+          productSchemaVersion: { const: "published-products.v1" },
+          operation: { enum: ["search", "price", "budget"] },
+          topK: { type: "integer", minimum: 1, maximum: 20 },
+        },
+      },
+    });
   });
 
   it("refuses malformed config instead of selecting an ambiguous privileged grant", () => {
