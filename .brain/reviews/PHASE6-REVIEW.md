@@ -1,7 +1,7 @@
 ---
-version: "0.1.0b"
+version: "0.1.1b"
 created_at: "2026-09-17T03:45:00+07:00,RWANG,e349b90"
-last_update: "2026-09-17T03:45:00+07:00,RWANG"
+last_update: "2026-09-17T12:26:06+07:00,RWANG"
 status: beta
 attributes:
   domain: mission-state-protocol
@@ -64,14 +64,16 @@ See `.brain/rca/2026-09-17-phase6-live-source-review.md`.
   commits. Four external release/document/package rows remain NOT_RUN in the
   runtime harness, which deliberately exits 2 instead of claiming a release.
 - Client 0.2.7 package dry-run PASS: eight files, 17.4 kB packed, 53.0 kB
-  unpacked. No publication or release tag.
+  unpacked. GitHub prerelease `v0.2.7` is tagged at merge `6b99f402`;
+  npm publication remains deferred.
 - Local engineering DB upgraded from schema 14 to 15: integrity ok,
   zero FK violations, zero entities; `.tmp/phase6-local-db-audit.json`.
 
 Two independent Luna/max reviewers found no remaining P0/P1 blocker in their
-bounded source review. Root retained final integration ownership. This is
-source/local evidence, not an approval to merge, tag, publish or activate a
-consumer. Hosted CI must be assessed against the final pushed SHA separately.
+bounded source review. Root retained final integration ownership. PR #32 is
+merged at `6b99f402`, hosted Node 22/24 CI passed in run `35151126044`, and
+GitHub prerelease `v0.2.7` is published. No production activation or npm
+publication is claimed.
 
 ## Remaining boundaries
 
@@ -81,11 +83,13 @@ source-reference JSON on an already-authorized source can still produce a
 parse error; current producer writes valid JSON and the trigger pins it.
 This is a low-priority historical-data diagnostic limitation, not an access
 bypass. Legacy unscoped context behavior remains as documented in NOTES.
-BL075 merge and BL088 release gates remain open; broader summary-item
-ingestion is not silently represented as implemented.
+BL075 merge and the GitHub prerelease portion of BL088 are complete. npm
+publication and broader summary-item ingestion remain outside this approved
+scope.
 
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.1.1b | 2026-09-17 | beta | Record owner-approved Phase 7 closure, hosted CI evidence and GitHub prerelease target; retain npm and production boundaries. | 6b99f402 | RWANG |
 | 0.1.0b | 2026-09-17 | beta | Record approved Phase 6 implementation, independent findings, local evidence and release boundaries | working-tree | RWANG |

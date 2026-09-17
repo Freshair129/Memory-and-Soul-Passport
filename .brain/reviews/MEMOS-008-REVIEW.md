@@ -13,7 +13,8 @@ attributes:
 
 Verdict: approved-scope implementation reviewed; final local suites PASS.
 The later approved Phase 6 implementation is reviewed in PHASE6-REVIEW.md.
-Release remains OPEN. No production deployment is claimed.
+PR #32 is merged and GitHub prerelease `v0.2.7` is complete; npm publication
+remains deferred. No production deployment is claimed.
 Complexity C-3; risk HIGH (authorization, replay protection, schema changes).
 
 ## Authority and integration baseline
