@@ -263,8 +263,15 @@ export function createMspStdioCaller({ command, args = [], cwd, env = process.en
       // here keeps close() from hanging on that path.
       child.once("error", () => resolve());
     });
-    child.kill();
-    return settled;
+    try {
+      // readline exits cleanly when stdin ends, giving the server a chance to
+      // close SQLite before the caller reopens the database.
+      child.stdin.end();
+    } catch {
+      // The child may already be gone; the fallback below still settles it.
+    }
+    const killer = setTimeout(() => child.kill(), 1000);
+    return settled.finally(() => clearTimeout(killer));
   };
   return call;
 }
