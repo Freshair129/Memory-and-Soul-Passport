@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.8
+
+- call.close() ends the child runtime stdin before the fallback kill and resolves
+  only after the child exits, so callers can safely reopen or remove the SQLite
+  database after shutdown on Windows.
+- The fallback kill remains bounded to one second when the child does not
+  exit after stdin closes.
+
 ## 0.2.7 (release candidate, unpublished)
 
 - Forward `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED`, `MSP_IDENTITY_HMAC_KEY_VERSION`
