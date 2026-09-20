@@ -1,7 +1,7 @@
 ---
-version: "1.0.0b"
+version: "1.0.1b"
 created_at: "2026-09-08T00:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-08T00:00:00+07:00,ATHER"
+last_update: "2026-09-20T17:08:38+07:00,RWANG"
 status: "beta"
 superseded_by: null
 attributes:
@@ -37,14 +37,16 @@ $GksEntry = Join-Path $GksRoot 'apps/gks-server/bin/gks-server.mjs'
 if (-not (Test-Path -LiteralPath $GksEntry)) { throw 'GKS entrypoint must exist at the explicit path' }
 $Node = (Resolve-Path 'C:\Users\pc\workspace\ki17-runtime\node.exe').Path
 if (-not [IO.Path]::IsPathRooted($Node)) { throw 'node runtime must be an absolute executable path' }
+$Npm = Join-Path (Split-Path -Parent $Node) 'npm.cmd'
+if (-not (Test-Path -LiteralPath $Npm)) { throw 'pinned npm launcher must exist beside the node runtime' }
 $NodeVersion = (& $Node --version)
 if ($NodeVersion -notmatch '^v24\.18\.') { throw "verified Node v24.18.x required; got $NodeVersion" }
 
 Push-Location $MspRoot
-npm ci
+& $Npm ci
 Pop-Location
 Push-Location $GksRoot
-npm ci
+& $Npm ci
 Pop-Location
 
 Write-Output "Node runtime: $NodeVersion"
@@ -68,6 +70,8 @@ $GksEntry = Join-Path $GksRoot 'apps/gks-server/bin/gks-server.mjs'
 if (-not (Test-Path -LiteralPath $GksEntry)) { throw 'GKS entrypoint must exist at the explicit path' }
 $Node = (Resolve-Path 'C:\Users\pc\workspace\ki17-runtime\node.exe').Path
 if (-not [IO.Path]::IsPathRooted($Node)) { throw 'node runtime must be an absolute executable path' }
+$Npm = Join-Path (Split-Path -Parent $Node) 'npm.cmd'
+if (-not (Test-Path -LiteralPath $Npm)) { throw 'pinned npm launcher must exist beside the node runtime' }
 $NodeVersion = (& $Node --version)
 if ($NodeVersion -notmatch '^v24\.18\.') { throw "verified Node v24.18.x required; got $NodeVersion" }
 if ([string]::IsNullOrWhiteSpace($env:TEMP)) { throw 'TEMP must be explicitly available for the isolated run root' }
@@ -132,7 +136,7 @@ security boundary without touching a production database:
 
 ```powershell
 Push-Location $MspRoot
-npm exec vitest run tests/contract/pipeline-relay.test.mjs
+& $Npm exec vitest run tests/contract/pipeline-relay.test.mjs
 & $Node --test --test-concurrency=1 tests/security/pipeline-vault-scoping.security.mjs
 Pop-Location
 ```
@@ -238,4 +242,5 @@ entrypoint acceptance.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 1.0.1b | 2026-09-20 | beta | Bound install and contract commands to the verified Node 24.18 npm launcher so native bindings cannot silently build against the host Node runtime. | working-tree | RWANG |
 | 1.0.0b | 2026-09-08 | beta | Added an isolated, synthetic-credential MSP ↔ GKS relay smoke with explicit paths, fail-closed query guidance and cleanup. | working-tree | ATHER |

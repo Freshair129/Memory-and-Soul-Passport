@@ -1,8 +1,8 @@
 ---
-version: "1.0.0b"
+version: "1.0.1b"
 status: beta
 created_at: "2026-09-07T22:18:44+07:00,RWANG"
-last_update: "2026-09-07T22:18:44+07:00,RWANG"
+last_update: "2026-09-20T17:04:18+07:00,RWANG"
 ---
 
 # Isolated MSP native test runtime
@@ -26,3 +26,15 @@ A one-statement in-memory SQLite smoke test passed. The abort surfaced under the
 ## Prevention
 
 Use the isolated pinned Node24.18.0 runtime for this acceptance run and rebuild legacy native dependencies against the same headers. Verify the downloaded Windows node.exe against official release SHASUMS256.txt before use. Record runtime and dependency build target in the acceptance report; never count a smoke test as proof of the process suite. No host Node installation or production runtime was changed.
+
+## 2026-09-20 validation
+
+The documented runtime path was provisioned from the official Node
+`v24.18.0` Windows x64 archive after SHA-256 verification. The
+`better-sqlite3@11.10.0` binding was rebuilt with `node-gyp@12.3.0` against
+the Node `24.18.0` headers. With that matched runtime and binding:
+
+- Vitest: 24 files, 186 tests passed.
+- Security: 45 tests passed, 0 failed.
+- GKS cross-repository integration: 5 files, 8 tests passed.
+- `npm audit --audit-level=moderate`: 0 vulnerabilities.
