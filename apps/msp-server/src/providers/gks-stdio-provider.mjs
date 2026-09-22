@@ -1,6 +1,7 @@
 // MSP-owned client for the configured GKS MCP stdio provider. It is separate
 // from the parent transport boundary even though this installed MCP SDK uses
 // the same newline-delimited JSON-RPC framing on both links.
+import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { GksProviderUnavailableError } from "@freshair129/msp-contracts/errors";
 import { containsEscapedObjectKey } from "../transport/escaped-object-key-scan.mjs";
@@ -63,6 +64,10 @@ export const OS_BASIC_ENV_KEYS = new Set([
 //     MSP_GKS_PIPELINE_CREDENTIAL) against THIS value in its own environment.
 //     MSP_GKS_PIPELINE_CREDENTIAL itself is never forwarded as an env var —
 //     it travels only inside the signed request payload.
+//   GKS_MSP_AUTH_REQUIRED           - set to 1 for the managed legacy-tool
+//     transport envelope; absent preserves frozen API-010 compatibility.
+//   GKS_MSP_RELAY_CREDENTIAL        - required with the secure mode and placed
+//     only in the outer MSP metadata envelope, never in the API-010 payload.
 // None of MSP's own secrets (MSP_PIPELINE_PRINCIPALS, MSP_GKS_PIPELINE_CREDENTIAL,
 // MSP_PIPELINE_WORKER_TOKEN, GENESIS_WORKER_QUERY_TOKEN, MSP_DB_PATH, or
 // anything else outside these two groups) is named `GKS_*`, so the prefix
@@ -84,20 +89,24 @@ export function createGksProviderFromEnvironment(env = process.env) {
   const cwd = env.MSP_GKS_CWD?.trim() || undefined;
   const args = parseArgs(env.MSP_GKS_ARGS);
   const gksChildEnv = buildGksChildEnv(env);
+  const mspAuth = env.GKS_MSP_AUTH_REQUIRED === "1"
+    ? { relayCredential: env.GKS_MSP_RELAY_CREDENTIAL?.trim(), defaultPortfolioId: env.GKS_DEFAULT_PORTFOLIO_ID?.trim() }
+    : null;
+  if (mspAuth && !mspAuth.relayCredential) throw unavailable("GKS_MSP_RELAY_CREDENTIAL is required when GKS_MSP_AUTH_REQUIRED=1");
   return {
     async pipelineCall(suffix, request) {
       if (!["submit", "claim", "graph_receipt", "write_receipt", "gate", "publication_receipt", "stage_failure", "evidence"].includes(suffix)) throw unavailable("unsupported pipeline operation");
       return callGksTool({ command, args, cwd, env: gksChildEnv }, `gks_pipeline_${suffix}`, request);
     },
     async promote(candidate) {
-      return callGksTool({ command, args, cwd, env: gksChildEnv }, "gks_knowledge_promote", candidate);
+      return callGksTool({ command, args, cwd, env: gksChildEnv, mspAuth }, "gks_knowledge_promote", candidate);
     },
     // The one read-only tool MSP relays for zuri-ai's evidence pull
     // (GKS ADR-GKS-LEDGER-REPORTING D2, Option B): zuri-ai -> MSP ->
     // gks_stage_evidence_export. MSP owns no stage and no cursor; it carries
     // the caller's scope envelope through and the page back, unchanged.
     async exportStageEvidence(request) {
-      return callGksTool({ command, args, cwd, env: gksChildEnv }, "gks_stage_evidence_export", request);
+      return callGksTool({ command, args, cwd, env: gksChildEnv, mspAuth }, "gks_stage_evidence_export", request);
     },
   };
 }
@@ -110,7 +119,60 @@ function unavailable(message) {
   return new GksProviderUnavailableError(`gks_provider_unavailable: ${message}`);
 }
 
-async function callGksTool({ command, args, cwd, env }, toolName, input) {
+function normalizeScope(scope) {
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) throw new Error("scope is required for GKS MSP auth.");
+  const normalized = {
+    portfolioId: typeof scope.portfolioId === "string" ? scope.portfolioId.trim() : "",
+    tenantId: typeof scope.tenantId === "string" ? scope.tenantId.trim() : "",
+    businessId: typeof scope.businessId === "string" ? scope.businessId.trim() : "",
+    workspaceId: typeof scope.workspaceId === "string" ? scope.workspaceId.trim() : "",
+    projectId: typeof scope.projectId === "string" ? scope.projectId.trim() : "",
+    sharing: scope.sharing ?? "private",
+  };
+  if (!normalized.portfolioId) throw new Error("scope.portfolioId is required for GKS MSP auth.");
+  return normalized;
+}
+
+function scopeForAuth(toolName, input, defaultPortfolioId) {
+  if (toolName === "gks_knowledge_promote" && !input.scope) {
+    return normalizeScope({
+      portfolioId: defaultPortfolioId,
+      tenantId: input.tenant_id,
+      businessId: input.business_id,
+      workspaceId: input.workspace_id,
+      projectId: input.project_id,
+      sharing: "private",
+    });
+  }
+  return normalizeScope(input.scope);
+}
+
+function mspScopeDigest(scope) {
+  return crypto.createHash("sha256").update([
+    scope.portfolioId,
+    scope.tenantId,
+    scope.businessId,
+    scope.workspaceId,
+    scope.projectId,
+    scope.sharing,
+  ].join("\u0000"), "utf8").digest("hex");
+}
+
+function authMetaFor(toolName, input, mspAuth) {
+  if (!mspAuth) return undefined;
+  const scope = scopeForAuth(toolName, input, mspAuth.defaultPortfolioId);
+  return {
+    gksMspAuth: {
+      version: "gks-msp-auth/v1",
+      principalId: "msp-runtime",
+      role: "msp",
+      relayCredential: mspAuth.relayCredential,
+      scopeDigest: mspScopeDigest(scope),
+    },
+  };
+}
+
+async function callGksTool({ command, args, cwd, env, mspAuth }, toolName, input) {
   const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: false });
   let buffer = Buffer.alloc(0);
   let stderrTail = "";
@@ -200,7 +262,10 @@ async function callGksTool({ command, args, cwd, env }, toolName, input) {
       clientInfo: { name: "govibe-msp-runtime", version: "0.1.0" },
     });
     child.stdin.write(encode({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }));
-    const result = await request("tools/call", { name: toolName, arguments: input });
+    const params = { name: toolName, arguments: input };
+    const authMeta = authMetaFor(toolName, input, mspAuth);
+    if (authMeta) params._meta = authMeta;
+    const result = await request("tools/call", params);
     if (result?.isError) {
       const text = result.content?.find((item) => item.type === "text")?.text;
       throw unavailable(text ?? "GKS tool returned an error.");
