@@ -1,7 +1,7 @@
 ---
-version: "0.2.8b"
+version: "0.3.0b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-17T03:40:00+07:00,RWANG"
+last_update: "2026-09-22T06:50:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -29,7 +29,7 @@ their historical contract. Digest reads never include GROUP/ROOM sources and
 return reference-only provenance receipts. Fresh grants do not make revoked
 or erased source content eligible again.
 
-MSP is the memory and context authority between a consumer such as GoVibe and the optional GKS knowledge provider. For the isolated GenesisRAG17 pipeline it is the Tier 2 authenticated relay between Tier 1 zuri-ai, Tier 3 GKS and the Tier 4 worker. The extracted repository preserves the process boundary:
+MSP is a standalone memory and context authority for opaque external consumers and the optional GKS knowledge provider. No consumer repository is a build-time or schema dependency. For the isolated GenesisRAG17 pipeline it is the Tier 2 authenticated relay between Tier 1 zuri-ai, Tier 3 GKS and the Tier 4 worker. The extracted repository preserves the process boundary:
 
 ```text
 consumer -> msp-client-js -> NDJSON JSON-RPC over stdio -> msp-server
@@ -91,7 +91,7 @@ msp-client-js     (Node built-ins + local authority enforcement only)
 
 ## Migration ownership
 
-The repository-root `migrations/` directory is canonical. `msp-storage` owns the runner; `msp-server` resolves the canonical directory and supplies it to the runner. Tests may supply a temporary migration directory explicitly. Migration filenames, ordering, checksums, and SQL content are preserved from GoVibe. Every pending migration -- with or without a directive -- is run through a structural foreign-key check before it is allowed to commit; it is not directive-gated, because header scanning alone cannot catch every way a migration might dodge the directive (RKOI follow-up warning 2). The runner also supports one explicit opt-in mode, `-- msp-migration: foreign-keys=off` (WP-E0), which relaxes row-level foreign-key enforcement for a rebuild of a table other tables reference by foreign key, once the database can already hold rows the rebuild would otherwise orphan (see `docs/MIGRATION.md`).
+The repository-root `migrations/` directory is canonical. `msp-storage` owns the runner; `msp-server` resolves the canonical directory and supplies it to the runner. Tests may supply a temporary migration directory explicitly. Migration filenames, ordering, checksums, and SQL content are canonical in this repository. Historical lineage is retained in migration and review records where applicable. Every pending migration -- with or without a directive -- is run through a structural foreign-key check before it is allowed to commit; it is not directive-gated, because header scanning alone cannot catch every way a migration might dodge the directive (RKOI follow-up warning 2). The runner also supports one explicit opt-in mode, `-- msp-migration: foreign-keys=off` (WP-E0), which relaxes row-level foreign-key enforcement for a rebuild of a table other tables reference by foreign key, once the database can already hold rows the rebuild would otherwise orphan (see `docs/MIGRATION.md`).
 
 ## Security invariants
 
@@ -106,21 +106,80 @@ The repository-root `migrations/` directory is canonical. `msp-storage` owns the
 - Every GKS child process (pipeline relay, promote, stage-evidence export) gets an environment built from an explicit allowlist — GKS's own `GKS_*` configuration plus OS basics — never a copy of MSP's own process environment, and both halves of that allowlist match a variable name case-insensitively (OS basics by whole name, GKS's configuration by `GKS_` prefix) so a caller's casing cannot silently drop a name, which MSP's caller may hand it in full. The Tier 4 worker token is used only for the explicit loopback query and, like every other MSP-internal credential, is never forwarded to a GKS child.
 - A malformed, foreign-scope, redirected or unconfigured pipeline hop fails closed; MSP never turns it into an empty success.
 
-## Multi-user, multi-agent memory surface (API-011, proposed)
+## Canonical data model and ID binding
+
+The persistence model keeps episodic thread memory and durable vault memory
+separate, with one explicit provenance bridge:
+
+```text
+tenant_id (logical partition)
+  ├─ vaults -> entities -> entity_history / links / promotions
+  └─ threads -> chat_sessions -> thread_messages
+                 └─ protected_memory_records / session_summaries
+                              └─ entity_provenance -> target vault/entity
+```
+
+`tenant_id` is a logical partition key; it is not a foreign key to a tenant
+table. Vault ownership is defined by the tuple required by `vault_type`:
+
+- `shared`: `project_id`
+- `workspace_private`: `workspace_id`
+- `global_private`: `agent_id`
+- `principal_private`: `tenant_id`, `principal_id`, `agent_id`, `workspace_id`
+- `principal_passport`: `tenant_id`, `principal_id` (agent and workspace are null)
+
+Legacy shared/workspace/global vault IDs are stable hashes of their owner
+tuple. Principal vault IDs are opaque random IDs and are never derived from
+the owner tuple. Durable entity IDs are deterministic within a vault from
+`vault_id`, `category`, and `key`; thread, session, message, exchange, record,
+summary, and provenance IDs are opaque IDs. Each ID stays in its own namespace.
+
+The only bridge from episodic records to durable memory is
+`entity_provenance`. Its source thread/session/message/record references are
+validated by the application in the same tenant; its target vault/entity
+references are actual storage foreign keys. There is deliberately no direct
+`vault_id` ownership column on a thread or session. Retrieval uses the caller's
+resolved vault scope and returns existing entity IDs; RRF fusion creates no
+identity and cannot widen the scope.
+
+```mermaid
+flowchart LR
+  T[tenant_id] --> V1[principal_private vault]
+  T --> VP[principal_passport vault]
+  P[principal_id] --> V1
+  P --> VP
+  A[agent_id] --> V1
+  W[workspace_id] --> V1
+  V1 --> E[entity_id]
+  VP --> E2[passport entity_id]
+  TH[thread_id] --> S[session_id] --> M[message_id / exchange_id] --> R[record_id]
+  R --> PR[entity_provenance]
+  PR --> E
+  PR --> E2
+```
+
+## Multi-user, multi-agent memory surface (API-011 and Phase 6)
 
 MSP's thread/session/protected-memory surface for many concurrent users and
-agents — reconciling the unmerged `codex/msp-thread-memory` branch with
-`docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` — is proposed, not built;
-see [`ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md`](ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md) and the design's v0.3.0b rewrite.
+agents is implemented by migrations `0008` through `0014`, with Phase 6
+consolidation, passport promotion, provenance and erasure in `0015`. The
+wire-level contracts are API-010/API-011 and the Phase 6 contract; contract,
+integration and security suites exercise the tenant, principal, agent,
+workspace and thread boundaries. The client and consuming applications remain
+opaque external processes and do not become schema dependencies.
+
+The design document remains useful as rationale and gap history; it is not a
+claim that the current repository must import another consumer's schema.
 
 ## Change risk
 
-Risk is HIGH because code crosses package and repository boundaries and migration ownership moves. Mitigation is byte comparison for copied SQL and logic, source-baseline tests, standalone package tests, external-process proof, and a final GoVibe consumer compatibility gate.
+Risk is HIGH because the change crosses package boundaries and migration ownership moves. Mitigation is schema/contract comparison, standalone package tests, external-process proof, security isolation tests, and a final client-contract and cross-process compatibility gate.
 
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.3.0b | 2026-09-22 | beta | Make the MSP standalone boundary explicit, document canonical data model and ID binding, and reconcile API-011/Phase 6 implementation status with current migrations and tests. | working-tree | RWANG |
 | 0.2.8b | 2026-09-17 | beta | Describe approved Phase 6 layering, principal/passport boundaries and atomic erasure. | working-tree | RWANG |
 | 0.2.7b | 2026-09-14 | beta | Linked the proposed multi-user/multi-agent memory surface (API-011): `ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md` and the `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.0b rewrite. No code change. | working-tree | ATHER |
 | 0.2.6b | 2026-09-14 | beta | Migration ownership paragraph corrected: the structural foreign-key check is not directive-gated -- it now runs for every pending migration, plain or directive (RKOI follow-up warning 2); `-- msp-migration: foreign-keys=off` (WP-E0) relaxes row-level enforcement only. | working-tree | JANUS |
