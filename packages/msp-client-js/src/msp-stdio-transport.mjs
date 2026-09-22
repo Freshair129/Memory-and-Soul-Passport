@@ -9,6 +9,7 @@ function encode(payload) {
 /**
  * Every variable the MSP server itself reads, from MSP's own source:
  *   MSP_DB_PATH                    apps/msp-server/bin/msp-server.mjs
+ *   MSP_GKS_TRANSPORT/HTTP_URL    apps/msp-server/src/providers/gks-provider.mjs
  *   MSP_GKS_COMMAND/_ARGS/_CWD     apps/msp-server/src/providers/gks-stdio-provider.mjs
  *   MSP_PIPELINE_*, MSP_GKS_PIPELINE_CREDENTIAL
  *                                  apps/msp-server/src/transport/handlers/pipeline-handlers.mjs
@@ -40,6 +41,8 @@ export const MSP_RUNTIME_ENV_NAMES = Object.freeze([
   "MSP_GKS_COMMAND",
   "MSP_GKS_ARGS",
   "MSP_GKS_CWD",
+  "MSP_GKS_TRANSPORT",
+  "MSP_GKS_HTTP_URL",
   "MSP_PIPELINE_PRINCIPALS",
   "MSP_GKS_PIPELINE_CREDENTIAL",
   "MSP_PIPELINE_WORKER_URL",

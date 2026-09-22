@@ -53,10 +53,11 @@ export class NamespaceViolationError extends MspRuntimeError {
 }
 
 /**
- * Fail-closed stub reason for msp_knowledge_promote and
- * msp_memory_promote(target_scope=shared): no GKS provider exists in v1
- * (ADR-027). Never caught and converted into a fabricated success envelope
- * anywhere in this packet (WP-13 AC-03).
+ * Fail-closed reason for an absent GKS provider and for
+ * msp_memory_promote(target_scope=shared), whose shared-memory path remains
+ * outside the configured GKS provider boundary (ADR-027). Never caught and
+ * converted into a fabricated success envelope anywhere in this packet
+ * (WP-13 AC-03).
  */
 export class GksProviderUnconfiguredError extends MspRuntimeError {
   constructor(message = "No GKS provider is configured; shared-scope promotion is fail-closed.") {

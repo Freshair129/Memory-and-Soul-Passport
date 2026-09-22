@@ -29,7 +29,7 @@ import { createConsolidationHandlers } from "./transport/handlers/consolidation-
 import { createLifecycleHandlers } from "./transport/handlers/lifecycle-handlers.mjs";
 import { createMemoryHandlers } from "./transport/handlers/memory-handlers.mjs";
 import { createPipelineHandlers } from "./transport/handlers/pipeline-handlers.mjs";
-import { createGksProviderFromEnvironment } from "./providers/gks-stdio-provider.mjs";
+import { createGksProviderFromEnvironment } from "./providers/gks-provider.mjs";
 import { resolveIdentityHmacConfig } from "./config/identity-hmac-keyring.mjs";
 import { resolveThreadServiceKeyFor } from "./config/thread-service-keyring.mjs";
 import { createThreadGuard } from "./transport/handlers/thread-guard.mjs";

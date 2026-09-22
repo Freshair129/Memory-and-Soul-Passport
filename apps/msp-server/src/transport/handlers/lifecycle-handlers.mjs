@@ -1,5 +1,5 @@
 // transport/handlers/lifecycle-handlers: msp_evidence_record,
-// msp_knowledge_promote (fail-closed stub), msp_memory_promote (WP-13
+// msp_knowledge_promote (optional GKS provider relay), msp_memory_promote (WP-13
 // Bounded Scope item 6), msp_knowledge_evidence_export (the read-only relay
 // of GKS's gks_stage_evidence_export — docs/TIER-BOUNDARY-17-STAGE.md).
 import { proofRef, memoryPromotionRef, knowledgePromotionRef } from "@freshair129/msp-contracts/refs";
@@ -270,7 +270,7 @@ export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journa
       }
       if (!gksProvider) {
         journal.append({ actor, toolName: "msp_knowledge_promote", ref: null, workspaceId: args.workspace_id ?? null, payload: { idempotency_key: args.idempotency_key, denied: true }, policyDecision: "deny", reason: "gks_provider_unconfigured" });
-        throw new GksProviderUnconfiguredError("gks_provider_unconfigured: MSP_GKS_COMMAND is not configured.");
+        throw new GksProviderUnconfiguredError("gks_provider_unconfigured: no GKS provider transport is configured.");
       }
       const promoted = validateGksResult(await gksProvider.promote(args), args.source_snapshot_hash);
       const result = db.transaction(() => {
@@ -300,7 +300,7 @@ export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journa
       const actor = resolveActor(args);
       if (!gksProvider) {
         journal.append({ actor, toolName: "msp_knowledge_evidence_export", ref: null, workspaceId: request.scope.workspaceId || null, payload: { since_cursor: request.since_cursor, denied: true }, policyDecision: "deny", reason: "gks_provider_unconfigured" });
-        throw new GksProviderUnconfiguredError("gks_provider_unconfigured: MSP_GKS_COMMAND is not configured.");
+        throw new GksProviderUnconfiguredError("gks_provider_unconfigured: no GKS provider transport is configured.");
       }
       const page = validateEvidencePage(await gksProvider.exportStageEvidence(request), request);
       journal.append({
@@ -348,7 +348,7 @@ export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journa
           reason: "gks_provider_unconfigured",
         });
         throw new GksProviderUnconfiguredError(
-          "msp_memory_promote(target_scope=shared) is a fail-closed stub: gks_provider_unconfigured (no GKS provider exists in v1, per ADR-027).",
+          "msp_memory_promote(target_scope=shared) remains fail-closed: gks_provider_unconfigured (shared-memory promotion is outside the configured GKS provider path, per ADR-027).",
         );
       }
 
