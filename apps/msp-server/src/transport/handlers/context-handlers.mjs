@@ -114,9 +114,9 @@ export function createContextHandlers({ db, journal, keyFor, now = () => Date.no
       const contextId = contextRef(randomUUID());
       const cacheId = `cache_${randomUUID()}`;
 
-      // ADR-027's explicit invariant: no GKS provider exists in v1, so
-      // shared_vault_refs is always [] -- an honest empty answer, never a
-      // placeholder that silently starts returning fabricated gks:
+      // Context resolution does not invoke the optional GKS provider, so
+      // shared_vault_refs is always [] here -- an honest empty answer, never
+      // a placeholder that silently starts returning fabricated gks:
       // references later (WP-13 AC-02). global/workspace-private vault refs
       // are likewise empty in this phase: msp_context_resolve persists a
       // real `contexts` row for diff/audit/replay to act on, but does not

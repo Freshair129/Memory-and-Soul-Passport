@@ -2,8 +2,8 @@
 title: "API Contract: Persistent-Memory MSP Runtime (msp_memory_*)"
 doc_id: "API-009-PERSISTENT-MEMORY-CONTRACT"
 status: "draft"
-version: "0.3.1+draft"
-updated: "2026-09-17"
+version: "0.3.2+draft"
+updated: "2026-09-23"
 owner: "Boss (CEO)"
 source_of_truth: true
 prd_system: "SYSTEM-05::Agent-Team-Management-System"
@@ -471,7 +471,7 @@ return the same `not_found` as an unknown vault for principal vault ids.
 | `not_found` | Unknown target or any principal grant/ownership/replay failure; these paths are indistinguishable | Use an authorized target and fresh signed request |
 | `vault_scope_denied` | Global grant refusal or authorized link endpoints belong to different vaults; endpoint IDs are not disclosed | Use a matching grant and endpoints in one vault; mounts do not bypass agent checks |
 | `conflict` | A concurrent write raced this request under the same `(vault_id, category, key)` | Retry with the latest `current_version` |
-| `gks_provider_unconfigured` | Shared-scope knowledge/memory promotion was requested | Not recoverable in v1; shared promotion is an explicit, documented exclusion until a GKS provider exists |
+| `gks_provider_unconfigured` | Shared-scope knowledge promotion was requested without a configured GKS provider, or shared-memory promotion was requested (which remains fail-closed) | Configure a GKS provider for knowledge promotion; shared-memory promotion remains an explicit exclusion under ADR-027 |
 | `db_unavailable` | SQLite connection or migration state is invalid | Operator action required; see `docs/operations/runbooks/RUNBOOK-Persistent-Memory-Runtime.md` |
 | `grant_nonce_required` / `grant_replayed` | Missing or consumed nonce on an authorized global write; principal variants collapse to not_found | Supply a fresh nonce and retry |
 | `access_context_required` / `access_context_denied` | Historical codes retained for compatibility; no current API-009 tool emits them | Use signed `access` |

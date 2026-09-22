@@ -18,7 +18,9 @@ const serverPath = path.join(here, "fixtures", "env-report-stdio-server.mjs");
 // What the MSP server and the GKS child below it actually read.
 const mspConfig = {
   MSP_DB_PATH: "/allowlist-test/msp.sqlite",
+  MSP_GKS_TRANSPORT: "stdio",
   MSP_GKS_COMMAND: "node",
+  MSP_GKS_HTTP_URL: "http://gks.internal",
   MSP_PIPELINE_PRINCIPALS: "[]",
   MSP_GKS_PIPELINE_CREDENTIAL: "relay-credential",
   MSP_PIPELINE_WORKER_TOKEN: "worker-token",

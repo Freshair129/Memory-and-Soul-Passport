@@ -20,8 +20,9 @@ start without one rather than choosing a database path for you.
 **This is the behaviour most likely to surprise you.** The MSP child is not
 given your process environment. It is given exactly:
 
-- `MSP_RUNTIME_ENV_NAMES` — the eighteen variables the MSP server reads:
-  `MSP_DB_PATH`, `MSP_GKS_COMMAND`, `MSP_GKS_ARGS`, `MSP_GKS_CWD`,
+- `MSP_RUNTIME_ENV_NAMES` — the twenty variables the MSP server reads:
+  `MSP_DB_PATH`, `MSP_GKS_TRANSPORT`, `MSP_GKS_HTTP_URL`,
+  `MSP_GKS_COMMAND`, `MSP_GKS_ARGS`, `MSP_GKS_CWD`,
   `MSP_PIPELINE_PRINCIPALS`, `MSP_GKS_PIPELINE_CREDENTIAL`,
   `MSP_PIPELINE_WORKER_URL`, `MSP_PIPELINE_WORKER_TOKEN`, `OLLAMA_BASE_URL`,
   `MSP_THREAD_SERVICE_KEY`, `MSP_THREAD_SERVICE_KEYRING` (BL-MEMOS-049,
@@ -67,6 +68,12 @@ console.log(Object.keys(buildMspChildEnv(process.env)));
 
 If your deployment needs a variable that is not on either list, add it to the
 list in this package rather than working around the filter.
+
+When MSP uses the private GKS HTTP provider, set `MSP_GKS_TRANSPORT=http` and
+`MSP_GKS_HTTP_URL` to the GKS origin. The `GKS_*` namespace carries
+`GKS_MSP_AUTH_REQUIRED=1`, `GKS_MSP_RELAY_CREDENTIAL` and other GKS-owned
+configuration through the client allowlist. HTTP is explicit; an HTTP URL does
+not change the default stdio provider or create an automatic fallback.
 
 ## Shutting down
 

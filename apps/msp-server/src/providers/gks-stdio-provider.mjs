@@ -1,10 +1,10 @@
 // MSP-owned client for the configured GKS MCP stdio provider. It is separate
 // from the parent transport boundary even though this installed MCP SDK uses
 // the same newline-delimited JSON-RPC framing on both links.
-import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { GksProviderUnavailableError } from "@freshair129/msp-contracts/errors";
 import { containsEscapedObjectKey } from "../transport/escaped-object-key-scan.mjs";
+import { GKS_REQUEST_TIMEOUT_MS, authMetaFor, unavailable } from "./gks-provider-common.mjs";
 
 function parseArgs(value) {
   if (!value) return [];
@@ -115,63 +115,6 @@ function encode(payload) {
   return Buffer.from(`${JSON.stringify(payload)}\n`, "utf8");
 }
 
-function unavailable(message) {
-  return new GksProviderUnavailableError(`gks_provider_unavailable: ${message}`);
-}
-
-function normalizeScope(scope) {
-  if (!scope || typeof scope !== "object" || Array.isArray(scope)) throw new Error("scope is required for GKS MSP auth.");
-  const normalized = {
-    portfolioId: typeof scope.portfolioId === "string" ? scope.portfolioId.trim() : "",
-    tenantId: typeof scope.tenantId === "string" ? scope.tenantId.trim() : "",
-    businessId: typeof scope.businessId === "string" ? scope.businessId.trim() : "",
-    workspaceId: typeof scope.workspaceId === "string" ? scope.workspaceId.trim() : "",
-    projectId: typeof scope.projectId === "string" ? scope.projectId.trim() : "",
-    sharing: scope.sharing ?? "private",
-  };
-  if (!normalized.portfolioId) throw new Error("scope.portfolioId is required for GKS MSP auth.");
-  return normalized;
-}
-
-function scopeForAuth(toolName, input, defaultPortfolioId) {
-  if (toolName === "gks_knowledge_promote" && !input.scope) {
-    return normalizeScope({
-      portfolioId: defaultPortfolioId,
-      tenantId: input.tenant_id,
-      businessId: input.business_id,
-      workspaceId: input.workspace_id,
-      projectId: input.project_id,
-      sharing: "private",
-    });
-  }
-  return normalizeScope(input.scope);
-}
-
-function mspScopeDigest(scope) {
-  return crypto.createHash("sha256").update([
-    scope.portfolioId,
-    scope.tenantId,
-    scope.businessId,
-    scope.workspaceId,
-    scope.projectId,
-    scope.sharing,
-  ].join("\u0000"), "utf8").digest("hex");
-}
-
-function authMetaFor(toolName, input, mspAuth) {
-  if (!mspAuth) return undefined;
-  const scope = scopeForAuth(toolName, input, mspAuth.defaultPortfolioId);
-  return {
-    gksMspAuth: {
-      version: "gks-msp-auth/v1",
-      principalId: "msp-runtime",
-      role: "msp",
-      relayCredential: mspAuth.relayCredential,
-      scopeDigest: mspScopeDigest(scope),
-    },
-  };
-}
-
 async function callGksTool({ command, args, cwd, env, mspAuth }, toolName, input) {
   const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"], shell: false });
   let buffer = Buffer.alloc(0);
@@ -200,7 +143,7 @@ async function callGksTool({ command, args, cwd, env, mspAuth }, toolName, input
       const timeout = setTimeout(() => {
         pending.delete(id);
         reject(unavailable(`GKS request timed out: ${method}`));
-      }, 10_000);
+      }, GKS_REQUEST_TIMEOUT_MS);
       pending.set(id, { resolve, reject, timeout });
       child.stdin.write(encode({ jsonrpc: "2.0", id, method, params }));
     });

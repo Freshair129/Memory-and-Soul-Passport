@@ -1,7 +1,7 @@
 ---
-version: "0.3.0b"
+version: "0.4.0b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-22T06:50:00+07:00,RWANG"
+last_update: "2026-09-23T00:00:00+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -29,12 +29,12 @@ their historical contract. Digest reads never include GROUP/ROOM sources and
 return reference-only provenance receipts. Fresh grants do not make revoked
 or erased source content eligible again.
 
-MSP is a standalone memory and context authority for opaque external consumers and the optional GKS knowledge provider. No consumer repository is a build-time or schema dependency. For the isolated GenesisRAG17 pipeline it is the Tier 2 authenticated relay between Tier 1 zuri-ai, Tier 3 GKS and the Tier 4 worker. The extracted repository preserves the process boundary:
+MSP is a standalone memory and context authority for opaque external consumers and the optional GKS knowledge provider. No consumer repository is a build-time or schema dependency. For the isolated GenesisRAG17 pipeline it is the Tier 2 authenticated relay between Tier 1 zuri-ai, Tier 3 GKS and the Tier 4 worker. The extracted repository preserves the process boundary. The external MSP client remains stdio; the MSP-owned GKS provider now has an explicit stdio or private HTTP transport selection:
 
 ```text
 consumer -> msp-client-js -> NDJSON JSON-RPC over stdio -> msp-server
                                                      -> msp-storage (SQLite)
-                                                     -> optional GKS provider child process
+                                                     -> optional GKS provider (stdio child or HTTP JSON-RPC)
 ```
 
 Clients initialize using protocol version `2024-11-05`, send `notifications/initialized`, then call static tool contracts through `tools/call`. The server intentionally has no `tools/list` method.
@@ -44,9 +44,10 @@ Clients initialize using protocol version `2024-11-05`, send `notifications/init
 The nine `msp_pipeline_*` tools are registered by `apps/msp-server/src/server.mjs`.
 `pipeline-handlers.mjs` authenticates the runtime grant, checks the exact
 six-field private scope and nested envelopes, strips caller-selected authority,
-and validates the downstream response. Eight operations use the GKS stdio
-provider as `gks_pipeline_*`; `msp_pipeline_query` uses the explicit Tier 4
-loopback `POST /query` and never calls GKS.
+and validates the downstream response. Eight operations use the selected GKS
+provider as `gks_pipeline_*`; stdio remains the default and HTTP is explicit
+through `MSP_GKS_TRANSPORT=http`. `msp_pipeline_query` uses the explicit Tier
+4 loopback `POST /query` and never calls GKS.
 
 ```text
 zuri-ai source (source grant)

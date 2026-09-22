@@ -1,7 +1,7 @@
 ---
-version: "1.0.1b"
+version: "1.1.0b"
 created_at: "2026-09-08T00:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-18T00:00:00+07:00,RWANG"
+last_update: "2026-09-23T00:00:00+07:00,RWANG"
 status: "beta"
 superseded_by: null
 attributes:
@@ -206,6 +206,52 @@ entrypoint. Do not hand-build a partial batch and call a GKS response a
 successful pipeline. The complete source fixture and acceptance worker are in
 the pinned zuri-ai acceptance linked above.
 
+## Run the real MSP ↔ GKS HTTP hop
+
+This is a local private-network canary. It starts GKS separately with a fresh
+SQLite file, then starts MSP with `MSP_GKS_TRANSPORT=http`. Use synthetic
+credentials only; this does not prove production routing or deployment.
+
+```powershell
+$env:GKS_DB_PATH = Join-Path $RunRoot 'gks-http.sqlite'
+$env:GKS_MSP_AUTH_REQUIRED = '1'
+$env:GKS_MSP_RELAY_CREDENTIAL = 'synthetic-http-relay-credential'
+$env:GKS_DEFAULT_PORTFOLIO_ID = 'portfolio-test'
+$env:GKS_HTTP_HOST = '127.0.0.1'
+$env:GKS_HTTP_PORT = '19418'
+
+$gksProcess = Start-Process -FilePath $Node `
+  -ArgumentList @('apps/gks-server/bin/gks-http-server.mjs') `
+  -WorkingDirectory $GksRoot -WindowStyle Hidden -PassThru
+try {
+  $health = $null
+  for ($attempt = 0; $attempt -lt 30 -and -not $health; $attempt++) {
+    try { $health = Invoke-RestMethod 'http://127.0.0.1:19418/healthz' -TimeoutSec 2 } catch { Start-Sleep -Milliseconds 250 }
+  }
+  if ($health.status -ne 'ok') { throw 'GKS HTTP health did not become ready' }
+
+  $env:MSP_GKS_TRANSPORT = 'http'
+  $env:MSP_GKS_HTTP_URL = 'http://127.0.0.1:19418'
+  $env:MSP_DB_PATH = Join-Path $RunRoot 'msp-http.sqlite'
+  Push-Location $MspRoot
+  try {
+    # Reuse the stdio MSP client to reach the MSP server; only the MSP-to-GKS
+    # provider hop changes transport.
+    @'
+import { createMspStdioCaller } from './packages/msp-client-js/src/msp-stdio-transport.mjs'
+const call = createMspStdioCaller({ command: process.execPath, args: ['apps/msp-server/bin/msp-server.mjs'], cwd: process.cwd(), env: process.env })
+try { console.log(await call('msp_knowledge_evidence_export', { actor: 'http-canary', scope: { portfolioId: 'portfolio-test', tenantId: 'tenant-test', businessId: 'business-test', workspaceId: 'workspace-test', projectId: 'project-test', sharing: 'private' }, since_cursor: 0, limit: 1 })) } finally { await call.close() }
+'@ | & $Node --input-type=module
+  } finally { Pop-Location }
+} finally {
+  if ($gksProcess -and -not $gksProcess.HasExited) { Stop-Process -Id $gksProcess.Id -Force }
+}
+```
+
+The expected fresh-database result is an empty evidence page. A missing or
+invalid Bearer credential must fail closed; do not treat an HTTP 401 or an
+unconfigured provider as an empty page.
+
 ## Tier 4 query requirement
 
 MSP does not provide a fake query result. Start the GenesisBlock worker's
@@ -236,6 +282,7 @@ if (Test-Path -LiteralPath $RunRoot) {
 foreach ($name in @(
   'MSP_DB_PATH','GKS_DB_PATH','MSP_PIPELINE_PRINCIPALS',
   'MSP_GKS_PIPELINE_CREDENTIAL','GKS_PIPELINE_RELAY_CREDENTIAL',
+  'MSP_GKS_TRANSPORT','MSP_GKS_HTTP_URL',
   'MSP_GKS_COMMAND','MSP_GKS_ARGS','MSP_GKS_CWD',
   'MSP_PIPELINE_WORKER_URL','MSP_PIPELINE_WORKER_TOKEN',
   'GENESIS_WORKER_QUERY_TOKEN'
@@ -251,5 +298,6 @@ entrypoint acceptance.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 1.1.0b | 2026-09-23 | beta | Added the explicit MSP-to-GKS HTTP canary, auth configuration and stdio rollback guidance. | working-tree | RWANG |
 | 1.0.1b | 2026-09-18 | beta | Added the published-product `/products/query` smoke guidance, manifest-bound acceptance checks and product security command. | 2696d4e | RWANG |
 | 1.0.0b | 2026-09-08 | beta | Added an isolated, synthetic-credential MSP ↔ GKS relay smoke with explicit paths, fail-closed query guidance and cleanup. | working-tree | ATHER |
