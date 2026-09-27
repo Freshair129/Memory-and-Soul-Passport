@@ -61,7 +61,7 @@ function spawnRuntime(dbPath) {
   return { call, client, typed: createTypedVaultContextMsp(client) };
 }
 
-function promoteInput({ agentId, workspaceId, idempotencyKey, note }) {
+function promoteInput({ agentId, workspaceId, idempotencyKey, note, evidenceRef }) {
   return {
     actor: "boss",
     agentId,
@@ -69,10 +69,23 @@ function promoteInput({ agentId, workspaceId, idempotencyKey, note }) {
     sourceMemoryRef: `msp:memory/${agentId}-source`,
     targetScope: "global_private",
     candidate: { note },
-    evidenceRefs: [`msp:proof/${agentId}-evidence`],
+    evidenceRefs: [evidenceRef],
     reason: "WP-14 AC-03 collision-reproduction test",
     idempotencyKey,
   };
+}
+
+async function recordProof(runtime, workspaceId, idempotencyKey) {
+  const proof = await runtime.client.recordEvidence({
+    schema_version: "govibe-proof-batch/v1",
+    idempotency_key: idempotencyKey,
+    run_id: idempotencyKey,
+    workspace_id: workspaceId,
+    stage: 1,
+    source_snapshot_hash: "a".repeat(64),
+    verification: { verdict: "passed" },
+  });
+  return proof.proofRef;
 }
 
 test("AC-03: two different agents (vaults) reusing the SAME idempotency_key each get their own promotion_ref/target_ref -- the exact collision this packet closes", async () => {
@@ -80,10 +93,12 @@ test("AC-03: two different agents (vaults) reusing the SAME idempotency_key each
   const runtime = spawnRuntime(dbPath);
   try {
     const SHARED_IDEMPOTENCY_KEY = "idem-shared-across-agents";
+    const proofA = await recordProof(runtime, "workspace-alpha", "proof-agent-alpha");
+    const proofB = await recordProof(runtime, "workspace-beta", "proof-agent-beta");
 
     // Agent A promotes first.
     const agentAResult = await runtime.typed.promoteMemory(
-      promoteInput({ agentId: "agent-alpha", workspaceId: "workspace-alpha", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "agent A's private candidate" }),
+      promoteInput({ agentId: "agent-alpha", workspaceId: "workspace-alpha", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "agent A's private candidate", evidenceRef: proofA }),
     );
 
     // Agent B, a DIFFERENT agent/vault, reuses the exact same
@@ -94,7 +109,7 @@ test("AC-03: two different agents (vaults) reusing the SAME idempotency_key each
     // must be treated as a brand-new promotion, scoped to agent B's own
     // Global-Private vault.
     const agentBResult = await runtime.typed.promoteMemory(
-      promoteInput({ agentId: "agent-beta", workspaceId: "workspace-beta", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "agent B's private candidate" }),
+      promoteInput({ agentId: "agent-beta", workspaceId: "workspace-beta", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "agent B's private candidate", evidenceRef: proofB }),
     );
 
     // The core assertion: each agent gets its OWN ref, never the other's.
@@ -123,7 +138,7 @@ test("AC-03: two different agents (vaults) reusing the SAME idempotency_key each
     // the same vault, must still return agent A's ORIGINAL promotion_ref/
     // target_ref -- not a fresh promotion, and not agent B's.
     const agentARetry = await runtime.typed.promoteMemory(
-      promoteInput({ agentId: "agent-alpha", workspaceId: "workspace-alpha", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "agent A's private candidate (retry payload, ignored on idempotent hit)" }),
+      promoteInput({ agentId: "agent-alpha", workspaceId: "workspace-alpha", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "agent A's private candidate (retry payload, ignored on idempotent hit)", evidenceRef: proofA }),
     );
     assert.equal(agentARetry.promotionRef, agentAResult.promotionRef, "idempotent retry within the same vault must return the original promotion_ref");
     assert.equal(agentARetry.targetRef, agentAResult.targetRef, "idempotent retry within the same vault must return the original target_ref");
@@ -131,7 +146,7 @@ test("AC-03: two different agents (vaults) reusing the SAME idempotency_key each
 
     // And agent B's own retry is likewise stable and still distinct from A's.
     const agentBRetry = await runtime.typed.promoteMemory(
-      promoteInput({ agentId: "agent-beta", workspaceId: "workspace-beta", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "agent B's private candidate (retry payload, ignored on idempotent hit)" }),
+      promoteInput({ agentId: "agent-beta", workspaceId: "workspace-beta", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "agent B's private candidate (retry payload, ignored on idempotent hit)", evidenceRef: proofB }),
     );
     assert.equal(agentBRetry.promotionRef, agentBResult.promotionRef);
     assert.equal(agentBRetry.targetRef, agentBResult.targetRef);
@@ -147,8 +162,10 @@ test("AC-03: direct DB proof -- two distinct promotions rows exist, correctly va
   const runtime = spawnRuntime(dbPath);
   try {
     const SHARED_IDEMPOTENCY_KEY = "idem-db-proof";
-    await runtime.typed.promoteMemory(promoteInput({ agentId: "agent-gamma", workspaceId: "workspace-gamma", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "gamma" }));
-    await runtime.typed.promoteMemory(promoteInput({ agentId: "agent-delta", workspaceId: "workspace-delta", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "delta" }));
+    const proofGamma = await recordProof(runtime, "workspace-gamma", "proof-agent-gamma");
+    const proofDelta = await recordProof(runtime, "workspace-delta", "proof-agent-delta");
+    await runtime.typed.promoteMemory(promoteInput({ agentId: "agent-gamma", workspaceId: "workspace-gamma", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "gamma", evidenceRef: proofGamma }));
+    await runtime.typed.promoteMemory(promoteInput({ agentId: "agent-delta", workspaceId: "workspace-delta", idempotencyKey: SHARED_IDEMPOTENCY_KEY, note: "delta", evidenceRef: proofDelta }));
     await runtime.call.close();
 
     const { open } = await import("@freshair129/msp-storage/connection");

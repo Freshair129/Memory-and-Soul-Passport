@@ -100,16 +100,30 @@ function basePromotionArgs(overrides = {}) {
   };
 }
 
+async function recordedPromotionArgs(dbPath, overrides = {}) {
+  const proof = await rawToolCall(dbPath, "msp_evidence_record", {
+    schema_version: "govibe-proof-batch/v1",
+    idempotency_key: "proof-canonical",
+    run_id: "run-canonical",
+    workspace_id: "workspace-canonical",
+    stage: 1,
+    source_snapshot_hash: "a".repeat(64),
+    verification: { verdict: "passed" },
+  });
+  assert.equal(proof.isError, undefined);
+  return basePromotionArgs({ evidence_refs: [proof.structuredContent.proof_ref], ...overrides });
+}
+
 const CANONICAL_KEY_CASES = ["canonical_id", "canonicalId", "gks_id", "gksId", "target_ref", "targetRef", "TARGET_REF"];
 
 for (const key of CANONICAL_KEY_CASES) {
   test(`AC-06: msp_memory_promote rejects a candidate with a "${key}" key server-side, even bypassing the client-side guard`, async () => {
     const { dbPath, cleanup } = tempDbPath();
     try {
-      const raw = await rawToolCall(
-        dbPath,
-        "msp_memory_promote",
-        basePromotionArgs({ candidate: { note: "looks fine", [key]: "some-value" } }),
+    const raw = await rawToolCall(
+      dbPath,
+      "msp_memory_promote",
+      await recordedPromotionArgs(dbPath, { candidate: { note: "looks fine", [key]: "some-value" } }),
       );
       assert.equal(raw.isError, true);
       assert.match(raw.structuredContent.message, /canonical gks identity|provider_canonical_identity_forbidden/i);
@@ -125,7 +139,7 @@ test('AC-06: msp_memory_promote rejects a candidate with a "gks:"-prefixed strin
     const raw = await rawToolCall(
       dbPath,
       "msp_memory_promote",
-      basePromotionArgs({ candidate: { note: "gks:shared/forged-identity" } }),
+      await recordedPromotionArgs(dbPath, { candidate: { note: "gks:shared/forged-identity" } }),
     );
     assert.equal(raw.isError, true);
     assert.match(raw.structuredContent.message, /canonical gks identity|provider_canonical_identity_forbidden/i);
@@ -140,7 +154,7 @@ test('AC-06: msp_memory_promote rejects a "GKS:"-prefixed value case-insensitive
     const raw = await rawToolCall(
       dbPath,
       "msp_memory_promote",
-      basePromotionArgs({ candidate: { note: "GKS:Shared/Forged" } }),
+      await recordedPromotionArgs(dbPath, { candidate: { note: "GKS:Shared/Forged" } }),
     );
     assert.equal(raw.isError, true);
     assert.match(raw.structuredContent.message, /canonical gks identity|provider_canonical_identity_forbidden/i);
@@ -158,7 +172,7 @@ test("AC-06: msp_memory_promote rejects a gks:-prefixed evidence_refs entry serv
       basePromotionArgs({ candidate: { note: "well-formed" }, evidence_refs: ["gks:shared/forged-evidence"] }),
     );
     assert.equal(raw.isError, true);
-    assert.match(raw.structuredContent.message, /gks:-namespaced/i);
+    assert.match(raw.structuredContent.message, /proof reference is invalid or unavailable/i);
   } finally {
     cleanup();
   }
@@ -185,7 +199,7 @@ test("AC-06: a well-formed candidate with no canonical key/value is accepted (co
     const raw = await rawToolCall(
       dbPath,
       "msp_memory_promote",
-      basePromotionArgs({ candidate: { note: "perfectly ordinary candidate", targetLooksLikeButIsNot: "ref-1" } }),
+      await recordedPromotionArgs(dbPath, { candidate: { note: "perfectly ordinary candidate", targetLooksLikeButIsNot: "ref-1" } }),
     );
     assert.equal(raw.isError, undefined);
     assert.match(raw.structuredContent.promotion_ref, /^msp:memory-promotion\//);

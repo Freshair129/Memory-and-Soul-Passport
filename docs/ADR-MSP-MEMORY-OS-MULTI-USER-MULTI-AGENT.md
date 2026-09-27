@@ -1,7 +1,7 @@
 ---
-version: "0.1.29b"
+version: "0.3.0b"
 created_at: "2026-09-14T10:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-16T21:00:00+07:00,ATHER"
+last_update: "2026-09-27T00:00:00+07:00,RWANG"
 status: "proposed"
 superseded_by: null
 attributes:
@@ -1333,6 +1333,30 @@ specification: `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.9b §5.0
 (the sole normative source); `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md`,
 this same revision.
 
+## Owner confirmation — DEC-MEMOS-74 (2026-09-25)
+
+The owner confirmed fail-closed reads for context rows with both stored
+owner columns absent. `msp_context_diff`, `msp_context_audit`, and
+`msp_context_replay` treat these rows like unknown rows, even when a valid
+grant is supplied. The optional, unsigned `msp_context_resolve` write shape
+remains unchanged; no owner is inferred or backfilled. See design §5.0.7
+and implementation item `BL-MEMOS-117`.
+
+## Owner confirmation — DEC-MEMOS-75 (2026-09-27)
+
+Promotion proof refs must resolve to an allowed local
+`msp_evidence_record` journal receipt in the same workspace. Require
+`workspace_id` on `msp_evidence_record` and `msp_knowledge_promote`; require
+the workspace to match for `msp_knowledge_promote.provenance_ref` and every
+`msp_memory_promote.evidence_refs` entry. Missing and cross-workspace refs
+fail with the same `invalid_request` response. Keep
+`msp_memory_promote.source_memory_ref` opaque and unread, as DEC-MEMOS-52
+requires. This establishes a recorded proof-registration receipt only; it
+does not assert that MSP persisted or verified the evidence body. The check
+compares the supplied workspace values; it does not authenticate the caller's
+right to name that workspace. See design §5.0.10 and
+`docs/api/API-006-Promotion-Reference-Amendment.md`.
+
 ## Context
 
 Two independent efforts exist for MSP's thread/session/memory surface, and
@@ -2385,7 +2409,7 @@ RKOI-review-response round below, were confirmed by the owner on
     (`{operation, expiresAt, payloadHash, tenantId, principalId}` claims
     only — no `agentId`/`workspaceId`/`allowPassport`, since a `contexts`
     row is not agent/workspace-owned and carries no passport concept) for
-    a **scoped** row; a legacy row is unaffected. Per-tool evaluation
+    a **scoped** row requires a matching grant; an unowned row is denied as unknown (DEC-MEMOS-74). Per-tool evaluation
     order specified in full in design §5.0.7. — *pending owner
     confirmation, 2026-09-16.* (design §5.0.7).
 57. **DEC-MEMOS-57, new (RKOI/Fable second parallel review, 2026-09-16) —
@@ -3333,6 +3357,8 @@ numbered in merge order. RKOI rulings 1–4 were confirmed by the owner on 2026-
 - [ ] 71. **New, pending owner confirmation.** The trust statement is restated precisely: the spawner sets the child's entire environment, so the signature defends only against a party reaching an MSP process it did not itself spawn/configure; `claimsFor` compares principals only when a `serviceKey` and an actual `principalId` argument are both present — the vault-grant signer on `BL-MEMOS-113` must be stricter, refusing outright with no authenticated actor (DEC-MEMOS-71).
 - [ ] 72. **New, pending owner confirmation.** The shared verifier core is load-bearing, not cosmetic — the shipped `verifyThreadGrant` rejects all three new claim shapes outright; the claim type-check is extended to thread grants too, since the shipped verifier accepts a non-string `tenantId`/`principalId` today (DEC-MEMOS-72).
 - [ ] 73. **New, pending owner confirmation.** `msp_vault_resolve` gains `grant_unconfigured` as its own observable code; the grant's own tuple claims must equal the request's `access_context` byte-for-byte, closing RKOI's proof that a mismatched grant silently resolved a different principal's vault (DEC-MEMOS-73).
+- [x] 74. **Confirmed by the owner on 2026-09-25.** Rows without stored tenant/principal owners are unowned and cannot be read by `msp_context_diff`, `msp_context_audit`, or `msp_context_replay`, even with a valid grant; keep unscoped writes unchanged and do not infer/backfill ownership (DEC-MEMOS-74).
+- [x] 75. **Confirmed by the owner on 2026-09-27.** `msp_evidence_record` and `msp_knowledge_promote` require `workspace_id`; proof refs must identify an allowed local `msp_evidence_record` journal receipt from that same workspace; missing/cross-workspace refs fail identically. `source_memory_ref` stays opaque under DEC-MEMOS-52 (DEC-MEMOS-75).
 
 Overturning any row above reopens the corresponding section of
 `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.9b §5.0, now the
@@ -3353,6 +3379,8 @@ sole normative source (see that section's own status line).
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.3.0b | 2026-09-27 | proposed | Record owner-confirmed DEC-MEMOS-75 and link the API-006 promotion-reference amendment; same-workspace proof-receipt resolution, required workspace_id on evidence registration and knowledge promotion, unchanged DEC-MEMOS-52 opacity, and the caller-authentication limit. | working-tree | RWANG |
+| 0.2.0b | 2026-09-25 | proposed | Record owner confirmation of DEC-MEMOS-74: deny receipt reads for rows without stored ownership while retaining the optional unscoped context write shape. Link the normative design rule and BL-MEMOS-117. | working-tree | RWANG |
 | 0.1.29b | 2026-09-16 | proposed | **Answers RKOI's and Fable's second parallel review of consolidated design §5.0 (`763b4f4`/`bf84722`) — 4 critical/3 warnings between them; both confirmed the consolidation was right and the mechanics hold when actually run, on issues neither round's own testing reached.** `DEC-MEMOS-42`/`43`/`46` reopened — not because their DDL/suppression mechanics were wrong, but because prose outside design §5.0 still stated them in a form §5.0 now contradicts. New `DEC-MEMOS-63..73`: the `}).immediate()();` trailing-call bug fixed; one refusal rule collapsing every principal-target grant failure to `not_found`; a legacy target's grant ignored outright, a `global_private` target's grant checked before its own mount short-circuit; `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED` widening the gate to `msp_memory_promote`/`msp_vault_status`; `.immediate()` made conditional on a present, verified grant; the grant nonce consumed inside the same write transaction as the mutation; the forced-collision test rebuilt to actually reach both retry paths; the `category`-space rejection applied uniformly; the trust statement restated to the spawn boundary and `claimsFor`'s actual conditional comparison; the shared verifier core documented as load-bearing. Checklist items 42, 43, 46 newly unchecked; 63–73 added, unchecked. `DEC-MEMOS-49`/`50` each revised a further time (fourth/seventh) to match; `DEC-MEMOS-55` corrected a second time (no longer justifies itself by a keyed id); the cross-repo `BL-MEMOS-113` section gains the nonce-generation and no-authenticated-actor requirements, plus the new env var. Mirrored in `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.9b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.30b. New ids: `DEC-MEMOS-63..73`. No id reused. | working-tree | ATHER |
 | 0.1.28b | 2026-09-16 | proposed | **Method change: answers RKOI's and Fable's second parallel review of commit `540250c` (RKOI 5 critical, Fable 2) — neither could break the mechanism itself, both found the same six-round-running gap: a fix landing in some places and not others.** `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.8b §5.0 is now the sole normative specification of PH-MEMOS-5; this ADR's decisions point at it rather than restating it. `DEC-MEMOS-40`/`44`/`49`/`50`/`54`/`55` each revised in place a further time (race fix via `.immediate()`, `msp_context_audit` ordering matched to `bd47594`'s real branching, ungranted-vs-invalid-grant `msp_vault_resolve` split, `vault_id`'s mechanism corrected to state random/`mintVaultId()` throughout rather than the stale keyed-HMAC text this document still carried); `DEC-MEMOS-51` narrowed (`MSP_IDENTITY_HMAC_KEY` scoped to calls that actually resolve a principal vault, RKOI W9). New `DEC-MEMOS-56..62`: context-tool grant requirement; vault-/context-grant claim set checked against the shipped `verifyThreadGrant` (type-checked tuple claims, `policyRevision` thread-only); nonce requirement via the shared `grant_nonces` table, closing RKOI's concrete upsert-after-forget replay; trust statement rewritten to zuri-ai's real signer-is-requester-is-spawner topology, with the vault-grant signer required to derive claims from authenticated session state; the id helper corrected to a new `msp-core` `mintVaultId()`, not `vaultRef`; `mountId`'s NUL-injection fix; `global_private`'s gate fully specified (default-off setting, always-on mismatch refusal). Checklist items 40, 44, 49, 50, 51, 54, 55 stay unchecked; 56–62 added, unchecked. Mirrored in `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.8b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.29b. New ids: `DEC-MEMOS-56..62`. No id reused. | working-tree | ATHER |
 | 0.1.27b | 2026-09-16 | proposed | **Corrects two errors in v0.1.26b's own "RKOI/Fable joint review round 2" revision note, caught by the coordinator before submission for review — edited in place, same session.** (1) `stableId`'s separator (`packages/msp-core/src/domain/ids.mjs:15`) is a literal NUL byte, confirmed via ripgrep's own binary-file detection on the real file — the prior revision wrongly called it a plain space, misled by a text-rendering artifact; `ids.mjs`'s header comment claiming NUL-joining is correct. `computeEntityId`'s own separator (`entity-store.mjs:40`) is a genuine space, unaffected — Fable NOTE 1 (`stableId`) and NOTE 2 (`computeEntityId`) are separate findings against separate functions. The "spaces are common, more exploitable" framing is withdrawn; random `vault_id` is confirmed to still win without it, on the key-leak-permanence and non-tenant-binding points alone, stated explicitly. Legacy single-field `stableId` callers checked and found not exposed to this collision class; `mountId`'s own three-field call (`vault-registry.mjs:293`) is, named as a new, unfixed residual. (2) The zuri-ai caller premise underlying `DEC-MEMOS-40`'s revision is now verified directly against the actual extracted source (found at the Temp-directory scratchpad path a repo-root-only search had missed) — confirmed exactly as claimed: no grant sent, `validateVaultSet` drops the principal fields, no `allow_passport`, the memory port touches only `workspacePrivateVaultId`. The owner-directed scope widening is confirmed genuine. Corrected in the "RKOI/Fable joint review round 2" revision note, the matching checklist rows (40, 50), and the "Cross-repo changes PH-MEMOS-5 requires of zuri-ai" section. Mirrored in `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.9.7b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md`. No id reused; no decision's substance changes. | working-tree | ATHER |

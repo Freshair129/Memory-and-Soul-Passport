@@ -30,6 +30,7 @@ function validateProofBatch(input) {
   if (input.schema_version !== "govibe-proof-batch/v1") throw new TypeError("Invalid proof batch schema version.");
   if (typeof input.idempotency_key !== "string" || !input.idempotency_key) throw new TypeError("Proof batch idempotency key is required.");
   if (typeof input.run_id !== "string" || !input.run_id) throw new TypeError("Proof batch run ID is required.");
+  if (typeof input.workspace_id !== "string" || !input.workspace_id.trim()) throw new TypeError("Proof batch workspace ID is required.");
   if (!Number.isInteger(input.stage) || input.stage < 0 || input.stage > 12) throw new TypeError("Proof batch stage must be 0-12.");
   if (!HASH.test(input.source_snapshot_hash ?? "")) throw new TypeError("Proof batch source snapshot hash is invalid.");
   if (!["actual", "blocked", "failed", "passed"].includes(input.verification?.verdict)) throw new TypeError("Invalid verification verdict.");
@@ -39,6 +40,7 @@ function validateKnowledgeCandidate(input) {
   if (!input || input.schema_version !== "govibe-knowledge-candidate/v1") throw new TypeError("Invalid knowledge candidate schema version.");
   if (typeof input.idempotency_key !== "string" || !input.idempotency_key) throw new TypeError("Knowledge candidate idempotency key is required.");
   if (typeof input.run_id !== "string" || !input.run_id) throw new TypeError("Knowledge candidate run ID is required.");
+  if (typeof input.workspace_id !== "string" || !input.workspace_id.trim()) throw new TypeError("Knowledge candidate workspace ID is required.");
   if (!Number.isInteger(input.stage) || input.stage < 1 || input.stage > 12) throw new TypeError("Knowledge candidate stage must be 1-12.");
   if (!HASH.test(input.source_snapshot_hash ?? "")) throw new TypeError("Knowledge candidate source snapshot hash is invalid.");
   if (!requireRef(input.provenance_ref, "msp:proof/", "provenance")) throw new TypeError("Knowledge candidate provenance is required.");

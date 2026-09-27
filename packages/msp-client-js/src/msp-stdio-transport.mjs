@@ -14,6 +14,7 @@ function encode(payload) {
  *   MSP_PIPELINE_*, MSP_GKS_PIPELINE_CREDENTIAL
  *                                  apps/msp-server/src/transport/handlers/pipeline-handlers.mjs
  *   OLLAMA_BASE_URL                packages/msp-retrieval/src/retrieval/vector.mjs
+ *   MSP_VECTOR_ENABLED             apps/msp-server/src/server.mjs (vector embeddings and search; default enabled)
  *   MSP_THREAD_SERVICE_KEY         apps/msp-server/src/server.mjs (API-011 thread-tool grant HMAC)
  *   MSP_THREAD_SERVICE_KEYRING     apps/msp-server/src/config/thread-service-keyring.mjs (BL-MEMOS-049,
  *                                  optional per-tenant grant HMAC keys; disables MSP_THREAD_SERVICE_KEY
@@ -48,6 +49,7 @@ export const MSP_RUNTIME_ENV_NAMES = Object.freeze([
   "MSP_PIPELINE_WORKER_URL",
   "MSP_PIPELINE_WORKER_TOKEN",
   "OLLAMA_BASE_URL",
+  "MSP_VECTOR_ENABLED",
   "MSP_THREAD_SERVICE_KEY",
   "MSP_THREAD_SERVICE_KEYRING",
   "MSP_IDENTITY_HMAC_KEY",

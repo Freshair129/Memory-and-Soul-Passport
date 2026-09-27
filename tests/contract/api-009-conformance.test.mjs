@@ -11,6 +11,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..");
 const binPath = path.join(repoRoot, "apps", "msp-server", "bin", "msp-server.mjs");
 const schemaPath = path.join(repoRoot, "packages", "msp-contracts", "schemas", "API-009.tools.json");
+const contractDocPath = path.join(repoRoot, "docs", "API-009-Persistent-Memory-Contract.md");
 const expectedTools = [
   "msp_memory_decay_tick",
   "msp_memory_forget",
@@ -51,6 +52,7 @@ beforeAll(async () => {
       ...process.env,
       MSP_DB_PATH: path.join(tempDir, "msp.sqlite3"),
       OLLAMA_BASE_URL: "http://127.0.0.1:1",
+      MSP_VECTOR_ENABLED: "1",
     },
     timeoutMs: 15_000,
   });
@@ -83,10 +85,10 @@ afterAll(async () => {
 describe("API-009 machine contract", () => {
   it("contains exactly the frozen nine memory tool schemas", () => {
     const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
-    expect(schema.contract).toMatchObject({
-      doc_id: "API-009-PERSISTENT-MEMORY-CONTRACT",
-      version: "0.3.0+draft",
-    });
+    const contractDocVersion = readFileSync(contractDocPath, "utf8").match(/^version:\s*"([^"]+)"/m)?.[1];
+    expect(contractDocVersion).toBeDefined();
+    expect(schema.contract.doc_id).toBe("API-009-PERSISTENT-MEMORY-CONTRACT");
+    expect(schema.contract.version).toBe(contractDocVersion);
     expect(schema.tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
     for (const tool of schema.tools) expect(tool.inputSchema).toMatchObject({ type: "object" });
   });

@@ -43,7 +43,7 @@ function spawnRuntime() {
   const call = createMspStdioCaller({
     command: process.execPath,
     args: [binPath],
-    env: { ...process.env, MSP_DB_PATH: dbPath },
+    env: { ...process.env, MSP_DB_PATH: dbPath, MSP_VECTOR_ENABLED: "1" },
     timeoutMs: 15_000,
   });
   openCallers.push(call);
@@ -188,6 +188,26 @@ describe("AC-04: msp_memory_* CRUD tools round-trip over the real stdio process"
     expect(history.map((entry) => entry.version)).toEqual([1, 2]); // ascending, per SS4.4
     expect(history[0].body_json).toEqual({ rev: 1 });
     expect(history[1].body_json).toEqual({ rev: 2 });
+    const expectedKeys = [
+      "entity_id",
+      "vault_id",
+      "category",
+      "key",
+      "version",
+      "body_json",
+      "epistemic_state",
+      "confidence",
+      "valid_from",
+      "valid_to",
+      "recorded_at",
+      "superseded_at",
+      "source_hash",
+      "change_reason",
+      "actor",
+    ].sort();
+    for (const entry of history) {
+      expect(Object.keys(entry).sort()).toEqual(expectedKeys);
+    }
   });
 
   it("msp_memory_history for an unknown entity_id fails closed (not_found)", async () => {

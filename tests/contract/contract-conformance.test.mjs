@@ -220,33 +220,27 @@ describe("AC-01: WP-13 contract-conformance (real stdio process, real client con
     targetContextId = result.contextId;
   });
 
-  it("msp_context_diff: diffContext's exact request shape, diffRef requireRef'd", async () => {
-    const result = await typed.diffContext({
+  it("msp_context_diff: the legacy client request shape cannot read an unowned context", async () => {
+    await expect(typed.diffContext({
       actor: "boss",
       baseContextId,
       targetContextId,
       includePayload: false,
-    });
-    expect(result.diffRef).toMatch(/^msp:context-diff\//);
-    expect(result.baseContextId).toBe(baseContextId);
-    expect(result.targetContextId).toBe(targetContextId);
-    expect(Array.isArray(result.changedRefs)).toBe(true);
-    // workflow_ref differed between the two resolves above.
-    expect(result.changedRefs.some((entry) => entry.ref === "field:workflow_ref")).toBe(true);
+    })).rejects.toThrow(/Unknown base_context_id/);
   });
 
-  it("msp_context_audit: auditContext's exact request shape, auditRef requireRef'd, policyDecision requireDecision'd", async () => {
+  it("msp_context_audit: the legacy client request shape returns the unowned-row unknown result", async () => {
     const result = await typed.auditContext({ actor: "boss", contextId: baseContextId });
     expect(result.auditRef).toMatch(/^msp:context-audit\//);
     expect(result.contextId).toBe(baseContextId);
-    expect(result.replayable).toBe(true);
-    expect(result.hashValid).toBe(true);
+    expect(result.replayable).toBe(false);
+    expect(result.hashValid).toBe(false);
     expect(result.policyDecision).toBe("allow");
     expect(Array.isArray(result.findings)).toBe(true);
-    expect(result.findings.length).toBeGreaterThan(0);
+    expect(result.findings).toEqual([]);
   });
 
-  it("msp_context_replay: the exact request shape scripts/mcp/vault-context-surface-v2.mjs sends through replayContext, replayRef requireRef'd", async () => {
+  it("msp_context_replay: the exact legacy request shape reports the unowned context as not found", async () => {
     const result = await client.replayContext({
       actor: "boss",
       context_id: baseContextId,
@@ -255,7 +249,7 @@ describe("AC-01: WP-13 contract-conformance (real stdio process, real client con
       turn_id: "turn-wp13",
     });
     expect(result.replayRef).toMatch(/^msp:replay\//);
-    expect(result.contextReproducible).toBe(true);
+    expect(result.contextReproducible).toBe(false);
     // AC-05 / ADR-027: always false, never derivable as true.
     expect(result.executionReproducible).toBe(false);
     expect(result.outputIdentical).toBe(false);
@@ -293,27 +287,63 @@ describe("AC-01: WP-13 contract-conformance (real stdio process, real client con
       schema_version: "govibe-proof-batch/v1",
       idempotency_key: "proof-wp13-conformance",
       run_id: "run-wp13",
+      workspace_id: "workspace-wp13",
       stage: 3,
       source_snapshot_hash: "a".repeat(64),
       verification: { verdict: "passed" },
     });
     expect(result.proofRef).toMatch(/^msp:proof\//);
+    await expect(client.recordEvidence({
+      schema_version: "govibe-proof-batch/v1",
+      idempotency_key: "proof-wp13-missing-workspace",
+      run_id: "run-wp13",
+      stage: 3,
+      source_snapshot_hash: "a".repeat(64),
+      verification: { verdict: "passed" },
+    })).rejects.toThrow(/Proof batch workspace ID is required/);
   });
 
   it("msp_knowledge_promote: submitKnowledgeCandidate's exact validateKnowledgeCandidate-shaped request rejects with a tool-call error, never a fabricated gks: success (AC-03)", async () => {
+    const proof = await client.recordEvidence({
+      schema_version: "govibe-proof-batch/v1",
+      idempotency_key: "proof-kc-wp13-conformance",
+      run_id: "run-wp13",
+      workspace_id: "workspace-wp13",
+      stage: 1,
+      source_snapshot_hash: "a".repeat(64),
+      verification: { verdict: "passed" },
+    });
+    await expect(client.submitKnowledgeCandidate({
+      schema_version: "govibe-knowledge-candidate/v1",
+      idempotency_key: "kc-wp13-missing-workspace",
+      run_id: "run-wp13",
+      stage: 1,
+      source_snapshot_hash: "a".repeat(64),
+      provenance_ref: proof.proofRef,
+    })).rejects.toThrow(/Knowledge candidate workspace ID is required/);
     await expect(
       client.submitKnowledgeCandidate({
         schema_version: "govibe-knowledge-candidate/v1",
         idempotency_key: "kc-wp13-conformance",
         run_id: "run-wp13",
+        workspace_id: "workspace-wp13",
         stage: 1,
         source_snapshot_hash: "a".repeat(64),
-        provenance_ref: "msp:proof/proof-wp13-conformance",
+        provenance_ref: proof.proofRef,
       }),
     ).rejects.toThrow(/gks_provider_unconfigured/);
   });
 
   it("msp_memory_promote(target_scope=global_private): promoteMemory's exact request shape, promotionRef requireRef'd, sourceHash requireHash'd", async () => {
+    const proof = await client.recordEvidence({
+      schema_version: "govibe-proof-batch/v1",
+      idempotency_key: "proof-promotion-wp13-conformance",
+      run_id: "run-wp13",
+      workspace_id: "workspace-wp13",
+      stage: 1,
+      source_snapshot_hash: "a".repeat(64),
+      verification: { verdict: "passed" },
+    });
     const result = await typed.promoteMemory({
       actor: "boss",
       agentId: "agent-wp13",
@@ -321,7 +351,7 @@ describe("AC-01: WP-13 contract-conformance (real stdio process, real client con
       sourceMemoryRef: "msp:memory/wp13-source",
       targetScope: "global_private",
       candidate: { note: "contract conformance candidate" },
-      evidenceRefs: ["msp:proof/proof-wp13-conformance"],
+      evidenceRefs: [proof.proofRef],
       reason: "contract conformance test",
       idempotencyKey: "promotion-wp13-conformance",
     });

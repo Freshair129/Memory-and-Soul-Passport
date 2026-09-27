@@ -11,6 +11,7 @@ const call = createMspStdioCaller({
     ...process.env,
     MSP_DB_PATH: dbPath,
     OLLAMA_BASE_URL: "http://127.0.0.1:1",
+    MSP_VECTOR_ENABLED: "1",
   },
   timeoutMs: 15_000,
 });

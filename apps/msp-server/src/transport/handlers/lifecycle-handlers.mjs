@@ -115,6 +115,12 @@ function requireString(value, label) {
   return value.trim();
 }
 
+function requireProofReceipt(ref, workspaceId, journal) {
+  if (typeof ref !== "string" || !ref.startsWith("msp:proof/") || !journal.hasProofReceipt(ref, workspaceId)) {
+    throw new ValidationError("Proof reference is invalid or unavailable.");
+  }
+}
+
 function resolveActor(args) {
   if (typeof args.actor === "string" && args.actor.trim()) return args.actor.trim();
   if (typeof args.run_id === "string" && args.run_id.trim()) return args.run_id.trim();
@@ -135,6 +141,7 @@ function validateProofBatch(input) {
   if (input.schema_version !== "govibe-proof-batch/v1") throw new ValidationError("Invalid proof batch schema version.");
   requireString(input.idempotency_key, "idempotency_key");
   requireString(input.run_id, "run_id");
+  requireString(input.workspace_id, "workspace_id");
   if (!Number.isInteger(input.stage) || input.stage < 0 || input.stage > 12) {
     throw new ValidationError("Proof batch stage must be 0-12.");
   }
@@ -149,11 +156,9 @@ function validateKnowledgeCandidate(input) {
   if (input.schema_version !== "govibe-knowledge-candidate/v1") throw new ValidationError("Invalid knowledge candidate schema version.");
   requireString(input.idempotency_key, "idempotency_key");
   requireString(input.run_id, "run_id");
+  requireString(input.workspace_id, "workspace_id");
   if (!Number.isInteger(input.stage) || input.stage < 1 || input.stage > 12) throw new ValidationError("Knowledge candidate stage must be 1-12.");
   if (!HASH.test(input.source_snapshot_hash ?? "")) throw new ValidationError("Knowledge candidate source snapshot hash is invalid.");
-  const provenance = requireString(input.provenance_ref, "provenance_ref");
-  if (!provenance.startsWith("msp:proof/")) throw new ValidationError("Knowledge candidate provenance must be an msp:proof reference.");
-  requireNoGksRefs([provenance], "provenance_ref");
   rejectCanonicalCandidate(input.candidate ?? {});
 }
 
@@ -239,13 +244,14 @@ export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journa
     async msp_evidence_record(args = {}) {
       validateProofBatch(args);
       const actor = resolveActor(args);
+      const workspaceId = requireString(args.workspace_id, "workspace_id");
       const ref = proofRef(args.idempotency_key);
 
       journal.append({
         actor,
         toolName: "msp_evidence_record",
         ref,
-        workspaceId: args.workspace_id ?? null,
+        workspaceId,
         payload: {
           idempotency_key: args.idempotency_key,
           run_id: args.run_id,
@@ -261,6 +267,8 @@ export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journa
     async msp_knowledge_promote(args = {}) {
       validateKnowledgeCandidate(args);
       const actor = resolveActor(args);
+      const workspaceId = requireString(args.workspace_id, "workspace_id");
+      requireProofReceipt(args.provenance_ref, workspaceId, journal);
       const existing = selectKnowledgePromotion.get(args.idempotency_key);
       if (existing) {
         if (existing.source_hash !== args.source_snapshot_hash.toLowerCase()) {
@@ -269,10 +277,10 @@ export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journa
         return { knowledge_ref: existing.knowledge_ref, source_hash: existing.source_hash, promotion_ref: existing.promotion_ref };
       }
       if (!gksProvider) {
-        journal.append({ actor, toolName: "msp_knowledge_promote", ref: null, workspaceId: args.workspace_id ?? null, payload: { idempotency_key: args.idempotency_key, denied: true }, policyDecision: "deny", reason: "gks_provider_unconfigured" });
+        journal.append({ actor, toolName: "msp_knowledge_promote", ref: null, workspaceId, payload: { idempotency_key: args.idempotency_key, denied: true }, policyDecision: "deny", reason: "gks_provider_unconfigured" });
         throw new GksProviderUnconfiguredError("gks_provider_unconfigured: no GKS provider transport is configured.");
       }
-      const promoted = validateGksResult(await gksProvider.promote(args), args.source_snapshot_hash);
+      const promoted = validateGksResult(await gksProvider.promote({ ...args, workspace_id: workspaceId }), args.source_snapshot_hash);
       const result = db.transaction(() => {
         const concurrent = selectKnowledgePromotion.get(args.idempotency_key);
         if (concurrent) {
@@ -285,7 +293,7 @@ export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journa
         insertKnowledgePromotion.run({ promotion_ref, idempotency_key: args.idempotency_key, knowledge_ref: promoted.knowledge_ref, source_hash: promoted.source_hash, recorded_at: new Date().toISOString() });
         return { knowledge_ref: promoted.knowledge_ref, source_hash: promoted.source_hash, promotion_ref };
       })();
-      journal.append({ actor, toolName: "msp_knowledge_promote", ref: result.promotion_ref, workspaceId: args.workspace_id ?? null, payload: { idempotency_key: args.idempotency_key, knowledge_ref: result.knowledge_ref }, policyDecision: "allow" });
+      journal.append({ actor, toolName: "msp_knowledge_promote", ref: result.promotion_ref, workspaceId, payload: { idempotency_key: args.idempotency_key, knowledge_ref: result.knowledge_ref }, policyDecision: "allow" });
       return result;
     },
 
@@ -326,15 +334,11 @@ export function createLifecycleHandlers({ db, entityStore, vaultRegistry, journa
       const targetScope = requireString(args.target_scope, "target_scope");
       const idempotencyKey = requireString(args.idempotency_key, "idempotency_key");
       const reason = requireString(args.reason, "reason");
-      if (!Array.isArray(args.evidence_refs) || args.evidence_refs.length === 0) {
-        throw new ValidationError("evidence_refs must contain at least one reference.");
-      }
-      // AC-06 defense in depth: reject a canonical-identity candidate or a
-      // gks:-namespaced evidence/source ref server-side, independent of the
-      // GoVibe-side rejectCanonicalCandidate guard that already runs before
-      // this request is ever sent.
-      requireNoGksRefs(args.evidence_refs, "evidence_refs");
+      // Proof refs must resolve to accepted local receipts in this workspace;
+      // source_memory_ref remains opaque under DEC-MEMOS-52.
       requireNoGksRefs([sourceMemoryRef], "source_memory_ref");
+      if (!Array.isArray(args.evidence_refs) || args.evidence_refs.length === 0) requireProofReceipt(undefined, workspaceId, journal);
+      for (const ref of args.evidence_refs) requireProofReceipt(ref, workspaceId, journal);
       const candidate = rejectCanonicalCandidate(args.candidate ?? {});
 
       if (targetScope === "shared") {

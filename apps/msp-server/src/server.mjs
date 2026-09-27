@@ -54,6 +54,12 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
     throw new TypeError("createServer requires dbPath (MSP_DB_PATH).");
   }
 
+  const vectorEnabledSetting = env.MSP_VECTOR_ENABLED;
+  if (vectorEnabledSetting !== undefined && vectorEnabledSetting !== "0" && vectorEnabledSetting !== "1") {
+    throw new TypeError("MSP_VECTOR_ENABLED must be '0' or '1'.");
+  }
+  const vectorEnabled = vectorEnabledSetting !== "0";
+
   // RKOI code review, WARNING 3: parse and validate
   // MSP_THREAD_SERVICE_KEYRING BEFORE opening the database (let alone
   // migrating it) -- a malformed keyring must never create a database
@@ -73,7 +79,7 @@ export function createServer({ dbPath, migrationsDir = DEFAULT_MIGRATIONS_DIR, i
   const journal = new Journal(db);
   const vaultRegistry = new VaultRegistry(db);
   const linksStore = new LinksStore(db);
-  const vectorClient = createVectorClient();
+  const vectorClient = createVectorClient({ enabled: vectorEnabled });
   const retrievalService = createRetrievalService({ db, vectorClient });
   const gksProvider = createGksProviderFromEnvironment(env);
   const globalPrivateGrantRequired = env.MSP_GLOBAL_PRIVATE_GRANT_REQUIRED === "1";

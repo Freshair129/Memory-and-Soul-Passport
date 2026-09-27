@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.9
+
+- Forward `MSP_VECTOR_ENABLED` to the child runtime. It defaults to `1`; `0`
+  disables vector embedding requests and vector search while retaining FTS and
+  stored embeddings.
+
 ## 0.2.8
 
 - call.close() ends the child runtime stdin before the fallback kill and resolves

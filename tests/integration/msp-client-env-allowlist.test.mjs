@@ -25,6 +25,7 @@ const mspConfig = {
   MSP_GKS_PIPELINE_CREDENTIAL: "relay-credential",
   MSP_PIPELINE_WORKER_TOKEN: "worker-token",
   OLLAMA_BASE_URL: "http://127.0.0.1:11434",
+  MSP_VECTOR_ENABLED: "0",
   GKS_DB_PATH: "/allowlist-test/gks.sqlite",
   GKS_FIXTURE_STATE_PATH: "/allowlist-test/fixture.json",
 };

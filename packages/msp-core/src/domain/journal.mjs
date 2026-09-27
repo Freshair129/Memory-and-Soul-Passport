@@ -10,6 +10,7 @@ export class Journal {
   #db;
   #insert;
   #selectLastRowId;
+  #selectProofReceipt;
 
   constructor(db) {
     this.#db = db;
@@ -18,6 +19,15 @@ export class Journal {
       VALUES (@occurred_at, @actor, @tool_name, @ref, @workspace_id, @payload_json, @policy_decision, @reason)
     `);
     this.#selectLastRowId = db.prepare("SELECT last_insert_rowid() AS id");
+    this.#selectProofReceipt = db.prepare(`
+      SELECT 1
+      FROM journal
+      WHERE ref = @ref
+        AND workspace_id = @workspaceId
+        AND tool_name = 'msp_evidence_record'
+        AND policy_decision = 'allow'
+      LIMIT 1
+    `);
   }
 
   /**
@@ -48,6 +58,11 @@ export class Journal {
     this.#insert.run(row);
     const { id } = this.#selectLastRowId.get();
     return rowToEntry({ journal_id: id, ...row });
+  }
+
+  /** Return whether an allowed evidence receipt exists in this workspace. */
+  hasProofReceipt(ref, workspaceId) {
+    return Boolean(this.#selectProofReceipt.get({ ref, workspaceId }));
   }
 
   /**

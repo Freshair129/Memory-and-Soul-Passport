@@ -20,11 +20,13 @@ start without one rather than choosing a database path for you.
 **This is the behaviour most likely to surprise you.** The MSP child is not
 given your process environment. It is given exactly:
 
-- `MSP_RUNTIME_ENV_NAMES` — the twenty variables the MSP server reads:
+- `MSP_RUNTIME_ENV_NAMES` — the twenty-one variables the MSP server reads:
   `MSP_DB_PATH`, `MSP_GKS_TRANSPORT`, `MSP_GKS_HTTP_URL`,
   `MSP_GKS_COMMAND`, `MSP_GKS_ARGS`, `MSP_GKS_CWD`,
   `MSP_PIPELINE_PRINCIPALS`, `MSP_GKS_PIPELINE_CREDENTIAL`,
   `MSP_PIPELINE_WORKER_URL`, `MSP_PIPELINE_WORKER_TOKEN`, `OLLAMA_BASE_URL`,
+  `MSP_VECTOR_ENABLED` (defaults to `1`; set to `0` to disable vector
+  embeddings and search while retaining FTS and stored embeddings),
   `MSP_THREAD_SERVICE_KEY`, `MSP_THREAD_SERVICE_KEYRING` (BL-MEMOS-049,
   optional per-tenant grant HMAC keys — a JSON object of
   `{"<tenantId>": "<key>"}`; once set, it disables `MSP_THREAD_SERVICE_KEY`

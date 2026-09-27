@@ -89,15 +89,37 @@ test("msp_context_resolve write path: access_context persists a SCOPED contexts 
   }
 });
 
-test("msp_context_audit/msp_context_replay: a LEGACY row (both columns null) is unaffected -- no access_context needed at all", async () => {
+test("msp_context_audit/msp_context_replay: an unowned row fails closed with or without a valid signed grant", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath);
   try {
-    const legacy = await resolveContext(call);
-    const audit = await call("msp_context_audit", { actor: "boss", context_id: legacy.context_id });
-    assert.equal(audit.context_id, legacy.context_id);
-    const replay = await call("msp_context_replay", { context_id: legacy.context_id });
-    assert.equal(replay.context_reproducible, true);
+    const unowned = await resolveContext(call);
+    const claims = { tenantId: "tenant-unowned", principalId: "principal-unowned" };
+    const validAuditInput = signedInput("msp_context_audit", { actor: "boss", context_id: unowned.context_id }, claims);
+    const invalidAuditInput = structuredClone(validAuditInput);
+    invalidAuditInput.access.signature = "00".repeat(32);
+    for (const input of [
+      { actor: "boss", context_id: unowned.context_id },
+      validAuditInput,
+      invalidAuditInput,
+    ]) {
+      const audit = await call("msp_context_audit", input);
+      assert.equal(audit.replayable, false);
+      assert.equal(audit.hash_valid, false);
+      assert.deepEqual(audit.findings, []);
+    }
+    const validReplayInput = signedInput("msp_context_replay", { context_id: unowned.context_id }, claims);
+    const invalidReplayInput = structuredClone(validReplayInput);
+    invalidReplayInput.access.signature = "00".repeat(32);
+    for (const input of [
+      { context_id: unowned.context_id },
+      validReplayInput,
+      invalidReplayInput,
+    ]) {
+      const replay = await call("msp_context_replay", input);
+      assert.equal(replay.context_reproducible, false);
+      assert.ok(replay.diagnostics[0].startsWith("context_not_found:"));
+    }
   } finally {
     await call.close();
     cleanup();
@@ -145,7 +167,7 @@ test("scoped context reads require signed tenant/principal claims; every grant f
   } finally { await call.close(); cleanup(); }
 });
 
-test("context diff authorizes base before target and refuses cross-principal rows with the same not-found error", async () => {
+test("context diff authorizes base before target and refuses foreign or unowned rows with not_found", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath);
   try {
@@ -158,11 +180,13 @@ test("context diff authorizes base before target and refuses cross-principal row
     }
     const claims = { tenantId: "tenant-diff", principalId: "principal-A" };
     await assert.rejects(call("msp_context_diff", signedInput("msp_context_diff", input, claims)), /Unknown target_context_id/);
-    const ownAndLegacy = { ...input, target_context_id: legacy.context_id };
-    const result = await call("msp_context_diff", signedInput("msp_context_diff", ownAndLegacy, claims));
-    assert.equal(result.base_context_id, base.context_id);
-    const legacyOnly = await call("msp_context_diff", { actor: "boss", base_context_id: legacy.context_id, target_context_id: legacy.context_id, access: { grant: {}, signature: "invalid" } });
-    assert.equal(legacyOnly.base_context_id, legacy.context_id);
+    const scopedToUnowned = { ...input, target_context_id: legacy.context_id };
+    await assert.rejects(call("msp_context_diff", signedInput("msp_context_diff", scopedToUnowned, claims)), /Unknown target_context_id/);
+    const unownedBase = { actor: "boss", base_context_id: legacy.context_id, target_context_id: base.context_id };
+    await assert.rejects(call("msp_context_diff", signedInput("msp_context_diff", unownedBase, claims)), /Unknown base_context_id/);
+    const legacyOnly = { actor: "boss", base_context_id: legacy.context_id, target_context_id: legacy.context_id };
+    await assert.rejects(call("msp_context_diff", { ...legacyOnly, access: { grant: {}, signature: "invalid" } }), /Unknown base_context_id/);
+    await assert.rejects(call("msp_context_diff", signedInput("msp_context_diff", legacyOnly, claims)), /Unknown base_context_id/);
   } finally { await call.close(); cleanup(); }
 });
 
@@ -173,14 +197,17 @@ test("context diff refuses payload for either scoped side even with a matching s
     const legacy = await resolveContext(call);
     const scoped = await resolveContext(call, { accessContext: { tenant_id: "tenant-payload", principal_id: "principal-payload" } });
     const claims = { tenantId: "tenant-payload", principalId: "principal-payload" };
-    const legacyPayload = await call("msp_context_diff", { actor: "boss", base_context_id: legacy.context_id, target_context_id: legacy.context_id, include_payload: true });
-    assert.ok(legacyPayload.payload);
-    for (const [base, target] of [[scoped, legacy], [legacy, scoped], [scoped, scoped]]) {
-      const input = { actor: "boss", base_context_id: base.context_id, target_context_id: target.context_id, include_payload: true };
-      await assert.rejects(call("msp_context_diff", signedInput("msp_context_diff", input, claims)), /include_payload/);
-      const withoutPayload = { ...input, include_payload: false };
-      const result = await call("msp_context_diff", signedInput("msp_context_diff", withoutPayload, claims));
-      assert.equal(result.payload, undefined);
+    const unownedPayload = { actor: "boss", base_context_id: legacy.context_id, target_context_id: legacy.context_id, include_payload: true };
+    await assert.rejects(call("msp_context_diff", unownedPayload), /Unknown base_context_id/);
+    const scopedInput = { actor: "boss", base_context_id: scoped.context_id, target_context_id: scoped.context_id, include_payload: true };
+    await assert.rejects(call("msp_context_diff", signedInput("msp_context_diff", scopedInput, claims)), /include_payload/);
+    const withoutPayload = { ...scopedInput, include_payload: false };
+    const result = await call("msp_context_diff", signedInput("msp_context_diff", withoutPayload, claims));
+    assert.equal(result.payload, undefined);
+    for (const [base, target] of [[scoped, legacy], [legacy, scoped]]) {
+      const mixed = { actor: "boss", base_context_id: base.context_id, target_context_id: target.context_id, include_payload: false };
+      const error = base === legacy ? /Unknown base_context_id/ : /Unknown target_context_id/;
+      await assert.rejects(call("msp_context_diff", signedInput("msp_context_diff", mixed, claims)), error);
     }
   } finally { await call.close(); cleanup(); }
 });
@@ -321,7 +348,8 @@ test("msp_context_audit: the caller's OWN context_id + OWN cache_id/injection_id
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath);
   try {
-    const ctx = await resolveContext(call, { workspaceId: "workspace-own-match" });
+    const accessContext = { tenant_id: "tenant-own-match", principal_id: "principal-own-match" };
+    const ctx = await resolveContext(call, { workspaceId: "workspace-own-match", accessContext });
     const injectionId = `inject_${Math.random().toString(16).slice(2)}`;
     await call("msp_context_injection_record", {
       injection_id: injectionId,
@@ -331,9 +359,10 @@ test("msp_context_audit: the caller's OWN context_id + OWN cache_id/injection_id
       workspace_id: "workspace-own-match",
     });
 
-    const audit = await call("msp_context_audit", {
-      actor: "boss", context_id: ctx.context_id, cache_id: ctx.cache_id, injection_id: injectionId,
-    });
+    const input = { actor: "boss", context_id: ctx.context_id, cache_id: ctx.cache_id, injection_id: injectionId };
+    const audit = await call("msp_context_audit", signedInput("msp_context_audit", input, {
+      tenantId: accessContext.tenant_id, principalId: accessContext.principal_id,
+    }));
     assert.equal(audit.context_id, ctx.context_id);
     assert.ok(audit.findings.some((f) => f.tool_name === "msp_context_injection_record"));
   } finally {
@@ -424,7 +453,10 @@ test("msp_context_diff: naming a victim's vault_id or a bare tenant_id string as
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath, { MSP_IDENTITY_HMAC_KEY: VAULT_HMAC_KEY });
   try {
-    const legacy = await resolveContext(call, { workspaceId: "workspace-diff-fold" });
+    const base = await resolveContext(call, {
+      workspaceId: "workspace-diff-fold",
+      accessContext: { tenant_id: "tenant-diff-fold", principal_id: "principal-diff-fold" },
+    });
     const vaultResolve = await resolvePrincipalVault(call, {
       actor: "zuri-agent",
       access_context: { tenant_id: "tenant-diff-fold", principal_id: "principal-diff-fold", agent_id: "agent-diff-fold", workspace_id: "ws-diff-fold", project_id: "proj-diff-fold", policy_version: "1" },
@@ -432,11 +464,13 @@ test("msp_context_diff: naming a victim's vault_id or a bare tenant_id string as
     });
 
     await assert.rejects(
-      call("msp_context_diff", { actor: "boss", base_context_id: legacy.context_id, target_context_id: vaultResolve.principalPrivateVaultId }),
+      call("msp_context_diff", signedInput("msp_context_diff", {
+        actor: "boss", base_context_id: base.context_id, target_context_id: vaultResolve.principalPrivateVaultId,
+      }, { tenantId: "tenant-diff-fold", principalId: "principal-diff-fold" })),
       /Unknown target_context_id/,
     );
     await assert.rejects(
-      call("msp_context_diff", { actor: "boss", base_context_id: "tenant-diff-fold", target_context_id: legacy.context_id }),
+      call("msp_context_diff", { actor: "boss", base_context_id: "tenant-diff-fold", target_context_id: base.context_id }),
       /Unknown base_context_id/,
     );
   } finally {

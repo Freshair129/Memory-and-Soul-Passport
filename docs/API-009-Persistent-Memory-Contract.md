@@ -2,8 +2,8 @@
 title: "API Contract: Persistent-Memory MSP Runtime (msp_memory_*)"
 doc_id: "API-009-PERSISTENT-MEMORY-CONTRACT"
 status: "draft"
-version: "0.3.2+draft"
-updated: "2026-09-23"
+version: "0.3.5+draft"
+updated: "2026-09-27"
 owner: "Boss (CEO)"
 source_of_truth: true
 prd_system: "SYSTEM-05::Agent-Team-Management-System"
@@ -13,6 +13,7 @@ related_docs:
   - "docs/srs/SRS-Persistent-Memory-MSP-Runtime.md"
   - "docs/architecture/SDD-Persistent-Memory-MSP-Runtime.md"
   - "docs/api/API-006-Vault-Context-and-Replay-Contracts.md"
+  - "docs/api/API-006-Promotion-Reference-Amendment.md"
   - "docs/lld/LLD-GoVibe-MCP-Tools.md"
 ---
 
@@ -45,7 +46,9 @@ remains governed by `docs/api/API-006-Vault-Context-and-Replay-Contracts.md`;
 it only records that this runtime is the implementation those tools now run
 against, and that their behavior (including the fail-closed
 `gks_provider_unconfigured` denial and the hard-coded-false replay-execution
-fields) is unchanged by adding memory tools alongside them.
+fields) is unchanged by adding memory tools alongside them. The legacy
+promotion proof-reference rules are amended separately in
+`docs/api/API-006-Promotion-Reference-Amendment.md`.
 
 ## 2. Endpoint / Tool / Command
 
@@ -132,7 +135,23 @@ type MemoryEntity = {
   source_hash: string;        // sha256
 };
 
-type MemoryEntityHistoryEntry = MemoryEntity & { version: number };
+type MemoryEntityHistoryEntry = {
+  entity_id: string;
+  vault_id: string;             // stable entity identity, repeated on each version
+  category: string;             // stable entity identity, repeated on each version
+  key: string;                  // stable entity identity, repeated on each version
+  version: number;
+  body_json: Record<string, unknown>;
+  epistemic_state: EpistemicState;
+  confidence: number;           // 0.0 - 1.0
+  valid_from: string;           // ISO-8601
+  valid_to: string | null;      // ISO-8601 or null
+  recorded_at: string;          // ISO-8601
+  superseded_at: string | null;
+  source_hash: string;          // sha256
+  change_reason: string | null;
+  actor: string;
+};
 
 type SearchHit = {
   entity: MemoryEntity;
@@ -264,8 +283,17 @@ Response:
 ```
 
 `history` is returned in ascending `version` order and includes every
-recorded version, including superseded and forgotten states; it is never
-filtered or truncated.
+recorded version; it is never filtered or truncated. When a forget action
+appends its final history row, that row is included, but history entries do
+not identify lifecycle state.
+
+Each entry contains the versioned fields stored in `entity_history` plus the
+stable entity identity fields (`entity_id`, `vault_id`, `category`, and
+`key`). The handler repeats those identity fields from the current entity.
+`current_version`, `lifecycle_state`, `decay_score`, and `access_count` are
+current-state fields and are not stored per historical version, so they are
+not returned on history entries. Use `version` for the version number of each
+entry.
 
 ### 4.5 `msp_memory_forget`
 
@@ -302,6 +330,14 @@ Request:
 explicit fallback mode referenced by
 `docs/srs/SRS-Persistent-Memory-MSP-Runtime.md` FR-010/FR-011.
 
+The deployment setting `MSP_VECTOR_ENABLED` is independent of the request
+`mode`. It accepts `1` or `0`, defaults to `1`, and any other value refuses
+server startup. Setting it to `0` disables embedding requests on writes and
+the vector search leg; it does not delete embeddings already stored. Writes
+continue normally. For searches that do not return through the exact-match
+short-circuit, hybrid/vector requests use the FTS fallback when vector use is
+disabled.
+
 Response:
 
 ```json
@@ -314,10 +350,12 @@ Response:
 ```
 
 `searchMode` reports the mode the runtime actually used, which may differ
-from the requested `mode` when `vector` or `hybrid` was requested but the
-embedding backend was unhealthy — in that case `searchMode` is `fts_only` and
-`vector_available` is `false`. This substitution is always reported in the
-response body; it is never silent.
+from the requested `mode` when a query does not match the exact-match
+short-circuit and `vector` or `hybrid` was requested but the embedding backend
+is unhealthy or vector use is disabled — in that case `searchMode` is
+`fts_only` and `vector_available` is `false`. An exact-match response reports
+`searchMode: "exact"` and does not run either FTS or vector search. This
+substitution is always reported in the response body; it is never silent.
 
 ### 4.7 `msp_memory_decay_tick`
 
@@ -560,6 +598,9 @@ independently verified before any real multi-agent use of
 
 | Version | Date | Summary |
 |---|---|---|
+| 0.3.5+draft | 2026-09-27 | Specify `MSP_VECTOR_ENABLED` defaults, accepted values, write/search behavior, and FTS fallback when vector use is disabled. |
+| 0.3.4+draft | 2026-09-27 | Define the exact `msp_memory_history` entry shape from stored history fields and stable entity identity metadata; clarify that current-state-only fields are omitted. |
+| 0.3.3+draft | 2026-09-27 | Link the API-006 promotion proof-reference amendment; API-009 tool request contracts are unchanged. |
 | 0.3.1+draft | 2026-09-17 | Clarify approved present-invalid global grant refusal and distinguish category validation from legacy request-shape errors. |
 | 0.3.0+draft | 2026-09-17 | PH-MEMOS-5 alignment with design §5.0: replaced the unsigned API-009 `access_context` path with signed top-level `access`, added target-specific grant claims, nonce/replay semantics, the global-private gate, and the pinned decay response. |
 | 0.2.0+draft | 2026-09-16 | PH-MEMOS-5 (`BL-MEMOS-063`, `DEC-MEMOS-47`): added the `access_context` amendment (§4.10) — optional on all nine `msp_memory_*` tools, mandatory when the target vault is one of the two new `principal_private`/`principal_passport` types API-010's `msp_vault_resolve` mints; two new error codes, `access_context_required`/`access_context_denied` (§5); `msp_memory_decay_tick` gains a `pinned` response field (§4.7) reflecting the target vault's own `decay_policy`. `vault_scope_denied` is unchanged, not broadened. `msp_memory_promote` (API-006) is explicitly out of this amendment's scope. |

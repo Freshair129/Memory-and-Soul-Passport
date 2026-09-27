@@ -1,7 +1,7 @@
 ---
-version: "0.1.4b"
+version: "0.3.0b"
 created_at: "2026-09-17T00:00:00+07:00,LUNA"
-last_update: "2026-09-17T12:26:06+07:00,RWANG"
+last_update: "2026-09-25T21:43:44+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -58,7 +58,7 @@ phase-5 behavior is reported as `FAIL` with that contract gap.
 | BL083 vault erasure | Six tenant/principal erasures; direct DB owner tuple/content/history/provenance/FTS assertions | PASS locally | Additional named security suite proves embeddings, bounds, replay and rollback |
 | BL084 | Gate A re-baseline | Local document updated | Not executed by the runtime harness; see GATE-A.md |
 | BL085 | Client 0.2.7 candidate, CHANGELOG and pack dry-run | PASS locally; GitHub prerelease published | Not executed by the runtime harness; npm publication remains deferred |
-| BL086 | README/architecture/NOTES closure | Local documents updated | Legacy unscoped context and summary-ingestion boundaries remain explicit |
+| BL086 | README/architecture/NOTES closure | Local documents updated | Unowned context reads fail closed while optional unscoped writes remain; summary-ingestion boundaries remain explicit |
 | BL087 | Existing decision confirmation record | DONE upstream | No Phase 7 code change is needed here |
 | BL088 | Release review and tag | PASS for GitHub prerelease | `v0.2.7` targets merge `6b99f402`; npm publication remains deferred |
 
@@ -72,10 +72,35 @@ row as `NOT_RUN` by design; npm publication remains deferred. See
 `../.brain/reviews/PHASE6-REVIEW.md` for full local test and independent review
 evidence.
 
+## Current checkout boundary (2026-09-25)
+
+The approved Phase 7 closure above is recorded against PR #32 / commit
+`6b99f402` and the `v0.2.7` GitHub prerelease. The local `v0.2.8` Git tag
+points to `68e6169` (`chore(client): prepare 0.2.8 release`). This checkout's
+`main` has since advanced to `a65914d` with the explicit GKS HTTP provider.
+
+The local tag and current branch do not establish npm publication or remote
+release status. The `33 PASS, 0 FAIL, four external NOT_RUN` acceptance result
+remains evidence for the reviewed Phase 7 baseline; no `test:phase7` result for
+`a65914d` is recorded here. A local HTTP canary did run on 2026-09-25 with MSP
+at `a65914d` and the existing GKS checkout at `88b6894`, using Node
+`v24.18.0`, synthetic credentials, and fresh temporary SQLite files. GKS
+`/healthz` returned `ok`; MSP's `msp_knowledge_evidence_export` returned an
+empty page (`rows: []`, `next_cursor: 0`); a bad bearer credential received
+HTTP 401. The temporary files were removed and the GKS checkout was not
+modified. This verifies the local HTTP provider hop and authentication against
+a fresh database; it does not establish production routing, durable deployment
+configuration, or production cutover. Operational prerequisites remain
+governed by
+[`ADR-GKS-HTTP-MSP-CONSUMER.md`](ADR-GKS-HTTP-MSP-CONSUMER.md#verification-and-rollout-gates).
+
 ## CHANGELOG
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.3.0b | 2026-09-25 | beta | Align the Phase 7 document-closure row with DEC-MEMOS-74's fail-closed unowned context reads and retained optional unscoped writes. | working-tree | RWANG |
+| 0.2.1b | 2026-09-25 | beta | Record the local MSP-to-GKS HTTP canary evidence at current main and preserve the unverified current-head acceptance and production cutover boundaries. | working-tree | RWANG |
+| 0.2.0b | 2026-09-25 | beta | Separate the approved v0.2.7 Phase 7 baseline from the local v0.2.8 tag and later current-main GKS HTTP addition; record that current-head acceptance and HTTP cutover remain unverified. | working-tree | RWANG |
 | 0.1.4b | 2026-09-17 | beta | Record owner-approved Phase 7 closure: PR #32 merged, hosted CI passed, and GitHub prerelease `v0.2.7` created; retain honest harness `NOT_RUN` and npm-deferred boundaries. | 6b99f402 | RWANG |
 | 0.1.3b | 2026-09-17 | beta | Record real Phase 6 matrix consolidation/erasure and separate runtime results from document/package/release gates. | working-tree | RWANG |
 | 0.1.2b | 2026-09-17 | beta | Record the combined 31-pass result and preserve six Phase 6/release dependencies. | working-tree | RWANG |

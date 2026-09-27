@@ -27,11 +27,13 @@ const binPath = path.join(packageRoot, "apps", "msp-server", "bin", "msp-server.
 
 describe("AC-04: msp_memory_promote(target_scope=global_private) idempotency", () => {
   let call;
+  let client;
   let typed;
+  let proofRef;
   let dbPath;
   let tempDir;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     tempDir = mkdtempSync(path.join(tmpdir(), "msp-runtime-idempotency-test-"));
     dbPath = path.join(tempDir, "msp.sqlite3");
     call = createMspStdioCaller({
@@ -40,7 +42,17 @@ describe("AC-04: msp_memory_promote(target_scope=global_private) idempotency", (
       env: { ...process.env, MSP_DB_PATH: dbPath },
       timeoutMs: 10_000,
     });
-    typed = createTypedVaultContextMsp(new MspClient(call));
+    client = new MspClient(call);
+    typed = createTypedVaultContextMsp(client);
+    proofRef = (await client.recordEvidence({
+      schema_version: "govibe-proof-batch/v1",
+      idempotency_key: "proof-idem-1",
+      run_id: "run-idem-1",
+      workspace_id: "workspace-idem",
+      stage: 1,
+      source_snapshot_hash: "a".repeat(64),
+      verification: { verdict: "passed" },
+    })).proofRef;
   });
 
   afterAll(async () => {
@@ -58,7 +70,7 @@ describe("AC-04: msp_memory_promote(target_scope=global_private) idempotency", (
       sourceMemoryRef: "msp:memory/idem-source",
       targetScope: "global_private",
       candidate: { note: "idempotency candidate", value: 1 },
-      evidenceRefs: ["msp:proof/idem-1"],
+      evidenceRefs: [proofRef],
       reason: "idempotency test",
       idempotencyKey: "idem-key-1",
       ...overrides,

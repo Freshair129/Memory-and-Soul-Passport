@@ -304,17 +304,11 @@ export function createMemoryHandlers({ db, entityStore, vaultRegistry, journal, 
       // established behavior.
       const historyAsc = [...historyDesc].reverse();
 
-      // Documented gap (recorded in this packet's final report): API-009's
-      // MemoryEntityHistoryEntry = MemoryEntity & {version} implies every
-      // entry also carries vault_id/category/key/lifecycle_state/
-      // decay_score/access_count/current_version. entity_history's existing
-      // WP-12 schema stores none of lifecycle_state/decay_score/
-      // access_count/current_version per row (those are current-state-only
-      // columns on `entities`), so fabricating plausible-looking values for
-      // them would be dishonest. vault_id/category/key ARE stable across a
-      // given entity_id's versions, so they are safely backfilled from the
-      // already-resolved current entity; the four current-state-only fields
-      // are intentionally omitted rather than invented.
+      // API-009 §4.4 defines this history shape: stored per-version fields
+      // plus stable entity identity metadata from the current entity.
+      // entity_history does not store current_version, lifecycle_state,
+      // decay_score, or access_count per version, so those current-state-only
+      // fields are intentionally omitted rather than invented.
       const history = historyAsc.map((entry) => ({
         entity_id: current.entity_id,
         vault_id: current.vault_id,

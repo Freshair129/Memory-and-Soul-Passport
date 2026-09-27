@@ -1,7 +1,7 @@
 ---
-version: "0.4.0b"
+version: "0.5.0b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-23T00:00:00+07:00,RWANG"
+last_update: "2026-09-25T21:43:44+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -24,9 +24,10 @@ generic stdio boundary and cannot authorize a request itself.
 
 Principal-private ownership is tenant/person/agent/workspace; passport target
 ownership is tenant/person plus `allowPassport: true`. Scoped context receipt
-reads verify tenant/person grants, while legacy unscoped context rows retain
-their historical contract. Digest reads never include GROUP/ROOM sources and
-return reference-only provenance receipts. Fresh grants do not make revoked
+reads verify tenant/person grants, while unowned context rows with no stored
+tenant/principal tuple fail closed even when a grant is supplied. Digest
+reads never include GROUP/ROOM sources and return reference-only provenance
+receipts. Fresh grants do not make revoked
 or erased source content eligible again.
 
 MSP is a standalone memory and context authority for opaque external consumers and the optional GKS knowledge provider. No consumer repository is a build-time or schema dependency. For the isolated GenesisRAG17 pipeline it is the Tier 2 authenticated relay between Tier 1 zuri-ai, Tier 3 GKS and the Tier 4 worker. The extracted repository preserves the process boundary. The external MSP client remains stdio; the MSP-owned GKS provider now has an explicit stdio or private HTTP transport selection:
@@ -180,6 +181,7 @@ Risk is HIGH because the change crosses package boundaries and migration ownersh
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.5.0b | 2026-09-25 | beta | Document owner-confirmed fail-closed reads for context rows without stored tenant/principal ownership; resolve writes remain optionally unscoped. | working-tree | RWANG |
 | 0.3.0b | 2026-09-22 | beta | Make the MSP standalone boundary explicit, document canonical data model and ID binding, and reconcile API-011/Phase 6 implementation status with current migrations and tests. | working-tree | RWANG |
 | 0.2.8b | 2026-09-17 | beta | Describe approved Phase 6 layering, principal/passport boundaries and atomic erasure. | working-tree | RWANG |
 | 0.2.7b | 2026-09-14 | beta | Linked the proposed multi-user/multi-agent memory surface (API-011): `ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md` and the `DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md` v0.3.0b rewrite. No code change. | working-tree | ATHER |

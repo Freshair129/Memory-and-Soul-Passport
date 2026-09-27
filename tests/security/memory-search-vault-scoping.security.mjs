@@ -57,7 +57,7 @@ async function spawnRuntime(dbPath) {
   const call = createMspStdioCaller({
     command: process.execPath,
     args: [binPath],
-    env: { ...process.env, MSP_DB_PATH: dbPath, OLLAMA_BASE_URL: `http://127.0.0.1:${port}` },
+    env: { ...process.env, MSP_DB_PATH: dbPath, OLLAMA_BASE_URL: `http://127.0.0.1:${port}`, MSP_VECTOR_ENABLED: "1" },
     timeoutMs: 10_000,
   });
   return call;

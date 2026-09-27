@@ -13,16 +13,30 @@ const packageRoot = path.resolve(here, "..", "..");
 const binPath = path.join(packageRoot, "apps", "msp-server", "bin", "msp-server.mjs");
 const providerPath = path.join(here, "fixtures", "reference-gks-provider.mjs");
 
-function candidate(key = "knowledge-1", hash = "a".repeat(64)) {
+function candidate(key = "knowledge-1", hash = "a".repeat(64), provenanceRef = "msp:proof/provider-1") {
   return {
     schema_version: "govibe-knowledge-candidate/v1",
     idempotency_key: key,
     run_id: "run-provider-1",
+    workspace_id: "workspace-provider-1",
     stage: 1,
     source_snapshot_hash: hash,
-    provenance_ref: "msp:proof/provider-1",
+    provenance_ref: provenanceRef,
     candidate: { atoms: [{ id: "candidate-1" }] },
   };
+}
+
+async function candidateWithRecordedProof(instance, key, hash = "a".repeat(64)) {
+  const proof = await instance.client.recordEvidence({
+    schema_version: "govibe-proof-batch/v1",
+    idempotency_key: `proof-${key}`,
+    run_id: "run-provider-1",
+    workspace_id: "workspace-provider-1",
+    stage: 1,
+    source_snapshot_hash: hash,
+    verification: { verdict: "passed" },
+  });
+  return candidate(key, hash, proof.proofRef);
 }
 
 function runtime(dbPath, statePath, extraEnv = {}) {
@@ -70,14 +84,15 @@ it("validates GKS MCP results and persists an idempotent canonical promotion rec
   let restartedRuntime;
   try {
     firstRuntime = runtime(dbPath, statePath);
-    const first = await firstRuntime.client.submitKnowledgeCandidate(candidate());
+    const firstCandidate = await candidateWithRecordedProof(firstRuntime, "knowledge-1");
+    const first = await firstRuntime.client.submitKnowledgeCandidate(firstCandidate);
     expect(first.knowledgeRef).toMatch(/^gks:knowledge\//);
     expect(first.promotionRef).toMatch(/^msp:promotion\//);
     expect(first.sourceHash).toBe("a".repeat(64));
     await firstRuntime.call.close();
 
     restartedRuntime = runtime(dbPath, statePath);
-    const retry = await restartedRuntime.client.submitKnowledgeCandidate(candidate());
+    const retry = await restartedRuntime.client.submitKnowledgeCandidate(firstCandidate);
     expect(retry).toEqual(first);
     const providerState = JSON.parse(readFileSync(statePath, "utf8"));
     expect(Object.keys(providerState)).toHaveLength(1);
@@ -101,7 +116,8 @@ it("rejects a malformed GKS result and leaves no promotion receipt", async () =>
   const statePath = path.join(dir, "gks-state.json");
   const instance = runtime(dbPath, statePath, { GKS_FIXTURE_BAD_RESPONSE: "1" });
   try {
-    await expect(instance.client.submitKnowledgeCandidate(candidate("knowledge-invalid"))).rejects.toThrow(/gks_provider_invalid_response/);
+    const invalidCandidate = await candidateWithRecordedProof(instance, "knowledge-invalid");
+    await expect(instance.client.submitKnowledgeCandidate(invalidCandidate)).rejects.toThrow(/gks_provider_invalid_response/);
     const db = open(dbPath);
     try {
       expect(db.prepare("SELECT COUNT(*) AS count FROM knowledge_promotions").get().count).toBe(0);
@@ -119,9 +135,10 @@ it("msp_knowledge_promote fails closed with gks_provider_unconfigured when no pr
   const dbPath = path.join(dir, "msp.sqlite3");
   const instance = unconfiguredRuntime(dbPath);
   try {
+    const unconfiguredCandidate = await candidateWithRecordedProof(instance, "knowledge-unconfigured");
     let thrown;
     try {
-      await instance.client.submitKnowledgeCandidate(candidate("knowledge-unconfigured"));
+      await instance.client.submitKnowledgeCandidate(unconfiguredCandidate);
     } catch (error) {
       thrown = error;
     }
@@ -152,8 +169,8 @@ it("msp_knowledge_evidence_export relays a validated, cursor-paged evidence page
   const statePath = path.join(dir, "gks-state.json");
   const instance = runtime(dbPath, statePath);
   try {
-    await instance.client.submitKnowledgeCandidate(candidate("evidence-1"));
-    await instance.client.submitKnowledgeCandidate(candidate("evidence-2", "b".repeat(64)));
+    await instance.client.submitKnowledgeCandidate(await candidateWithRecordedProof(instance, "evidence-1"));
+    await instance.client.submitKnowledgeCandidate(await candidateWithRecordedProof(instance, "evidence-2", "b".repeat(64)));
     const scope = { portfolioId: "portfolio-zuri", tenantId: "tenant-a", businessId: "business-a", workspaceId: "workspace-a", projectId: "project-a", sharing: "private" };
 
     const page = await instance.call("msp_knowledge_evidence_export", { actor: "zuri-importer", scope, since_cursor: 0, limit: 1 });
@@ -164,7 +181,7 @@ it("msp_knowledge_evidence_export relays a validated, cursor-paged evidence page
       pipeline_definition_id: "DPL-KNOWLEDGE-INGEST-V1",
       execution_contract_id: "EXC-KNOWLEDGE-INGEST-V1",
       run_id: "run-provider-1",
-      provenance_ref: "msp:proof/provider-1",
+      provenance_ref: "msp:proof/proof-evidence-1",
       records: [],
     });
     expect(Object.keys(page.rows[0].metrics).sort()).toEqual(["processing_time_ms", "records_failed", "records_in", "records_out", "records_quarantined", "retry_count"]);
@@ -229,6 +246,15 @@ it("msp_memory_promote(target_scope=shared) fails closed with gks_provider_uncon
   const dbPath = path.join(dir, "msp.sqlite3");
   const instance = unconfiguredRuntime(dbPath);
   try {
+    const proof = await instance.client.recordEvidence({
+      schema_version: "govibe-proof-batch/v1",
+      idempotency_key: "proof-unconfigured-memory",
+      run_id: "run-unconfigured-memory",
+      workspace_id: "workspace-unconfigured",
+      stage: 1,
+      source_snapshot_hash: "a".repeat(64),
+      verification: { verdict: "passed" },
+    });
     let thrown;
     try {
       await instance.call("msp_memory_promote", {
@@ -239,7 +265,7 @@ it("msp_memory_promote(target_scope=shared) fails closed with gks_provider_uncon
         source_memory_ref: "msp:memory/unconfigured-source",
         target_scope: "shared",
         candidate: { note: "must be denied without a provider" },
-        evidence_refs: ["msp:proof/unconfigured-1"],
+        evidence_refs: [proof.proofRef],
         reason: "gks bridge unconfigured integration test",
         idempotency_key: "promo-unconfigured-1",
       });

@@ -46,6 +46,22 @@ function jsonResponse(body, { ok = true, status = 200 } = {}) {
 }
 
 describe("retrieval/vector.mjs embed() -- never throws (AC-05 / Ground rule 5)", () => {
+  it("when disabled, embedding and vector search return unavailable without network or database access", async () => {
+    const fetchImpl = vi.fn();
+    const db = { prepare: vi.fn() };
+    const client = createVectorClient({ enabled: false, fetchImpl });
+
+    const embedResult = await client.embed("hello");
+    expect(embedResult).toEqual({ vector: null, available: false, diagnostic: expect.stringContaining("vector_disabled") });
+    expect(client.vectorSearch(db, { queryVector: [1], vaultIds: ["vault-a"] })).toEqual({
+      hits: [],
+      available: false,
+      diagnostic: expect.stringContaining("vector_disabled"),
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(db.prepare).not.toHaveBeenCalled();
+  });
+
   it("returns {available:false} for empty text without ever calling fetch", async () => {
     const fetchImpl = vi.fn();
     const client = createVectorClient({ fetchImpl });

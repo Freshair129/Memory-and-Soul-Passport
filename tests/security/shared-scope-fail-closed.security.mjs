@@ -161,13 +161,23 @@ test("AC-03: msp_knowledge_promote always responds isError:true, reason gks_prov
   // so the two processes' migration runs are strictly sequential, never
   // concurrent, against this shared fresh file.
   try {
+    const rawProof = await rawToolCall(dbPath, "msp_evidence_record", {
+      schema_version: "govibe-proof-batch/v1",
+      idempotency_key: "proof-sec-1",
+      run_id: "run-sec",
+      workspace_id: "workspace-sec-1",
+      stage: 1,
+      source_snapshot_hash: "a".repeat(64),
+      verification: { verdict: "passed" },
+    });
     const raw = await rawToolCall(dbPath, "msp_knowledge_promote", {
       schema_version: "govibe-knowledge-candidate/v1",
       idempotency_key: "kc-sec-1",
       run_id: "run-sec",
+      workspace_id: "workspace-sec-1",
       stage: 1,
       source_snapshot_hash: "a".repeat(64),
-      provenance_ref: "msp:proof/sec-1",
+      provenance_ref: rawProof.structuredContent.proof_ref,
     });
     assert.equal(raw.isError, true);
     assert.match(raw.structuredContent.message, /gks_provider_unconfigured/);
@@ -175,14 +185,24 @@ test("AC-03: msp_knowledge_promote always responds isError:true, reason gks_prov
 
     const runtime = spawnRuntime(dbPath);
     try {
+      const proof = await runtime.client.recordEvidence({
+        schema_version: "govibe-proof-batch/v1",
+        idempotency_key: "proof-sec-2",
+        run_id: "run-sec",
+        workspace_id: "workspace-sec-2",
+        stage: 1,
+        source_snapshot_hash: "a".repeat(64),
+        verification: { verdict: "passed" },
+      });
       await assert.rejects(
         runtime.client.submitKnowledgeCandidate({
           schema_version: "govibe-knowledge-candidate/v1",
           idempotency_key: "kc-sec-2",
           run_id: "run-sec",
+          workspace_id: "workspace-sec-2",
           stage: 1,
           source_snapshot_hash: "a".repeat(64),
-          provenance_ref: "msp:proof/sec-2",
+          provenance_ref: proof.proofRef,
         }),
         /gks_provider_unconfigured/,
       );
@@ -197,6 +217,15 @@ test("AC-03: msp_knowledge_promote always responds isError:true, reason gks_prov
 test("AC-03: msp_memory_promote(target_scope=shared) always responds isError:true, reason gks_provider_unconfigured, never a fabricated gks: success", async () => {
   const { dbPath, cleanup } = tempDbPath();
   try {
+    const proof = await rawToolCall(dbPath, "msp_evidence_record", {
+      schema_version: "govibe-proof-batch/v1",
+      idempotency_key: "proof-sec-3",
+      run_id: "run-sec",
+      workspace_id: "workspace-sec",
+      stage: 1,
+      source_snapshot_hash: "a".repeat(64),
+      verification: { verdict: "passed" },
+    });
     const raw = await rawToolCall(dbPath, "msp_memory_promote", {
       schema_version: "govibe-memory-promotion/v1",
       actor: "boss",
@@ -205,7 +234,7 @@ test("AC-03: msp_memory_promote(target_scope=shared) always responds isError:tru
       source_memory_ref: "msp:memory/sec-source",
       target_scope: "shared",
       candidate: { note: "should be denied" },
-      evidence_refs: ["msp:proof/sec-3"],
+      evidence_refs: [proof.structuredContent.proof_ref],
       reason: "security test",
       idempotency_key: "promo-sec-1",
     });
@@ -275,6 +304,16 @@ test("DEC-MEMOS-52: msp_memory_promote(target_scope=global_private) never reads 
       });
       const principalEntityId = upserted.entity.entity_id;
 
+      const proof = await call("msp_evidence_record", {
+        schema_version: "govibe-proof-batch/v1",
+        idempotency_key: "proof-promote-sec-1",
+        run_id: "run-promote-sec",
+        workspace_id: "workspace-promote-sec-promoter",
+        stage: 1,
+        source_snapshot_hash: "a".repeat(64),
+        verification: { verdict: "passed" },
+      });
+
       const promoted = await call("msp_memory_promote", {
         schema_version: "govibe-memory-promotion/v1",
         actor: "boss",
@@ -283,7 +322,7 @@ test("DEC-MEMOS-52: msp_memory_promote(target_scope=global_private) never reads 
         source_memory_ref: principalEntityId,
         target_scope: "global_private",
         candidate: { note: "caller-supplied candidate, not derived from source_memory_ref" },
-        evidence_refs: ["msp:proof/promote-sec-1"],
+        evidence_refs: [proof.proof_ref],
         reason: "security test: source_memory_ref names a real principal-vault entity",
         idempotency_key: "promo-principal-sec-1",
       });

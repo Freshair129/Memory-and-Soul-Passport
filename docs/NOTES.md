@@ -1,7 +1,7 @@
 ---
-version: "0.2.13b"
+version: "0.4.3b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
-last_update: "2026-09-18T02:05:00+07:00,RWANG"
+last_update: "2026-09-27T09:14:45+07:00,RWANG"
 status: "beta"
 attributes:
   domain: "msp-extraction"
@@ -19,8 +19,9 @@ rows as authority. Protected-record consolidation requires live CONFIRMED
 DIRECT evidence and the current source thread agent/workspace attachment;
 passport reads remain subject-owned and agent-agnostic. The digest returns
 only entity metadata and opaque provenance receipts, with authenticated
-scope-bound cursors. Legacy unscoped API-006 context behavior described below
-is retained; it is not silently declared fixed by the new surface.
+scope-bound cursors. Unowned legacy API-006 context rows now fail closed on
+diff/audit/replay reads under owner-confirmed DEC-MEMOS-74; resolve writes
+may still create an unowned row.
 
 Summary-item ingestion from the broader BL070 plan is not part of the
 owner-approved source_record_id API. Release merge/tag/npm publication and
@@ -88,13 +89,29 @@ Imports in copied tests may change only to address the new workspace package bou
 
 ## Bugs found during extraction
 
-### API-009 history entry shape is incomplete in the source runtime
+### API-009 history entry contract matches stored snapshots
 
-API-009 defines `MemoryEntityHistoryEntry` as the complete `MemoryEntity` plus `version`. The current runtime's `msp_memory_history` response deliberately omits `lifecycle_state`, `decay_score`, `access_count`, and `current_version` because the `entity_history` schema does not store per-version values for those fields. The source handler already labels this as a documented gap. The extraction preserves that response exactly rather than fabricating values or changing the schema.
+Resolved in API-009 v0.3.4+draft. `MemoryEntityHistoryEntry` now describes
+the exact `msp_memory_history` response: stored per-version fields plus stable
+entity identity metadata. The handler still omits `current_version`,
+`lifecycle_state`, `decay_score`, and `access_count` because `entity_history`
+does not store those values per version. Runtime behavior and schema are
+unchanged; the contract no longer promises fabricated historical values.
 
-### Vector retrieval has no separate enable flag
+### Vector retrieval is controlled by a deployment flag
 
-The source runtime always constructs the optional bge-m3 client. Calls degrade to FTS when Ollama is unavailable, and callers opt into vector participation through search `mode`, but there is no distinct `MSP_VECTOR_ENABLED` feature flag. Adding one during extraction would change behavior, so this remains a recorded separation gap rather than an extraction-time fix.
+Resolved in API-009 v0.3.5+draft and msp-client-js v0.2.9. `MSP_VECTOR_ENABLED`
+defaults to `1`; `0` disables Ollama embedding requests on writes and vector
+search while retaining FTS and existing stored embeddings. Hybrid/vector
+searches report the existing `fts_only` fallback. The MSP client forwards the
+setting through its child-process allowlist. No schema migration is required.
+
+### API-009 machine contract version matches its source document
+
+Resolved: `packages/msp-contracts/schemas/API-009.tools.json` now reports the
+same contract version as the API-009 document frontmatter. Its conformance
+test compares those values directly, so later document version changes expose
+schema metadata drift. Tool schemas and runtime dispatch are unchanged.
 
 ### GitHub repository slug redirect was resolved during publish
 
@@ -102,40 +119,49 @@ Before publish, `gh repo view Freshair129/msp` resolved to `Freshair129/cognitiv
 
 ## Known gaps from the 2026-08-30 QA audit (design changes required, not test-only fixes)
 
-The 2026-08-30 QA (GHOST) audit surfaced five findings. Three were closed the same day as test-only work (commit `3767738`: the GKS-bridge unconfigured case, a real `msp_memory_forget` attack case, an `msp_memory_links_list` proof, and the `msp_memory_upsert` attacker direction). The remaining two cannot be closed by adding tests, because the behavior they describe is what the current wire contract actually specifies — closing them changes the contract. They are recorded here so they stay visible until a design decision addresses them.
+The 2026-08-30 QA (GHOST) audit surfaced five findings. Three were closed the same day as test-only work (commit `3767738`: the GKS-bridge unconfigured case, a real `msp_memory_forget` attack case, an `msp_memory_links_list` proof, and the `msp_memory_upsert` attacker direction). The two contract gaps were recorded below. The context ownership gap is addressed by owner-confirmed DEC-MEMOS-74. The promotion proof-reference gap is addressed by owner-confirmed DEC-MEMOS-75 and the API-006 amendment below.
 
-### Legacy context tools retain the historical ownership gap
+### Legacy context reads fail closed for unowned rows
 
-MEMOS-008 design v0.9.9b §5.0.7 now scopes new context rows by stored
-`tenant_id` and `principal_id`. Scoped diff/audit/replay require a signed
-grant with matching claims, bound to the exact tool and request. Denied
-rows follow the unknown-row path before cache/injection checks; scoped
-diffs refuse `include_payload` even with a valid grant. Context writes
-still record unsigned scope claims and are not evidence of authenticated
-ownership. Existing rows with both scope columns NULL retain the behavior
-below, including ignoring grants. The historical gap is therefore narrowed,
-not closed for legacy rows. See `tests/security/context-tools-ownership.security.mjs`.
+Owner-confirmed DEC-MEMOS-74 amends MEMOS-008 design §5.0.7: a row with
+both `tenant_id` and `principal_id` NULL has no persisted owner and cannot
+be read through `msp_context_diff`, `msp_context_audit`, or
+`msp_context_replay`, even when a valid grant is supplied. Each tool uses
+its existing unknown-row response path. Audit does not search the journal
+for that context. No owner is inferred from `actor`, `workspace_id`, or
+`agent_id`; existing rows are retained without backfill or deletion.
 
-`msp_context_diff`, `msp_context_audit`, and `msp_context_replay` resolve any `context_id` by primary key and answer with that context's data regardless of who asks. The `actor` string on the request is journaled, never authorized against the stored context's `workspace_id`/`agent_id`.
-
-Evidence:
-
-- `apps/msp-server/src/transport/handlers/context-handlers.mjs:149` (`msp_context_diff`) — resolves `base_context_id`/`target_context_id` via `selectContext.get(...)` and returns `changed_refs` for any caller; with `include_payload: true` it returns both contexts' full `refs_json` payloads.
-- `apps/msp-server/src/transport/handlers/context-handlers.mjs:191` (`msp_context_audit`) — returns journal findings and the hash-validity verdict for any `context_id`.
-- `apps/msp-server/src/transport/handlers/context-handlers.mjs:247` (`msp_context_replay`) — replays any stored context by id.
-
-A caller holding (or enumerating) another workspace's `context_id` can therefore read that workspace's resolved-context refs and journal trail. Contexts are keyed by `contextRef(randomUUID())` (`context-handlers.mjs:77`), so ids are unguessable in practice — the gap is the absence of an ownership rule, not a live enumeration path. Fixing it requires deciding what ownership means for these three tools' wire shapes (they carry `actor` but API-006/API-009 define no ownership semantics for it), which is a contract change, not a test.
-
-### Evidence refs accept arbitrary un-namespaced strings
-
-`msp_memory_promote` requires `evidence_refs` to be a non-empty array and rejects `gks:`-prefixed entries, but accepts any other string — `"trust me"` is valid evidence on the wire. The same applies to `source_memory_ref`, and to `msp_knowledge_promote`'s `provenance_ref`.
+Scoped rows still require a signed grant with matching tenant/principal
+claims, bound to the exact tool and request. Scoped diffs still refuse
+`include_payload` even with a valid grant. `msp_context_resolve` remains
+unchanged: its optional, unsigned scope write can still create an unowned
+row, and that row is unreadable through these three tools. See
+`tests/security/context-tools-ownership.security.mjs` and
+`BL-MEMOS-117` in the implementation plan.
 
 Evidence:
 
-- `apps/msp-server/src/transport/handlers/lifecycle-handlers.mjs:204-214` — the only validation on `evidence_refs`/`source_memory_ref` is non-emptiness plus `requireNoGksRefs` (which rejects only the `gks:` namespace; see `packages/msp-contracts/src/contracts/namespace-guard.mjs:42`). No `msp:` namespace requirement, no check that a ref resolves to any stored record.
-- `apps/msp-server/src/transport/handlers/lifecycle-handlers.mjs:56` — `msp_knowledge_promote`'s `provenance_ref` gets the same gks-only screening.
+- `packages/msp-contracts/src/contracts/context-scope-guard.mjs` denies rows that lack both stored owner fields.
+- `apps/msp-server/src/transport/handlers/context-handlers.mjs` gates diff, audit, and replay before returning context data; audit only calls `journal.read` after a row passes the gate.
+- `tests/security/context-tools-ownership.security.mjs` covers unowned denial and scoped-grant regressions.
 
-Promotion receipts can therefore be minted whose evidence chain points at nothing. Requiring namespaced (`msp:`-resolvable) evidence refs would reject requests today's contract documents as valid, so this too is a design decision, recorded rather than patched.
+### Promotion proof refs resolve within one workspace
+
+Under DEC-MEMOS-75, `msp_memory_promote.evidence_refs` and
+`msp_knowledge_promote.provenance_ref` must identify an allowed
+`msp_evidence_record` journal receipt from the same workspace. Both
+`msp_evidence_record` and `msp_knowledge_promote` require `workspace_id`.
+Missing and cross-workspace refs return the same `invalid_request` response.
+This compares caller-supplied workspace values; it does not authenticate
+workspace control.
+`source_memory_ref` stays opaque and is never resolved to an entity or vault
+under DEC-MEMOS-52.
+
+The proof receipt confirms that MSP accepted a proof-registration call. It
+does not prove that MSP stored or verified the submitted evidence body; the
+journal retains only registration metadata. See
+`docs/api/API-006-Promotion-Reference-Amendment.md` and
+`tests/security/promotion-proof-reference.security.mjs`.
 
 ## better-sqlite3 13 on Node 24: two failure modes, and what each one was
 
@@ -516,6 +542,11 @@ anyway.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.4.3b | 2026-09-27 | beta | Align API-009 machine-contract version with its source document and make conformance coverage detect future version drift. | working-tree | RWANG |
+| 0.4.2b | 2026-09-27 | beta | Close the vector separation gap with default-on `MSP_VECTOR_ENABLED`; disabled mode skips Ollama, retains FTS and stored embeddings, and is forwarded through msp-client-js. | working-tree | RWANG |
+| 0.4.1b | 2026-09-27 | beta | Resolve the API-009 history shape gap by documenting the stored snapshot fields and stable identity metadata; runtime and schema unchanged. | working-tree | RWANG |
+| 0.4.0b | 2026-09-27 | beta | Close the promotion proof-reference gap under owner-confirmed DEC-MEMOS-75: require recorded same-workspace proof receipts, keep source_memory_ref opaque, clarify that workspace equality is not caller authentication, and correct stale provenance notes. | working-tree | RWANG |
+| 0.3.0b | 2026-09-25 | beta | Close the unowned legacy context read gap under owner-confirmed DEC-MEMOS-74; preserve the optional unscoped write shape and keep un-namespaced evidence/provenance refs as a separate open gap. | working-tree | RWANG |
 | 0.2.13b | 2026-09-18 | beta | Aligned the cross-zuri acceptance gate with the current zuri-ai stage-2 adapter: the real caller now supplies agentId/workspaceId/nonce, resolves a thread through MSP, and passes `npm run test:cross-zuri` 4/4; the former refusal case remains historical evidence only. | 2db7ffb | RWANG |
 | 0.2.12b | 2026-09-18 | beta | Record the owner-approved published-product query relay, manifest-bound snapshot pricing and its contract/security proof. | 2696d4e | RWANG |
 | 0.2.11b | 2026-09-17 | beta | Record approved Phase 6 scope and its remaining summary-ingestion/release boundaries. | working-tree | RWANG |

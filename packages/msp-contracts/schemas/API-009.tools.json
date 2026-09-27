@@ -4,7 +4,7 @@
   "title": "API-009 Persistent Memory MSP tools",
   "contract": {
     "doc_id": "API-009-PERSISTENT-MEMORY-CONTRACT",
-    "version": "0.3.0+draft",
+    "version": "0.3.5+draft",
     "source": "docs/API-009-Persistent-Memory-Contract.md"
   },
   "$defs": {

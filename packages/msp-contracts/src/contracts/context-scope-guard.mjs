@@ -24,8 +24,8 @@ export function classifyContextAccess(row, verifiedClaims) {
 
 export function canReadContext(row, name, args, keyFor, now = Date.now()) {
   if (!row) return false;
-  // Legacy contexts ignore access entirely, including an invalid grant.
-  if (classifyContextAccess(row, null) === null) return true;
+  // A row without a persisted owner tuple is unowned; no grant can authorize it.
+  if (classifyContextAccess(row, null) === null) return false;
   const { access, ...input } = args;
   try {
     const claims = verifySignedGrant(name, input, access, keyFor, {

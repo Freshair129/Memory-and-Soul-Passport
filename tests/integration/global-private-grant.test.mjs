@@ -26,7 +26,12 @@ it.each([false, true])('global gate=%s protects all nine memory tools, promotion
     await expect(call('msp_memory_upsert', request)).rejects.toMatchObject({ code: 'grant_replayed' });
     const second = await call('msp_memory_upsert', signed('msp_memory_upsert', { ...upsert, key: 'second' }));
     const entityId = first.entity.entity_id;
-    const promotion = { actor: 'test', agent_id: 'owner', workspace_id: 'workspace', source_memory_ref: 'msp:memory/source', target_scope: 'global_private', idempotency_key: 'promotion', reason: 'test', evidence_refs: ['msp:proof/test'], candidate: { text: 'test' } };
+    const proof = await call('msp_evidence_record', {
+      actor: 'test', schema_version: 'govibe-proof-batch/v1', idempotency_key: 'proof-promotion',
+      run_id: 'run-promotion', workspace_id: 'workspace', stage: 1,
+      source_snapshot_hash: 'a'.repeat(64), verification: { verdict: 'passed' },
+    });
+    const promotion = { actor: 'test', agent_id: 'owner', workspace_id: 'workspace', source_memory_ref: 'msp:memory/source', target_scope: 'global_private', idempotency_key: 'promotion', reason: 'test', evidence_refs: [proof.proof_ref], candidate: { text: 'test' } };
     const cases = [
       ['msp_memory_upsert', upsert], ['msp_memory_get', { vault_id: vaultId, category: 'note', key: 'with spaces' }],
       ['msp_memory_list', { vault_id: vaultId }], ['msp_memory_search', { vault_id: vaultId, query: 'test' }],

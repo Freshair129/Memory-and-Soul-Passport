@@ -81,6 +81,7 @@ function cosineSimilarity(a, b) {
 
 /**
  * @param {object} [options]
+ * @param {boolean} [options.enabled] defaults to true; false disables vector embedding and search.
  * @param {string} [options.baseUrl] defaults to OLLAMA_BASE_URL env var,
  *   then http://localhost:11434 -- resolved at client-construction time
  *   (not per-call), matching the rest of this runtime's launch-time
@@ -88,6 +89,7 @@ function cosineSimilarity(a, b) {
  * @param {typeof fetch} [options.fetchImpl] injectable for tests.
  */
 export function createVectorClient({
+  enabled = true,
   baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434",
   model = DEFAULT_MODEL,
   dim = DEFAULT_DIM,
@@ -101,6 +103,9 @@ export function createVectorClient({
    *   Never throws.
    */
   async function embed(text) {
+    if (!enabled) {
+      return { vector: null, available: false, diagnostic: "vector_disabled: MSP_VECTOR_ENABLED=0." };
+    }
     if (typeof text !== "string" || !text.trim()) {
       return { vector: null, available: false, diagnostic: "empty_text: nothing to embed." };
     }
@@ -187,6 +192,9 @@ export function createVectorClient({
    * @param {number} [options.limit]
    */
   function vectorSearch(db, { queryVector, vaultIds, collection = DEFAULT_COLLECTION, limit = 20 } = {}) {
+    if (!enabled) {
+      return { hits: [], available: false, diagnostic: "vector_disabled: MSP_VECTOR_ENABLED=0." };
+    }
     if (!Array.isArray(queryVector) || queryVector.length === 0) {
       return { hits: [], available: false, diagnostic: "no_query_vector: nothing to search with." };
     }
@@ -229,7 +237,7 @@ export function createVectorClient({
     }
   }
 
-  return { embed, vectorSearch, breaker, model, dim, baseUrl };
+  return { embed, vectorSearch, breaker, model, dim, baseUrl, enabled };
 }
 
 /** Serializes a numeric vector to the BLOB shape `embeddings.vector` stores (Float32Array bytes). */

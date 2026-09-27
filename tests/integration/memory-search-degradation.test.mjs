@@ -60,7 +60,7 @@ async function spawnRuntimeWithClosedOllama() {
   const call = createMspStdioCaller({
     command: process.execPath,
     args: [binPath],
-    env: { ...process.env, MSP_DB_PATH: dbPath, OLLAMA_BASE_URL: `http://127.0.0.1:${port}` },
+    env: { ...process.env, MSP_DB_PATH: dbPath, OLLAMA_BASE_URL: `http://127.0.0.1:${port}`, MSP_VECTOR_ENABLED: "1" },
     timeoutMs: 15_000,
   });
   openCallers.push(call);
