@@ -7,6 +7,7 @@
 // callers must not turn this report into a green release gate by ignoring the
 // exit code.
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,8 +68,27 @@ async function expectDenied(call, name, input, claims, pattern, label) {
   throw new Error(`${label}: request unexpectedly succeeded`);
 }
 
-function legacyVaultRequest(tenantId, principalId, agentId, workspaceId) {
+function signedLegacyAccess(input) {
+  const context = input.access_context;
+  const grant = {
+    operation: "msp_vault_resolve_legacy",
+    expiresAt: Date.now() + 60_000,
+    payloadHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+    tenantId: context.tenant_id,
+    principalId: context.principal_id,
+    agentId: context.agent_id,
+    workspaceId: context.workspace_id,
+    projectId: context.project_id,
+    nonce: randomUUID(),
+  };
   return {
+    grant,
+    signature: createHmac("sha256", serviceKey).update(JSON.stringify(grant)).digest("hex"),
+  };
+}
+
+function legacyVaultRequest(tenantId, principalId, agentId, workspaceId) {
+  const input = {
     actor: "phase7-legacy-acceptance",
     access_context: {
       tenant_id: tenantId,
@@ -87,6 +107,7 @@ function legacyVaultRequest(tenantId, principalId, agentId, workspaceId) {
       write_shared: false,
     },
   };
+  return { ...input, legacy_access: signedLegacyAccess(input) };
 }
 
 function spawnRuntime(dbPath, env = {}, { allowTestClock = false } = {}) {
@@ -118,26 +139,25 @@ async function runLegacyVaultCase() {
   const tempDir = mkdtempSync(path.join(tmpdir(), "msp-phase7-legacy-"));
   const dbPath = path.join(tempDir, "msp.sqlite3");
   const call = spawnRuntime(dbPath, {
-    // The latest phase-5 contract deliberately proves this unsigned legacy
-    // path without either identity or thread-service keys.
+    // Legacy-only resolver calls need the service key for legacy_access but
+    // do not need the principal receipt identity key.
     MSP_IDENTITY_HMAC_KEY: undefined,
-    MSP_THREAD_SERVICE_KEY: undefined,
-    MSP_THREAD_SERVICE_KEYRING: undefined,
+    MSP_THREAD_SERVICE_KEY: serviceKey,
   });
   try {
     const result = await call("msp_vault_resolve", legacyVaultRequest("tenant-legacy", "principal-legacy", "agent-legacy", "workspace-legacy"));
     assert(typeof result.workspacePrivateVaultId === "string" && result.workspacePrivateVaultId.length > 0, "legacy vault resolve must return workspacePrivateVaultId");
     assert(Array.isArray(result.globalPrivateVaultIds), "legacy vault resolve must return globalPrivateVaultIds");
     assert(Array.isArray(result.sharedVaultIds), "legacy vault resolve must return sharedVaultIds");
-    assert(result.principalPrivateVaultId === null, "unsigned legacy vault resolve must not resolve a principal private vault");
-    assert(result.principalPassportVaultId === null, "unsigned legacy vault resolve must not resolve a principal passport vault");
+    assert(result.principalPrivateVaultId === null, "legacy-only vault resolve must not resolve a principal private vault");
+    assert(result.principalPassportVaultId === null, "legacy-only vault resolve must not resolve a principal passport vault");
     assert(result.permissions && typeof result.permissions === "object", "legacy vault resolve must return permissions");
     await call.close();
 
     const db = openDatabase(dbPath);
     try {
       const principalRows = db.prepare("SELECT COUNT(*) AS count FROM vaults WHERE vault_type IN ('principal_private', 'principal_passport')").get().count;
-      assert(Number(principalRows) === 0, "unsigned legacy vault resolve must not provision principal vault rows");
+      assert(Number(principalRows) === 0, "legacy-only vault resolve must not provision principal vault rows");
     } finally {
       db.close();
     }
@@ -151,7 +171,7 @@ async function runLegacyVaultCase() {
       "BL083.vault-resolve.legacy",
       "FAIL",
       "real stdio msp_vault_resolve",
-      `${errorText(error)}; baseline does not yet contain the latest phase-5 unsigned legacy behavior`,
+      `${errorText(error)}; signed legacy resolver contract failed`,
     );
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -465,11 +485,7 @@ async function runPhase6Acceptance(call, dbPath, phase6Legs) {
 
     for (const [index, leg] of phase6Legs.entries()) {
       const claims = { ...leg.claims, allowPassport: true };
-      const vault = await call(
-        "msp_vault_resolve",
-        signed(
-          "msp_vault_resolve",
-          {
+      const vaultInput = {
             actor: "phase7-phase6-matrix-acceptance",
             access_context: {
               tenant_id: leg.tenantId,
@@ -486,10 +502,12 @@ async function runPhase6Acceptance(call, dbPath, phase6Legs) {
               write_shared: false,
               allow_passport: true,
             },
-          },
-          claims,
-        ),
-      );
+          };
+      const principalRequest = signed("msp_vault_resolve", vaultInput, claims);
+      const vault = await call("msp_vault_resolve", {
+        ...principalRequest,
+        legacy_access: signedLegacyAccess(vaultInput),
+      });
       assert(vault.principalPrivateVaultId && vault.principalPassportVaultId, `${leg.tenantId}/${leg.principalId}/${leg.agentId}: principal vault resolve incomplete`);
 
       const ownerKey = `${leg.tenantId}:${leg.principalId}`;

@@ -34,6 +34,7 @@ import { fileURLToPath } from "node:url";
 
 import { MspClient } from "@freshair129/msp-client-js";
 import { createMspStdioCaller } from "@freshair129/msp-client-js";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { signThreadRequest } from "@freshair129/msp-contracts/thread-access";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -260,10 +261,8 @@ test("AC-03: msp_memory_promote(target_scope=shared) always responds isError:tru
 test("DEC-MEMOS-52: msp_memory_promote(target_scope=global_private) never reads a source_memory_ref naming an entity inside a principal_private vault -- it writes only into the caller's own global_private vault, exactly as it would for any other source_memory_ref value", async () => {
   const { dbPath, cleanup } = tempDbPath();
   try {
-    // Needs MSP_IDENTITY_HMAC_KEY (msp_vault_resolve's own deployment
-    // prerequisite, DEC-MEMOS-51) -- unlike spawnRuntime() above, which
-    // never sets it, since none of this file's other tests call
-    // msp_vault_resolve.
+    // This principal-vault resolve needs MSP_IDENTITY_HMAC_KEY for its
+    // receipt; every resolver call also carries a signed legacy_access grant.
     const transport = createMspStdioCaller({
       command: process.execPath,
       args: [binPath],
@@ -272,10 +271,23 @@ test("DEC-MEMOS-52: msp_memory_promote(target_scope=global_private) never reads 
     });
     const call = (name, input) => {
       const scope = input.access_context;
-      return transport(name, scope ? signThreadRequest(name, input, {
+      if (!scope) return transport(name, input);
+      const signedInput = signThreadRequest(name, input, {
         tenantId: scope.tenant_id, principalId: scope.principal_id,
         agentId: scope.agent_id, workspaceId: scope.workspace_id,
-      }, "a".repeat(32)) : input);
+      }, "a".repeat(32));
+      if (name !== "msp_vault_resolve") return transport(name, signedInput);
+      const legacyGrant = {
+        operation: "msp_vault_resolve_legacy", expiresAt: Date.now() + 60_000,
+        payloadHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+        tenantId: scope.tenant_id, principalId: scope.principal_id, agentId: scope.agent_id,
+        workspaceId: scope.workspace_id, projectId: scope.project_id, nonce: randomUUID(),
+      };
+      const legacyAccess = {
+        grant: legacyGrant,
+        signature: createHmac("sha256", "a".repeat(32)).update(JSON.stringify(legacyGrant)).digest("hex"),
+      };
+      return transport(name, { ...signedInput, legacy_access: legacyAccess });
     };
     call.close = () => transport.close();
     try {

@@ -83,23 +83,50 @@ function baseAuthorization(overrides = {}) {
 }
 
 async function resolve(call, accessContextOverrides = {}, authorizationOverrides = {}) {
-  return call("msp_vault_resolve", {
+  const input = {
     actor: "zuri-agent",
     access_context: baseAccessContext(accessContextOverrides),
     authorization: baseAuthorization(authorizationOverrides),
-  });
+  };
+  return call("msp_vault_resolve", signLegacyAccess(input));
 }
 
-function signAccess(name, input, claims, key = SERVICE_KEY, now = Date.now()) {
+function signLegacyAccess(input, grantOverrides = {}, key = SERVICE_KEY, now = Date.now()) {
+  const context = input.access_context;
+  const grant = {
+    nonce: randomBytes(16).toString("hex"),
+    tenantId: context.tenant_id,
+    principalId: context.principal_id,
+    agentId: context.agent_id,
+    workspaceId: context.workspace_id,
+    projectId: context.project_id,
+    operation: "msp_vault_resolve_legacy",
+    expiresAt: now + 60_000,
+    payloadHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+    ...grantOverrides,
+  };
+  return {
+    ...input,
+    legacy_access: {
+      grant,
+      signature: createHmac("sha256", key).update(JSON.stringify(grant)).digest("hex"),
+    },
+  };
+}
+
+function signAccess(name, input, claims, grantOverrides = {}, key = SERVICE_KEY, now = Date.now()) {
+  const { access: _access, legacy_access: legacyAccess, ...normalizedInput } = input;
   const grant = {
     nonce: randomBytes(16).toString("hex"),
     ...claims,
     operation: name,
     expiresAt: now + 60_000,
-    payloadHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+    payloadHash: createHash("sha256").update(JSON.stringify(normalizedInput)).digest("hex"),
+    ...grantOverrides,
   };
   return {
-    ...input,
+    ...normalizedInput,
+    ...(legacyAccess !== undefined ? { legacy_access: legacyAccess } : {}),
     access: {
       grant,
       signature: createHmac("sha256", key).update(JSON.stringify(grant)).digest("hex"),
@@ -107,19 +134,169 @@ function signAccess(name, input, claims, key = SERVICE_KEY, now = Date.now()) {
   };
 }
 
-async function resolveWithGrant(call, accessContextOverrides = {}, authorizationOverrides = {}, grantOverrides = {}) {
+async function resolveWithGrant(call, accessContextOverrides = {}, authorizationOverrides = {}, grantOverrides = {}, legacyGrantOverrides = {}) {
   const accessContext = baseAccessContext(accessContextOverrides);
   const authorization = baseAuthorization(authorizationOverrides);
   const input = { actor: "zuri-agent", access_context: accessContext, authorization };
-  return call("msp_vault_resolve", signAccess("msp_vault_resolve", input, {
+  const withLegacyGrant = signLegacyAccess(input, legacyGrantOverrides);
+  return call("msp_vault_resolve", signAccess("msp_vault_resolve", withLegacyGrant, {
     tenantId: accessContext.tenant_id,
     principalId: accessContext.principal_id,
     agentId: accessContext.agent_id,
     workspaceId: accessContext.workspace_id,
     allowPassport: authorization.allow_passport === true,
-    ...grantOverrides,
-  }));
+  }, grantOverrides));
 }
+
+test("msp_vault_resolve: missing legacy_access is refused before vault or journal writes", async () => {
+  const { dbPath, cleanup } = tempDbPath();
+  const call = spawnRuntime(dbPath);
+  try {
+    const input = {
+      actor: "zuri-agent",
+      access_context: baseAccessContext(),
+      authorization: baseAuthorization(),
+    };
+    await assert.rejects(call("msp_vault_resolve", input), /grant_required/);
+    await call.close();
+
+    const db = open(dbPath);
+    try {
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM vaults").get().count, 0);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM journal").get().count, 0);
+    } finally {
+      db.close();
+    }
+  } finally {
+    await call.close().catch(() => {});
+    cleanup();
+  }
+});
+
+test("msp_vault_resolve: legacy grant binds the full owner tuple and consumes its nonce atomically", async () => {
+  const { dbPath, cleanup } = tempDbPath();
+  const call = spawnRuntime(dbPath);
+  try {
+    const input = {
+      actor: "zuri-agent",
+      access_context: baseAccessContext(),
+      authorization: baseAuthorization(),
+    };
+    for (const claim of ["tenantId", "principalId", "agentId", "workspaceId", "projectId"]) {
+      const mismatched = signLegacyAccess(input, { [claim]: `invented-${claim}` });
+      await assert.rejects(call("msp_vault_resolve", mismatched), /grant_payload_mismatch/);
+    }
+
+    const signed = signLegacyAccess(input, { nonce: "legacy-once" });
+    const resolved = await call("msp_vault_resolve", signed);
+    assert.equal(typeof resolved.workspacePrivateVaultId, "string");
+    assert.equal(resolved.principalPrivateVaultId, null);
+    assert.equal(resolved.principalPassportVaultId, null);
+    await assert.rejects(call("msp_vault_resolve", signed), /grant_replayed/);
+
+    const db = open(dbPath);
+    try {
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM vaults").get().count, 3);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM journal").get().count, 1);
+      assert.equal(db.prepare("SELECT actor FROM journal").get().actor, "legacy_access_grant");
+    } finally {
+      db.close();
+    }
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("msp_vault_resolve: nonce collision between legacy and principal grants rolls back everything", async () => {
+  const { dbPath, cleanup } = tempDbPath();
+  const call = spawnRuntime(dbPath);
+  try {
+    const input = { actor: "zuri-agent", access_context: baseAccessContext(), authorization: baseAuthorization() };
+    const claims = {
+      tenantId: input.access_context.tenant_id,
+      principalId: input.access_context.principal_id,
+      agentId: input.access_context.agent_id,
+      workspaceId: input.access_context.workspace_id,
+      allowPassport: false,
+    };
+    const collided = signAccess(
+      "msp_vault_resolve",
+      signLegacyAccess(input, { nonce: "shared-once" }),
+      claims,
+      { nonce: "shared-once" },
+    );
+    await assert.rejects(call("msp_vault_resolve", collided), /grant_replayed/);
+
+    const db = open(dbPath);
+    try {
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM vaults").get().count, 0);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM journal").get().count, 0);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM grant_nonces").get().count, 0);
+    } finally {
+      db.close();
+    }
+
+    const retried = await resolveWithGrant(call, {}, {}, { nonce: "principal-retry" }, { nonce: "shared-once" });
+    assert.ok(retried.principalPrivateVaultId);
+    assert.ok(retried.workspacePrivateVaultId);
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("msp_vault_resolve: invalid optional principal access refuses the legacy branch before writes", async () => {
+  const { dbPath, cleanup } = tempDbPath();
+  const call = spawnRuntime(dbPath);
+  try {
+    const input = { actor: "zuri-agent", access_context: baseAccessContext(), authorization: baseAuthorization() };
+    const claims = {
+      tenantId: input.access_context.tenant_id,
+      principalId: input.access_context.principal_id,
+      agentId: input.access_context.agent_id,
+      workspaceId: input.access_context.workspace_id,
+      allowPassport: false,
+    };
+    const request = signAccess("msp_vault_resolve", signLegacyAccess(input), claims);
+    request.access.signature = "00";
+    await assert.rejects(call("msp_vault_resolve", request), /grant_signature_invalid/);
+
+    const db = open(dbPath);
+    try {
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM vaults").get().count, 0);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM journal").get().count, 0);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM grant_nonces").get().count, 0);
+    } finally {
+      db.close();
+    }
+  } finally {
+    await call.close();
+    cleanup();
+  }
+});
+
+test("msp_vault_resolve: a signed legacy request fails closed when no service key is configured", async () => {
+  const { dbPath, cleanup } = tempDbPath();
+  const call = spawnRuntime(dbPath, { MSP_THREAD_SERVICE_KEY: "", MSP_THREAD_SERVICE_KEYRING: "" });
+  try {
+    const input = { actor: "zuri-agent", access_context: baseAccessContext(), authorization: baseAuthorization() };
+    await assert.rejects(call("msp_vault_resolve", signLegacyAccess(input)), /grant_unconfigured/);
+    await call.close();
+
+    const db = open(dbPath);
+    try {
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM vaults").get().count, 0);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM journal").get().count, 0);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM grant_nonces").get().count, 0);
+    } finally {
+      db.close();
+    }
+  } finally {
+    await call.close().catch(() => {});
+    cleanup();
+  }
+});
 
 test("msp_vault_resolve: same resolve returns the same vault, sequentially, for both principal_private and principal_passport", async () => {
   const { dbPath, cleanup } = tempDbPath();
@@ -137,7 +314,7 @@ test("msp_vault_resolve: same resolve returns the same vault, sequentially, for 
   }
 });
 
-test("msp_vault_resolve: an unsigned legacy call returns null principal fields, while a matching grant can request the passport", async () => {
+test("msp_vault_resolve: a signed legacy-only call returns null principal fields, while a matching principal grant can request the passport", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath);
   try {
@@ -458,14 +635,13 @@ test("msp_memory_decay_tick: pinned reads the vault's own decay_policy, a princi
   }
 });
 
-test("cross-repo compatibility: a msp_vault_resolve request shaped exactly as zuri-ai's shipped msp-vault-resolver.js sends it is accepted and answered with a response satisfying validateVaultSet's own strict field checks unchanged", async () => {
+test("cross-repo migration gate: the current unsigned zuri-ai resolver request is refused, while a signed request retains its response shape", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath);
   try {
-    // Exact shape: no grant/signature, snake_case access_context/
-    // authorization, no allow_passport at all (the shipped caller does not
-    // send this field).
-    const response = await call("msp_vault_resolve", {
+    // This is the exact current caller shape: snake_case access_context/
+    // authorization, no grant/signature, and no allow_passport.
+    const request = {
       actor: "zuri-agent",
       access_context: {
         tenant_id: "tenant-cross", business_id: "biz-cross", principal_id: "principal-cross",
@@ -478,7 +654,17 @@ test("cross-repo compatibility: a msp_vault_resolve request shaped exactly as zu
         allow_global_private: false, allow_tenant_global_private: false,
         allow_shared: false, read: true, write_private: false, write_shared: false,
       },
-    });
+    };
+    await assert.rejects(call("msp_vault_resolve", request), /grant_required/);
+    const db = open(dbPath);
+    try {
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM vaults").get().count, 0);
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM journal").get().count, 0);
+    } finally {
+      db.close();
+    }
+
+    const response = await call("msp_vault_resolve", signLegacyAccess(request));
 
     // validateVaultSet's own strict field checks (msp-vault-resolver.js):
     // workspacePrivateVaultId non-empty string, globalPrivateVaultIds/
@@ -524,15 +710,11 @@ test("cross-repo compatibility: a msp_vault_resolve request shaped exactly as zu
   }
 });
 
-test("msp_vault_resolve: an unsigned legacy request does not need identity or service keys", async () => {
+test("msp_vault_resolve: a signed legacy-only request does not need the identity key", async () => {
   const { dbPath, cleanup } = tempDbPath();
   const call = spawnRuntime(dbPath, { MSP_IDENTITY_HMAC_KEY: "" });
   try {
-    const response = await call("msp_vault_resolve", {
-        actor: "zuri-agent",
-        access_context: baseAccessContext(),
-        authorization: baseAuthorization({ allow_global_private: false, allow_shared: false }),
-      });
+    const response = await resolve(call, {}, { allow_global_private: false, allow_shared: false });
     assert.equal(response.principalPrivateVaultId, null);
     assert.equal(response.principalPassportVaultId, null);
   } finally {

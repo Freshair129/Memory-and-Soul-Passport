@@ -24,8 +24,8 @@ function assertClaimStrings(grant, requiredClaims) {
 
 /**
  * Verify a signed grant without coupling the contracts layer to a storage or
- * domain implementation. `input` must already have its top-level `access`
- * member removed before payload hashing.
+ * domain implementation. `input` must already have its top-level grant
+ * envelope members removed before payload hashing.
  */
 export function verifySignedGrant(name, input, access, keyFor, { requiredClaims = [], now = Date.now() } = {}) {
   const grant = access?.grant;

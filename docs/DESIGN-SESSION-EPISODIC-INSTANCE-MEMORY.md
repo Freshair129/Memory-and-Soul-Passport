@@ -1,5 +1,5 @@
 ---
-version: "0.11.0b"
+version: "0.12.0b"
 created_at: "2026-09-13T21:00:00+07:00,Claude Fable 5.1,working-tree"
 last_update: "2026-09-27T00:00:00+07:00,RWANG"
 status: "proposed"
@@ -14,7 +14,16 @@ attributes:
 
 ## สรุปภาษาไทย
 
-**v0.9.9b (latest, English, ATHER).** RKOI and Fable reviewed consolidated
+**v0.12.0b (current, RWANG).** Reopens `RSK-MEMOS-12` and replaces the
+unsigned API-010 legacy resolver with a required signed
+`msp_vault_resolve_legacy` grant. The grant binds the normalized request and
+full legacy owner tuple, and its nonce is consumed in the same immediate
+transaction as provisioning and journaling. The existing `access` grant
+remains separate and optional for principal vaults. API-010 v0.3.0b is a
+breaking caller change; the documented zuri.ai caller still needs migration
+before deployment. See §5.0.5 and §5.0.14–§5.0.16.
+
+**v0.9.9b (historical, English, ATHER).** RKOI and Fable reviewed consolidated
 §5.0 (`763b4f4`/`bf84722`) in parallel and confirmed the consolidation was
 right and the mechanics hold when actually run — the race fix (40/40, two
 modes, 0 errors), `msp_context_audit` ordering byte-identical with/without
@@ -1042,7 +1051,7 @@ reaches the caller as an untyped driver error after roughly 5 seconds,
 matching §7.1's own existing precedent for lock contention this design
 does not otherwise map.
 
-**`.immediate()` is conditional at the `msp_vault_resolve` outer level —
+**Historical conditional rule, superseded by v0.12.0b:** `.immediate()` was conditional at the `msp_vault_resolve` outer level —
 not a blanket change to that tool's transaction (Fable W3, measured,
 REOPENED).** Fable measured a legacy-only resolve (no `access` field at
 all) waiting 439ms behind a concurrent principal provision when the outer
@@ -1068,6 +1077,12 @@ make inconsistent with it — when `msp_vault_resolve`'s outer transaction is
 described; when the outer transaction is deferred (legacy-only call), no
 principal provisioning happens at all, so `#provisionPrincipalVault` is
 never reached from inside it.
+
+**Current v0.12.0b rule (`RSK-MEMOS-12`).** Every successful API-010 call
+has a verified `legacy_access` grant, so the outer transaction always opens
+with `.immediate()`. The required legacy nonce, optional principal nonce,
+legacy and principal provisioning, and journal receipt share that transaction.
+Missing or invalid grants are refused before the transaction starts.
 
 **Separately, and not introduced by this phase (filed as a backlog item,
 not fixed here):** the legacy `provisionWorkspacePrivateVault`/
@@ -1353,17 +1368,16 @@ narrative, current-as-shape):**
 
 - The **legacy** fields (`workspacePrivateVaultId`/`globalPrivateVaultIds`/
   `sharedVaultIds`/`permissions.{read,writePrivate,writeShared,
-  policyVersion}`) are computed exactly as before, `access` present or
-  absent — `workspace_private`/`shared`/`global_private` provision
-  unconditionally on every well-formed call, gated only in which ids the
-  *response* includes, never in whether the rows are created (unchanged;
-  this is a pre-existing, accepted exposure, `RSK-MEMOS-12`, not touched
-  by this revision).
+  policyVersion}`) retain their response shape. All three legacy vault types
+  are resolved only after the required `legacy_access` grant verifies; the
+  existing authorization flags still control which ids the response
+  includes, not which legacy rows are provisioned.
 - **The principal half — `principalPrivateVaultId`/`principalPassportVaultId`/
   `permissions.allowPassport` — is gated on `access`, per §5.0.5's grant
-  requirement, wired as follows**: `access` absent ⇒ both fields `null`,
-  `permissions.allowPassport: false`, no error, no provisioning — a legacy
-  caller is unaffected byte-for-byte. `access` present, verified, and
+  requirement, wired as follows**: after a valid `legacy_access`, `access`
+  absent ⇒ both fields `null`, `permissions.allowPassport: false`, no
+  principal provisioning, while the signed legacy resolution still succeeds.
+  `access` present, verified, and
   matching the request's own `access_context` tuple as required above (and,
   for the passport field, carrying `allowPassport: true`) ⇒ resolves and
   provisions the principal half in full — a self-contained statement of
@@ -1416,6 +1430,22 @@ narrative, current-as-shape):**
   carry. A call refused for an invalid grant (any typed code above,
   including `grant_unconfigured`) writes no journal row at all (nothing was
   provisioned, authenticated or not).
+
+**API-010 legacy resolver grant (`RSK-MEMOS-12`, current v0.12.0b).**
+Every `msp_vault_resolve` request requires a separate signed
+`legacy_access` envelope. Verify it with operation
+`msp_vault_resolve_legacy`, the tenant service-key resolver, the shared
+vault-grant verifier, and required string claims `tenantId`, `principalId`,
+`agentId`, `workspaceId`, `projectId`, and `nonce`. Match every claim to the
+normalized `access_context` tuple. Both this grant and the optional principal
+`access` grant bind the request after removing both top-level grant fields;
+the principal grant remains a distinct authorization for principal vaults.
+Consume the required legacy nonce in the outer immediate transaction before
+any vault provisioning. Missing `legacy_access` is `grant_required`; a
+present invalid or expired grant keeps its typed verifier error. A trusted
+signer must derive owner claims from authenticated server-side session state;
+the MSP signature proves only that its configured key holder signed the
+payload and does not independently prove directory membership.
 
 ### 5.0.6 The nine `msp_memory_*` tools — evaluation order
 
@@ -1614,7 +1644,8 @@ which also closes cross-surface nonce reuse for free: a nonce consumed by
 a thread-grant call cannot be reused by a vault- or context-grant call in
 the same tenant, and vice versa), is **required** on: `msp_memory_upsert`,
 `msp_memory_forget`, `msp_memory_links_create`, `msp_memory_decay_tick`
-when `dry_run` is not `true`, and `msp_vault_resolve`'s principal half.
+when `dry_run` is not `true`, every `msp_vault_resolve` call's required
+`legacy_access` grant, and its optional principal `access` grant.
 Absent nonce claim on a tool in this set ⇒ `grant_nonce_required`; a
 reused `(tenantId, nonce)` pair ⇒ `grant_replayed`.
 
@@ -1680,7 +1711,13 @@ replayed read-only grant only re-reads data the caller was already
 authorized to read at signing time, the same reasoning `DEC-MEMOS-20`
 already applies to API-011's own read tools. `msp_context_resolve`'s
 write path takes no grant at all (§5.0.7), so no nonce question applies to
-it either.
+  it either.
+
+**API-010 nonce placement (`RSK-MEMOS-12`, current v0.12.0b).** The required
+legacy nonce, optional principal nonce, legacy provisioning, optional
+principal provisioning, and journal receipt are consumed/written in one
+outer `.immediate()` transaction. Duplicate `(tenantId, nonce)` values
+across the two grants fail as replay and roll back the entire resolve.
 
 ### 5.0.9 Multi-agent vault rules and `global_private`
 
@@ -2077,13 +2114,14 @@ CREATE INDEX idx_contexts_tenant_principal ON contexts (tenant_id, principal_id)
 | `not_found` | Target `vault_id`/`entity_id`/`context_id` does not exist, or exists as a `principal_private`/`principal_passport`/scoped-`contexts` target the caller's grant does not authorize (absent grant, invalid grant, mismatched tuple, erased target, missing `allowPassport`) — one answer, byte-identical to true nonexistence | every `msp_memory_*` tool (§5.0.6); `msp_context_diff` (§5.0.7) |
 | (quiet, no throw) `replayable: false` / `context_reproducible: false` + `context_not_found` | Identical collapse for `msp_context_audit`/`msp_context_replay`, routed through `bd47594`'s own existing branching (§5.0.7) — **not** always the quiet shape; an unknown/denied `context_id` supplied with a `cache_id`/`injection_id` still throws `context_identifier_mismatch` | `msp_context_audit`/`msp_context_replay` |
 | `vault_scope_denied` | Unchanged, unbroadened: `mountVault`'s caller-ownership refusal for a legacy (mountable) vault, `links_create`'s endpoint-consistency refusal, and (new, §5.0.9) a present vault grant whose `agentId` does not match a `global_private` target's own `agent_id` | `msp_vault_mount`, `msp_memory_links_create`, `global_private` calls carrying a mismatched grant |
+| `grant_required` | Required API-010 `legacy_access` is absent; refused before provisioning or journaling | `msp_vault_resolve` |
 | `grant_signature_invalid` | Grant missing/wrong-`operation`, HMAC does not verify, or a required claim is absent or fails the string/≤128-char type check (§5.0.5) — required claims: `tenantId`/`principalId` always; `agentId`/`workspaceId` only for a `principal_private` target; `policyRevision` **only** for a thread grant, never a vault or context grant | every grant-gated tool |
 | `grant_expired` | `expiresAt` in the past, or more than 65,000ms ahead of issue | every grant-gated tool |
 | `grant_payload_mismatch` | `payloadHash` does not match the actual request body | every grant-gated tool |
-| `grant_nonce_required` | A tool in the nonce-required set (§5.0.8) carries no `nonce` claim | `msp_memory_upsert`/`forget`/`links_create`, non-dry-run `decay_tick`, `msp_vault_resolve`'s principal half |
+| `grant_nonce_required` | A grant in the nonce-required set (§5.0.8) carries no usable `nonce` claim | `msp_memory_upsert`/`forget`/`links_create`, non-dry-run `decay_tick`, every `msp_vault_resolve` legacy grant, and its optional principal grant |
 | `grant_replayed` | The grant's `(tenantId, nonce)` pair already exists in `grant_nonces` | same set |
 | `identity_hmac_unconfigured` | No `MSP_IDENTITY_HMAC_KEY` configured for a call that must compute `principal_hmac` — scoped precisely in §5.0.14, **not** every `msp_vault_resolve` call unconditionally | `msp_vault_resolve`, when a valid principal grant is present |
-| `grant_unconfigured` | No `MSP_THREAD_SERVICE_KEY`/keyring configured at all, so a present grant can be neither verified nor refused for a signature reason — distinct from `grant_signature_invalid` (a key exists but the grant does not verify under it) (§5.0.5) | `msp_vault_resolve`'s principal half when `access` is present. On the nine `msp_memory_*` tools this is one of the failure modes the principal-type one-refusal rule collapses to `not_found` (§5.0.6); on a `global_private` target with `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED` on, it is one of the failure modes §5.0.9 collapses to `vault_scope_denied` instead — never surfaced under its own code on either surface |
+| `grant_unconfigured` | No `MSP_THREAD_SERVICE_KEY`/keyring configured, so a present grant cannot be verified — distinct from `grant_signature_invalid` (§5.0.5) | Every `msp_vault_resolve` call's required `legacy_access`, or its optional `access`; on the nine `msp_memory_*` tools this is one of the failure modes the principal-type one-refusal rule collapses to `not_found` (§5.0.6); on a `global_private` target with `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED` on, it is one of the failure modes §5.0.9 collapses to `vault_scope_denied` instead — never surfaced under its own code on either surface |
 | `vault_provision_conflict` (`VaultProvisionConflictError`) | Backstop only (§5.0.3): `SQLITE_CONSTRAINT_UNIQUE` or `SQLITE_BUSY_SNAPSHOT` on the losing `INSERT` | `msp_vault_resolve` |
 | `validation_failed` | `msp_vault_resolve`'s legacy `access_context`/`authorization` shape errors (unchanged); the `mountId` control-character rejection (§5.0.4); the `category`-space rejection (§5.0.11) | `msp_vault_resolve`, `msp_vault_mount`, `msp_memory_upsert` |
 | `access_context_required` / `access_context_denied` | **Declared in `contracts/errors.mjs`, never raised by any tool in this design** — retained only as a primitive a future, genuinely-unguessable-id surface could use | not raised anywhere |
@@ -2093,16 +2131,16 @@ CREATE INDEX idx_contexts_tenant_principal ON contexts (tenant_id, principal_id)
 - **`MSP_IDENTITY_HMAC_KEY`, scoped precisely (corrects `DEC-MEMOS-51`'s
   original "mandatory for the whole tool" claim, RKOI W9).** `msp_vault_resolve`
   now provisions/resolves the principal half **only** when a valid,
-  matching vault grant is present (§5.0.5) — a call with no `access`
-  field at all, or one whose grant fails verification, never reaches
-  principal resolution and therefore never needs to compute
-  `principal_hmac`. **The key is required only for a call carrying a
-  valid principal grant** — a legacy-fields-only call (no `access`)
-  succeeds with no key configured at all; a call with an invalid grant is
-  refused its own typed grant error (§5.0.5), independent of the key.
-- **`MSP_THREAD_SERVICE_KEY`/`MSP_THREAD_SERVICE_KEYRING`, now also a
-  principal-vault deployment prerequisite** — required by any caller that
-  needs to mint or verify a vault grant, not only a thread grant.
+  matching principal `access` grant is present (§5.0.5) — a call without
+  `access`, or one whose principal grant fails verification, never reaches
+  principal resolution and never computes `principal_hmac`. **The key is
+  required only for a call carrying a valid principal grant.** Every call
+  still requires the separate `legacy_access` grant and the service key
+  below; a legacy-only signed call does not require this identity key.
+- **`MSP_THREAD_SERVICE_KEY`/`MSP_THREAD_SERVICE_KEYRING`, mandatory for
+  API-010** — every request must carry a verifiable `legacy_access` grant;
+  the same keyring verifies the optional principal `access` grant and other
+  vault grants.
 - **zuri-ai's own deployment change, corrected (`BL-MEMOS-113`, §5.0.15):
   `buildMspChildEnvironment`'s allowlist
   (`msp-stdio-transport.js:33-74`) must forward
@@ -2177,6 +2215,16 @@ not actually authenticated in this turn, if that signer's own
 implementation does not itself enforce the refusal this design requires of
 it.
 
+**API-010 signer requirement (`RSK-MEMOS-12`, current v0.12.0b).** The
+trusted caller that mints `legacy_access` must derive all five owner claims
+from the authenticated server-side session and refuse to sign when that
+session is absent or denied. MSP receives stdio arguments without caller
+identity, so the HMAC proves only that the configured key holder signed the
+normalized payload; it does not prove directory membership. The currently
+documented zuri.ai caller sends no resolver grant and has not been upgraded
+or verified for this contract. Deploying API-010 v0.3.0b is blocked until
+that caller is migrated and its signed request is verified end to end.
+
 ### 5.0.16 §15 test cases (current)
 
 - **Race, corrected**: the two-connection provisioning race, run under
@@ -2238,14 +2286,20 @@ it.
   `links_create` and non-dry-run `decay_tick` is refused the same way;
   `dry_run: true` `decay_tick` and every read-only tool accept an
   unnonced grant (regression, proving the read/write split).
-- **Ungranted vs. invalid-grant `msp_vault_resolve`**: a call with no
-  `access` field at all resolves legacy fields, returns `null` for both
-  principal fields, provisions nothing, and needs no
-  `MSP_IDENTITY_HMAC_KEY`; a call with a present but invalid/expired/
-  wrong-operation `access` field is refused the matching typed grant
-  error for the **whole** call, never a silent `null`; a call with a
-  valid, matching grant resolves and provisions the principal half exactly
-  as before, and requires the key.
+- **API-010 required legacy grant (`RSK-MEMOS-12`)**: a request without
+  `legacy_access` returns `grant_required` and leaves vault and journal row
+  counts unchanged. A malformed, expired, wrong-operation, payload-mismatched,
+  or tuple-mismatched legacy grant is refused with its typed error and no
+  writes; replaying a consumed nonce returns `grant_replayed` and also leaves
+  no writes. A valid grant with a newly invented but correctly signed tuple
+  provisions only that tuple. Signed legacy-only resolution works without
+  `MSP_IDENTITY_HMAC_KEY` but requires the service key. A valid, separate
+  optional `access` grant still provisions principal vaults and requires the
+  identity key; invalid present principal grants still refuse the whole call
+  before legacy provisioning. A service key missing for `legacy_access` is
+  `grant_unconfigured` with no writes. Reusing one nonce across both grants
+  returns `grant_replayed` and rolls back both nonce inserts and every vault
+  and journal write, so the legacy nonce remains retryable after rollback.
 - **`mountId` control-character rejection**: `workspace_id`/`mount_alias`
   containing `U+0000`–`U+001F` is `validation_failed`, before any vault
   lookup; a NUL byte specifically no longer produces two different tuples
@@ -2303,9 +2357,11 @@ Every case in §5.0.16 above, run through the real process, plus:
 - `mountId`'s control-character rejection (§5.0.4) and `BL-MEMOS-115`'s
   `category`-space rejection (§5.0.11) are both enforced, with the
   `entities` data audit `BL-MEMOS-115` requires recorded in the PR.
-- Cross-repo: `msp_vault_resolve`'s response satisfies zuri-ai's shipped
-  `validateVaultSet` unchanged when called exactly as `msp-vault-resolver.js`
-  calls it.
+- Cross-repo: an unsigned request shaped exactly as the current shipped
+  zuri-ai caller sends is refused as `grant_required` before vault or journal
+  writes. API-010 v0.3.0b deployment remains blocked until that caller signs
+  `legacy_access` from authenticated server-side session state and an upgraded
+  cross-repository request passes the existing `validateVaultSet` checks.
 
 ### 5.1 Caller identity on the nine API-009 `msp_memory_*` tools — the `access_context` amendment (new, v0.6.1b, PH-MEMOS-5, `BL-MEMOS-063`, unstarted)
 
@@ -9271,6 +9327,7 @@ only that it is now precisely specified.**
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.12.0b | 2026-09-27 | proposed | Reopen RSK-MEMOS-12: require signed `legacy_access` for every API-010 resolver call; bind the normalized request and legacy owner tuple; consume its nonce with provisioning/journaling; block deployment pending zuri.ai caller migration. | working-tree | RWANG |
 | 0.11.0b | 2026-09-27 | proposed | Add owner-confirmed DEC-MEMOS-75: resolve promotion proof references to allowed journal receipts in the same workspace; require workspace_id on evidence registration and knowledge promotion, preserve DEC-MEMOS-52 source_memory_ref opacity, and clarify that workspace equality is not caller authentication. | working-tree | RWANG |
 | 0.10.0b | 2026-09-25 | proposed | Add owner-confirmed DEC-MEMOS-74: context reads fail closed for rows with no stored tenant/principal owner while msp_context_resolve's optional unscoped write shape remains unchanged. Amend §5.0.7 and link BL-MEMOS-117. | working-tree | RWANG |
 | 0.9.9b | 2026-09-16 | proposed | **Answers RKOI's and Fable's second parallel review of consolidated §5.0 (`763b4f4`/`bf84722`) — 4 critical/3 warnings between them; both confirmed the consolidation was right and the mechanics hold when actually run, on issues neither round's own testing reached: `DEC-MEMOS-63..73` (§19), all REOPENED.** (1) The `}).immediate()();` trailing-call bug — called the transaction's own already-resolved result as a function, `TypeError` on every successful provision — fixed to `}).immediate();` (§5.0.3). (2) One refusal rule: every grant failure mode on a principal-type target collapses to the identical `not_found`, closing RKOI's nonce-vs-unknown-id oracle and the claim-narrowing-by-type oracle (§5.0.6). (3) A legacy target's grant is now ignored outright; a `global_private` target's grant is checked before, not through, the real `isVaultAccessibleTo`'s own mount short-circuit, closing RKOI's proof that a mounted `global_private` vault let a mismatched grant through (§5.0.6/§5.0.9). (4) `MSP_GLOBAL_PRIVATE_GRANT_REQUIRED` (new env var) now gates `msp_memory_promote` and `msp_vault_status` alongside the nine `msp_memory_*` tools — Fable proved both provisioned `global_private` ungated even under the "specified" gate (§5.0.9). (5) `msp_vault_resolve`'s outer `.immediate()` is conditional on a present, verified grant — a legacy-only call keeps its deferred transaction, closing Fable's measured 439ms contention regression; the legacy `provision*Vault` path's own identical, pre-existing hazard is recorded, not fixed, as new `BL-MEMOS-116` (§5.0.3). (6) The grant nonce is consumed inside the same write transaction as the mutation it guards, after classification returns `ok` — an honest retry after a rollback must not be refused `grant_replayed` (§5.0.8). (7) The forced-collision test is rewritten to actually reach the retry and retries-exhausted paths; `PROVISION_ID_MINT_RETRY_LIMIT = 5` restated (§5.0.3/§5.0.16). (8) The `category`-space rejection applies uniformly at request parsing — "creation only" was never coherent for a request-parsing check (§5.0.11). (9) The trust statement restated precisely: the spawner sets the child's entire environment, so the signature defends only against a party reaching an MSP process it did not spawn/configure; `claimsFor` compares principals only when a key and an actual `principalId` argument are both present — the vault-grant signer must be stricter, refusing outright with no authenticated actor (§5.0.15). (10) The shared verifier core documented as load-bearing (the shipped `verifyThreadGrant` rejects all three new claim shapes outright); the claim type-check extended to thread grants too (§5.0.5). Also: `msp_vault_resolve` gains `grant_unconfigured` as its own observable code; the grant's tuple claims must equal the request's `access_context` byte-for-byte, closing RKOI's cross-principal silent-provision proof; the unauthenticated journal row's `payload_json` fully specified. Every passage outside §5.0 that still read as current and disagreed with it is bannered or reopened: §5, §8.5, §13, §14, §16, §19 (`DEC-MEMOS-40`/`42`/`43`/`44`/`46`/`50`). Completeness grep re-run across all three PH-MEMOS-5 documents, including a byte-level check for stray CRs and raw control characters; results reported alongside this revision. Mirrored in `docs/ADR-MSP-MEMORY-OS-MULTI-USER-MULTI-AGENT.md` v0.1.29b and `docs/IMPLEMENTATION-PLAN-MEMORY-OS.md` v0.1.30b. No id reused; new id: `BL-MEMOS-116` (plan). | working-tree | ATHER |

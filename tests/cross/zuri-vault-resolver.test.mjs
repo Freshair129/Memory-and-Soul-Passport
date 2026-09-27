@@ -9,11 +9,11 @@ import { expect, it } from 'vitest';
 import { createServer } from '../../apps/msp-server/src/server.mjs';
 
 it.each(['read', 'write'])(
-  'the unmodified zuri-ai vault resolver supports legacy %s without principal signing or identity keys',
+  'the unmodified zuri-ai vault resolver is refused for legacy %s until it signs legacy_access',
   async (operation) => {
     if (!process.env.MSP_TEST_ZURI_ROOT) throw new Error('MSP_TEST_ZURI_ROOT is required for test:cross-zuri');
     const modulePath = resolve(process.env.MSP_TEST_ZURI_ROOT, 'apps/server/src/modules/agent/msp-vault-resolver.js');
-    const { createMspVaultResolver, validateVaultSet } = await import(/* @vite-ignore */ pathToFileURL(modulePath).href);
+    const { createMspVaultResolver } = await import(/* @vite-ignore */ pathToFileURL(modulePath).href);
     const tempRoot = mkdtempSync(join(tmpdir(), 'msp-zuri-vault-contract-'));
     let server;
     try {
@@ -41,19 +41,14 @@ it.each(['read', 'write'])(
         },
         authorizedVaults: [{ scope: 'private', ...scope }],
       };
-      const result = await resolver.resolve(authorization, { operation });
-      expect(validateVaultSet(result)).toEqual(result);
-      expect(result.permissions).toMatchObject({
-        read: true, writePrivate: operation === 'write', writeShared: false, policyVersion: 'synthetic-policy-v1',
-      });
-      expect(result.globalPrivateVaultIds).toHaveLength(1);
-      expect(result.sharedVaultIds).toHaveLength(1);
+      await expect(resolver.resolve(authorization, { operation })).rejects.toMatchObject({ code: 'grant_required' });
       expect(calls).toHaveLength(1);
       expect(calls[0].name).toBe('msp_vault_resolve');
       expect(calls[0].args).not.toHaveProperty('access');
+      expect(calls[0].args).not.toHaveProperty('legacy_access');
+      expect(server.db.prepare('SELECT COUNT(*) AS count FROM vaults').get().count).toBe(0);
+      expect(server.db.prepare('SELECT COUNT(*) AS count FROM journal').get().count).toBe(0);
       expect(server.db.prepare("SELECT COUNT(*) AS count FROM vaults WHERE vault_type IN ('principal_private', 'principal_passport')").get().count).toBe(0);
-      const repeated = await resolver.resolve(authorization, { operation });
-      expect(repeated).toEqual(result);
     } finally {
       server?.close();
       rmSync(tempRoot, { recursive: true, force: true });

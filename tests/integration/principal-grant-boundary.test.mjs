@@ -9,12 +9,24 @@ function signed(name, input, extra = {}) {
     payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'), nonce: randomUUID(), ...extra };
   return { ...input, access: { grant, signature: createHmac('sha256', key).update(JSON.stringify(grant)).digest('hex') } };
 }
+function legacyAccess(input) {
+  const ctx = input.access_context;
+  const grant = {
+    operation: 'msp_vault_resolve_legacy', expiresAt: Date.now() + 60_000,
+    payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+    tenantId: ctx.tenant_id, principalId: ctx.principal_id, agentId: ctx.agent_id,
+    workspaceId: ctx.workspace_id, projectId: ctx.project_id, nonce: randomUUID(),
+  };
+  return { grant, signature: createHmac('sha256', key).update(JSON.stringify(grant)).digest('hex') };
+}
 it('principal memory refusals match unknown targets, replay rolls back all writes, and API-011 shares nonce protection', async () => {
   const server = createServer({ dbPath: ':memory:', env: { MSP_THREAD_SERVICE_KEY: key, MSP_IDENTITY_HMAC_KEY: key } });
   const call = async (name, input) => (await server.toolRegistry.dispatch(name, input)).structuredContent;
   try {
     const resolve = { access_context: { tenant_id: 'tenant', principal_id: 'principal', agent_id: 'agent', workspace_id: 'workspace', project_id: 'project' }, authorization: { allowed: true, allow_passport: true } };
-    const vaults = await call('msp_vault_resolve', signed('msp_vault_resolve', resolve));
+    const vaultRequest = signed('msp_vault_resolve', resolve);
+    vaultRequest.legacy_access = legacyAccess(resolve);
+    const vaults = await call('msp_vault_resolve', vaultRequest);
     const vaultId = vaults.principalPrivateVaultId;
     const upsert = { vault: { vault_id: vaultId }, category: 'note', key: 'first', body_json: { value: 'test' } };
     const first = await call('msp_memory_upsert', signed('msp_memory_upsert', upsert));

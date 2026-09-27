@@ -1,21 +1,21 @@
 ---
 doc_id: "API-010-VAULT-RESOLVE-CONTRACT"
-version: "0.2.0b"
+version: "0.3.0b"
 status: "beta"
 created_at: "2026-09-16T00:00:00+07:00,KIN"
-last_update: "2026-09-17T02:50:00+07:00,RWANG"
+last_update: "2026-09-27T00:00:00+07:00,RWANG"
 ---
 
 # API-010 Vault Resolve Contract (`msp_vault_resolve`)
 
 This is the Phase 5 implementation of `msp_vault_resolve`. The current
 normative authority is `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`
-v0.9.9b §5.0; earlier §5.1 material is historical. This contract records
-the wire shape and the signed principal-grant extension. Compatibility was
-checked against the immutable zuri.ai `origin/main` resolver extract at
-`c07cfaba8eedb53f677e313977a1e2344fb5c8c5`; the cross-repo test proves the
-unsigned legacy request/response path without requiring an identity or
-service key.
+v0.12.0b §5.0; earlier §5.1 material is historical. This contract records
+the signed legacy grant and the optional, separate signed principal grant.
+The required `legacy_access` field is a breaking change from API-010 v0.2.0b:
+the currently documented zuri.ai caller sends no grant and must be upgraded
+before deploying this version. The cross-repo unsigned request now proves
+refusal without vault writes; no upgraded external caller has been verified.
 
 ## 1. Purpose
 
@@ -39,13 +39,14 @@ response body; `error` follows the same JSON-RPC 2.0 error object shape
 every other tool in this runtime uses, `data.code` carrying the typed error
 code from §5.
 
-The legacy request remains accepted without an `access` field so the shipped
-zuri.ai resolver stays byte-compatible. When the optional top-level
-`access: { grant, signature }` field is present, the grant is verified against
-the exact request body (with `access` removed) before the principal vault half
-is resolved or provisioned. The signed grant is required for
-`principal_private`/`principal_passport`; legacy fields continue to resolve
-without it.
+Every request requires `legacy_access: { grant, signature }`. Its grant must
+verify as operation `msp_vault_resolve_legacy`, bind the normalized request
+body (with both `access` and `legacy_access` removed), and match the tenant,
+principal, agent, workspace, and project claims to `access_context`. Its
+one-use nonce is consumed atomically with all legacy provisioning and the
+journal receipt. The optional top-level `access: { grant, signature }` is a
+separate grant for operation `msp_vault_resolve`; it uses the same normalized
+body and remains required only to resolve or provision principal vaults.
 
 ## 3. Request
 
@@ -68,11 +69,22 @@ reconstructed:
     "read": true, "write_private": false, "write_shared": false,
     "allow_passport": false
   },
+  "legacy_access": {
+    "grant": {
+      "operation": "msp_vault_resolve_legacy",
+      "expiresAt": 1757836865123,
+      "payloadHash": "sha256(JSON.stringify(request without access and legacy_access))",
+      "tenantId": "string", "principalId": "string", "agentId": "string",
+      "workspaceId": "string", "projectId": "string",
+      "nonce": "128-bit-random-string"
+    },
+    "signature": "hex HMAC-SHA256(JSON.stringify(grant))"
+  },
   "access": {
     "grant": {
       "operation": "msp_vault_resolve",
       "expiresAt": 1757836865123,
-      "payloadHash": "sha256(JSON.stringify(request without access))",
+      "payloadHash": "sha256(JSON.stringify(request without access and legacy_access))",
       "tenantId": "string", "principalId": "string",
       "agentId": "string", "workspaceId": "string",
       "allowPassport": false, "nonce": "128-bit-random-string"
@@ -81,6 +93,12 @@ reconstructed:
   }
 }
 ```
+
+`legacy_access` is required. `access` is optional and independent. A trusted
+signer must derive the grant claims from authenticated server-side session
+state; it must not sign caller-supplied tool arguments as proof of identity.
+The signature proves only that the configured key holder signed the bound
+request; MSP does not independently establish directory membership.
 
 - **`actor`** is a plain string (client-side default `"zuri-agent"`),
   carried for audit only — it is not a vault key and not a grant field, and
@@ -174,12 +192,13 @@ writeShared,policyVersion}` only) — this is the concrete mechanism behind
 |---|---|
 | `validation_failed` | `access_context` missing a required field (`tenant_id`/`principal_id`/`agent_id`/`workspace_id`/`project_id`), or `authorization` is absent or not an object |
 | `vault_scope_denied` | `authorization.allowed` is not exactly `true` |
-| `grant_signature_invalid` | A present `access` grant is malformed, signed for another operation, or has an invalid required claim |
+| `grant_required` | `legacy_access` is absent; no legacy provisioning or journal write occurs |
+| `grant_signature_invalid` | A present `access` or `legacy_access` grant is malformed, signed for another operation, or has an invalid required claim |
 | `grant_expired` | A present grant is outside the accepted `expiresAt` window |
 | `grant_payload_mismatch` | A grant hash or its owner tuple does not match this request |
 | `grant_unconfigured` | A present grant cannot be verified because no service key is configured |
-| `grant_nonce_required` / `grant_replayed` | The principal resolve grant has no usable nonce or its nonce was already consumed |
-| `identity_hmac_unconfigured` | A signed principal resolve needs an identity key for its receipt actor. Unsigned legacy resolution requires neither an identity key nor a service key. |
+| `grant_nonce_required` / `grant_replayed` | The required legacy grant, or optional principal grant, has no usable nonce or its nonce was already consumed |
+| `identity_hmac_unconfigured` | A valid principal grant requires an identity key for its receipt actor. Legacy-only signed resolution does not require this key. |
 | `vault_provision_conflict` | Defensive unique/snapshot race or exhausted random-ID collision retries. Normal concurrent resolve is serialized with BEGIN IMMEDIATE and returns the winning row to both callers. Retry the whole request with a fresh nonce after a refusal. |
 
 Neither API-009 nor API-010 emits the historical unsigned-scope error codes.
@@ -188,10 +207,15 @@ retains the typed grant failures listed above.
 
 ## 6. Idempotency and concurrency
 
-Two authorized calls with fresh nonces and the identical `(tenant_id, principal_id, agent_id,
-workspace_id)` always return the identical `principalPrivateVaultId`. A
+Two authorized calls with fresh legacy nonces and the identical legacy owner
+tuple always return the same legacy vault IDs; principal vault resolution
+also requires a fresh `access` nonce and the identical
+`(tenant_id, principal_id, agent_id, workspace_id)` tuple. The handler
+consumes the required legacy nonce, optional principal nonce, legacy
+provisioning, optional principal provisioning, and journal receipt inside one
+outer immediate transaction. Any refusal rolls back all of them. A
 call that needs to newly provision both the episodic vault and (when
-gated) the passport vault does so inside one outer transaction — a failure
+gated) the passport vault does so inside that same transaction — a failure
 partway through never leaves one vault created and the other not,
 including the `vault_provision_conflict` failure above: that transaction
 rolls back in full and the error propagates unremapped; this tool never
@@ -214,14 +238,15 @@ workspace_id, provisioned_episodic, provisioned_passport,
 passport_requested }`. No raw `principal_id`, no `business_id`, no other
 provenance field ever appears in this receipt.
 
-Unsigned legacy calls still append a receipt, but use actor `unauthenticated`,
+Signed legacy-only calls append a receipt with actor `legacy_access_grant`,
 NULL `ref` and workspace, NULL tenant/agent/workspace payload fields, and
-false provisioned/passport-requested booleans. Caller identity and request
-flags cannot turn that receipt into a principal-identity oracle.
+false principal-provisioned/passport-requested booleans. The actor is a
+constant label, not a caller identity. Calls with a principal grant retain
+the `principal_hmac` actor and scoped receipt described above.
 
 ## 8. Compatibility
 
-Versioning: this contract is `0.2.0b`; breaking changes to any request or
+Versioning: this contract is `0.3.0b`; breaking changes to any request or
 response shape require a version bump and a Changelog row, following
 `docs/STD-Document-Versioning-Governance.md`. `docs/API-009-Persistent-
 Memory-Contract.md`'s signed-access section (§4.11 there) reuses the same
@@ -232,5 +257,6 @@ grant envelope and verifier, while this tool retains its legacy
 
 | Version | Date | Summary |
 |---|---|---|
+| 0.3.0b | 2026-09-27 | Require a separately signed, payload-bound, nonce-protected legacy resolver grant; keep the principal grant optional and separate; refuse the unsigned legacy request. |
 | 0.2.0b | 2026-09-17 | PH-MEMOS-5 alignment with design §5.0: retained unsigned legacy resolution, added optional signed principal access, target claim checks, nonce consumption, and conditional principal response fields. |
 | 0.1.0b | 2026-09-16 | PH-MEMOS-5 (`TASK-MEMOS-008`, `BL-MEMOS-062`): first real implementation and first real contract file for `msp_vault_resolve` — request/response shapes matched exactly against zuri-ai's shipped `msp-vault-resolver.js` (`origin/main@4ca28c1d`), full error table, idempotency/concurrency guarantees, and the journal receipt shape. |

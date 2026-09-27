@@ -1,10 +1,10 @@
-// msp_vault_resolve (API-010, PH-MEMOS-5 §5.0.5). Legacy vault fields stay
-// unsigned and byte-compatible; the principal half is opt-in behind a
-// verified vault grant.
+// msp_vault_resolve (API-010, PH-MEMOS-5 §5.0.5). Legacy response fields
+// stay unchanged behind a required grant; principal vaults remain optional.
 import { createHmac } from "node:crypto";
 
 import { consumeGrantNonce } from "@freshair129/msp-core/grant-nonces";
 import {
+  GrantRequiredError,
   GrantPayloadMismatchError,
   IdentityHmacUnconfiguredError,
   MspRuntimeError,
@@ -46,7 +46,23 @@ export function createVaultResolveHandler({ db, vaultRegistry, journal, identity
         throw new MspRuntimeError("vault_scope_denied: authorization.allowed must be exactly true.", "vault_scope_denied");
       }
 
-      const { access, ...input } = args;
+      const { access, legacy_access: legacyAccess, ...input } = args;
+      if (legacyAccess === undefined) throw new GrantRequiredError();
+      const legacyGrant = verifyVaultGrant("msp_vault_resolve_legacy", input, legacyAccess, keyFor, {
+        vaultType: "legacy_access",
+        now: now(),
+      });
+      if (
+        legacyGrant.tenantId !== tenantId ||
+        legacyGrant.principalId !== principalId ||
+        legacyGrant.agentId !== agentId ||
+        legacyGrant.workspaceId !== workspaceId ||
+        legacyGrant.projectId !== projectId
+      ) {
+        throw new GrantPayloadMismatchError("The legacy grant claims do not match access_context.");
+      }
+      requireGrantNonce(legacyGrant);
+
       const hasAccess = access !== undefined;
       let grant = null;
       let principalGrant = false;
@@ -71,6 +87,7 @@ export function createVaultResolveHandler({ db, vaultRegistry, journal, identity
       }
 
       const resolve = db.transaction(() => {
+        consumeGrantNonce(db, { tenantId: legacyGrant.tenantId, nonce: legacyGrant.nonce, expiresAt: legacyGrant.expiresAt });
         if (principalGrant) consumeGrantNonce(db, { tenantId: grant.tenantId, nonce: grant.nonce, expiresAt: grant.expiresAt });
 
         const workspacePrivateVault = vaultRegistry.provisionWorkspacePrivateVault(workspaceId, { projectId });
@@ -93,7 +110,7 @@ export function createVaultResolveHandler({ db, vaultRegistry, journal, identity
         }
 
         journal.append({
-          actor: principalGrant ? `principal_hmac:${computePrincipalHmac(identityHmacKey, tenantId, principalId)}` : "unauthenticated",
+          actor: principalGrant ? `principal_hmac:${computePrincipalHmac(identityHmacKey, tenantId, principalId)}` : "legacy_access_grant",
           toolName: "msp_vault_resolve",
           ref: principalPrivateVault?.vault_id ?? null,
           workspaceId: principalGrant ? workspaceId : null,
@@ -110,7 +127,7 @@ export function createVaultResolveHandler({ db, vaultRegistry, journal, identity
 
         return { workspacePrivateVault, sharedVault, globalPrivateVault, principalPrivateVault, principalPassportVault };
       });
-      const result = principalGrant ? resolve.immediate() : resolve();
+      const result = resolve.immediate();
 
       return {
         workspacePrivateVaultId: result.workspacePrivateVault.vault_id,

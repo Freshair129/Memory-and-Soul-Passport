@@ -6,11 +6,13 @@ const PRINCIPAL_CLAIMS = ["tenantId", "principalId"];
 export function verifyVaultGrant(name, input, access, keyFor, { vaultType, now = Date.now() } = {}) {
   const requiredClaims = vaultType === "principal_private"
     ? [...PRINCIPAL_CLAIMS, "agentId", "workspaceId"]
-    : vaultType === "principal_passport"
-      ? PRINCIPAL_CLAIMS
-      : vaultType === "global_private"
-        ? ["agentId"]
-        : PRINCIPAL_CLAIMS;
+    : vaultType === "legacy_access"
+      ? [...PRINCIPAL_CLAIMS, "agentId", "workspaceId", "projectId"]
+      : vaultType === "principal_passport"
+        ? PRINCIPAL_CLAIMS
+        : vaultType === "global_private"
+          ? ["agentId"]
+          : PRINCIPAL_CLAIMS;
   // A global_private grant is tenantless.  Do not let an optional tenantId
   // claim steer verification to a tenant key; the signed grant must use the
   // configured global/default key for this scope.
