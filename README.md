@@ -72,12 +72,14 @@ The server uses JSON-RPC 2.0 messages separated by newlines on stdin/stdout. It 
 
 ### Signed principal memory and local setup
 
-MEMOS-008 uses signed `access: { grant, signature }` for principal vault
-resolution, all nine principal memory tools, and scoped context reads.
-Unsigned `msp_vault_resolve` still returns legacy vault fields, null
-principal IDs, and requires neither a service nor an identity key.
-Signed principal resolution needs `MSP_THREAD_SERVICE_KEY` (or its tenant
-keyring) and `MSP_IDENTITY_HMAC_KEY` for the receipt actor. API-011 thread
+MEMOS-008 uses signed `legacy_access: { grant, signature }` for every
+`msp_vault_resolve` call. The grant binds the legacy owner tuple and request
+payload and consumes a one-use nonce with provisioning. The optional,
+separate signed `access` grant enables principal vault resolution.
+Legacy-only resolution requires `MSP_THREAD_SERVICE_KEY` (or its tenant
+keyring); only principal resolution also needs `MSP_IDENTITY_HMAC_KEY` for
+the receipt actor. The prior unsigned zuri.ai caller must be upgraded before
+deploying API-010 v0.3.0b. API-011 thread
 identity paths also require the identity key. Principal vault IDs are random
 UUIDs, independent of those keys and the owner tuple.
 
@@ -137,6 +139,7 @@ See [docs/NOTES.md](docs/NOTES.md) for extraction evidence and known gaps, and [
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.3.4b | 2026-09-27 | proposed | Require a signed, nonce-protected legacy grant for API-010 vault provisioning; document the breaking zuri.ai caller migration. | working-tree | RWANG |
 | 0.3.3b | 2026-09-18 | beta | Document the owner-approved published-product query relay, its Tier 4 `/products/query` boundary and snapshot-only pricing evidence. | 2696d4e | RWANG |
 | 0.3.2b | 2026-09-17 | beta | Describe approved Phase 6 APIs, confidence policy and bounded vault erasure; distinguish package candidate from release activation. | working-tree | RWANG |
 | 0.3.1b | 2026-09-17 | beta | Align signed grants, unsigned legacy compatibility, global gate, receipt key versioning and local schema setup; retain Phase 6/release gates. | working-tree | RWANG |

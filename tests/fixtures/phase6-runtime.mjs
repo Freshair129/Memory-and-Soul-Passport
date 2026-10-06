@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,6 +11,25 @@ export const SERVICE_KEY = "phase6-synthetic-service-key-00000000";
 export const OWNER = { tenantId: "tenant-six", principalId: "alice", agentId: "agent-six", workspaceId: "workspace-six", allowPassport: true };
 export const sign = (name, input, claims = OWNER, now = Date.now()) => signThreadRequest(name, input, claims, SERVICE_KEY, now);
 
+function signLegacyResolver(input) {
+  const context = input.access_context;
+  const grant = {
+    operation: "msp_vault_resolve_legacy",
+    expiresAt: Date.now() + 60_000,
+    payloadHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+    tenantId: context.tenant_id,
+    principalId: context.principal_id,
+    agentId: context.agent_id,
+    workspaceId: context.workspace_id,
+    projectId: context.project_id,
+    nonce: randomUUID(),
+  };
+  return {
+    grant,
+    signature: createHmac("sha256", SERVICE_KEY).update(JSON.stringify(grant)).digest("hex"),
+  };
+}
+
 export async function fixture() {
   const dir = mkdtempSync(path.join(tmpdir(), "msp-phase6-"));
   const dbPath = path.join(dir, "msp.db");
@@ -22,11 +41,14 @@ export async function fixture() {
   const signed = (name, input, claims = OWNER) => call(name, sign(name, input, claims));
   await call("msp_ping", {});
   const db = open(dbPath);
-  const vault = async (claims = OWNER) => signed("msp_vault_resolve", {
-    actor: "test", access_context: { tenant_id: claims.tenantId, principal_id: claims.principalId,
+  const vault = async (claims = OWNER) => {
+    const input = { actor: "test", access_context: { tenant_id: claims.tenantId, principal_id: claims.principalId,
       agent_id: claims.agentId, workspace_id: claims.workspaceId, project_id: "phase6-project" },
-    authorization: { allowed: true, allow_passport: true },
-  }, claims);
+      authorization: { allowed: true, allow_passport: true },
+    };
+    const principalRequest = sign("msp_vault_resolve", input, claims);
+    return call("msp_vault_resolve", { ...principalRequest, legacy_access: signLegacyResolver(input) });
+  };
   const source = async ({ claims = OWNER, kind = "DIRECT", confidence = 0.95, state = "CONFIRMED", visibility = "AGENT", body = { language: "Thai" } } = {}) => {
     const scope = { ...claims, channelAccountId: "phase6-channel", externalRoomRef: randomUUID(), audienceKind: kind,
       policyRevision: "v1", writePrivate: true, confirmMemory: true, readPrivate: true, assertParticipants: true };

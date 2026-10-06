@@ -39,6 +39,12 @@ export class ValidationError extends MspRuntimeError {
   }
 }
 
+export class GrantRequiredError extends MspRuntimeError {
+  constructor(message = "A signed legacy resolver grant is required.") {
+    super(`grant_required: ${message}`, "grant_required");
+  }
+}
+
 /**
  * A candidate or ref tried to assign or reference gks:-namespaced canonical
  * identity. Raised by contracts/namespace-guard.mjs's rejectCanonicalCandidate

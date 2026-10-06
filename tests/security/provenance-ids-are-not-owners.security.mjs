@@ -54,7 +54,20 @@ function spawnRuntime(dbPath) {
       instanceId: scope.instance_id, threadId: scope.thread_id, sessionId: scope.session_id,
     };
     const signature = createHmac('sha256', HMAC_KEY).update(JSON.stringify(grant)).digest('hex');
-    return transport(name, { ...input, access: { grant, signature } });
+    const request = { ...input, access: { grant, signature } };
+    if (name === 'msp_vault_resolve') {
+      const legacyGrant = {
+        operation: 'msp_vault_resolve_legacy', expiresAt: Date.now() + 60_000,
+        payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+        tenantId: scope.tenant_id, principalId: scope.principal_id, agentId: scope.agent_id,
+        workspaceId: scope.workspace_id, projectId: scope.project_id, nonce: randomUUID(),
+      };
+      request.legacy_access = {
+        grant: legacyGrant,
+        signature: createHmac('sha256', HMAC_KEY).update(JSON.stringify(legacyGrant)).digest('hex'),
+      };
+    }
+    return transport(name, request);
   };
   call.close = () => transport.close();
   return call;

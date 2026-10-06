@@ -47,10 +47,22 @@ function signedInput(name, input, claims, overrides = {}) {
 
 function resolvePrincipalVault(call, input) {
   const ctx = input.access_context;
-  return call("msp_vault_resolve", signedInput("msp_vault_resolve", input, {
+  const principalRequest = signedInput("msp_vault_resolve", input, {
     tenantId: ctx.tenant_id, principalId: ctx.principal_id, agentId: ctx.agent_id,
     workspaceId: ctx.workspace_id, allowPassport: input.authorization.allow_passport === true, nonce: randomUUID(),
-  }));
+  });
+  const legacyGrant = {
+    operation: "msp_vault_resolve_legacy",
+    expiresAt: Date.now() + 60_000,
+    payloadHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+    tenantId: ctx.tenant_id, principalId: ctx.principal_id, agentId: ctx.agent_id,
+    workspaceId: ctx.workspace_id, projectId: ctx.project_id, nonce: randomUUID(),
+  };
+  const legacyAccess = {
+    grant: legacyGrant,
+    signature: createHmac("sha256", CONTEXT_SERVICE_KEY).update(JSON.stringify(legacyGrant)).digest("hex"),
+  };
+  return call("msp_vault_resolve", { ...principalRequest, legacy_access: legacyAccess });
 }
 
 async function resolveContext(call, { accessContext = undefined, workspaceId = "workspace-ctx", agentId = "agent-ctx" } = {}) {

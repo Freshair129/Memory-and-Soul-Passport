@@ -4,7 +4,7 @@
   "title": "API-010 Vault Resolve MSP tool",
   "contract": {
     "doc_id": "API-010-VAULT-RESOLVE-CONTRACT",
-    "version": "0.2.0b",
+    "version": "0.3.0b",
     "source": "docs/API-010-Vault-Resolve-Contract.md"
   },
   "$defs": {
@@ -48,6 +48,30 @@
         "signature": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
       }
     },
+    "signedLegacyAccess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grant", "signature"],
+      "properties": {
+        "grant": {
+          "type": "object",
+          "required": ["operation", "expiresAt", "payloadHash", "tenantId", "principalId", "agentId", "workspaceId", "projectId", "nonce"],
+          "properties": {
+            "operation": { "const": "msp_vault_resolve_legacy" },
+            "expiresAt": { "type": "integer" },
+            "payloadHash": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+            "tenantId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "principalId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "projectId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "nonce": { "type": "string", "minLength": 1, "maxLength": 128 }
+          },
+          "additionalProperties": true
+        },
+        "signature": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+      }
+    },
     "vaultResolveAuthorization": {
       "type": "object",
       "properties": {
@@ -68,11 +92,12 @@
       "name": "msp_vault_resolve",
       "inputSchema": {
         "type": "object",
-        "required": ["access_context", "authorization"],
+        "required": ["access_context", "authorization", "legacy_access"],
         "properties": {
           "actor": { "type": "string" },
           "access_context": { "$ref": "#/$defs/vaultResolveAccessContext" },
           "authorization": { "$ref": "#/$defs/vaultResolveAuthorization" },
+          "legacy_access": { "$ref": "#/$defs/signedLegacyAccess" },
           "access": { "$ref": "#/$defs/signedAccess" }
         }
       }

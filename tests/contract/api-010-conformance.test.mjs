@@ -6,6 +6,7 @@
 // file) by making a real, well-formed call and checking its response
 // shape -- an unregistered tool would answer "unknown tool"/"method not
 // found", not a vault-shaped result.
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -21,6 +22,29 @@ const binPath = path.join(repoRoot, "apps", "msp-server", "bin", "msp-server.mjs
 const schemaPath = path.join(repoRoot, "packages", "msp-contracts", "schemas", "API-010.tools.json");
 const expectedTools = ["msp_vault_resolve"];
 const IDENTITY_HMAC_KEY = "d".repeat(32);
+const SERVICE_KEY = "s".repeat(32);
+
+function signLegacyRequest(input) {
+  const context = input.access_context;
+  const grant = {
+    operation: "msp_vault_resolve_legacy",
+    expiresAt: Date.now() + 60_000,
+    payloadHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+    tenantId: context.tenant_id,
+    principalId: context.principal_id,
+    agentId: context.agent_id,
+    workspaceId: context.workspace_id,
+    projectId: context.project_id,
+    nonce: randomUUID(),
+  };
+  return {
+    ...input,
+    legacy_access: {
+      grant,
+      signature: createHmac("sha256", SERVICE_KEY).update(JSON.stringify(grant)).digest("hex"),
+    },
+  };
+}
 
 let call;
 let tempDir;
@@ -30,7 +54,7 @@ beforeAll(() => {
   call = createMspStdioCaller({
     command: process.execPath,
     args: [binPath],
-    env: { ...process.env, MSP_DB_PATH: path.join(tempDir, "msp.sqlite3"), MSP_IDENTITY_HMAC_KEY: IDENTITY_HMAC_KEY },
+    env: { ...process.env, MSP_DB_PATH: path.join(tempDir, "msp.sqlite3"), MSP_IDENTITY_HMAC_KEY: IDENTITY_HMAC_KEY, MSP_THREAD_SERVICE_KEY: SERVICE_KEY },
     timeoutMs: 15_000,
   });
 });
@@ -47,16 +71,18 @@ describe("API-010 machine contract", () => {
     const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
     expect(schema.contract).toMatchObject({
       doc_id: "API-010-VAULT-RESOLVE-CONTRACT",
-      version: "0.2.0b",
+      version: "0.3.0b",
     });
     expect(schema.tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
-    for (const tool of schema.tools) expect(tool.inputSchema).toMatchObject({ type: "object" });
+    for (const tool of schema.tools) {
+      expect(tool.inputSchema).toMatchObject({ type: "object", required: ["access_context", "authorization", "legacy_access"] });
+    }
   });
 });
 
 describe("API-010 request/response conformance over real stdio", () => {
-  it("msp_vault_resolve is registered on the real server and answers the shipped zuri-ai caller's request shape", async () => {
-    const result = await call("msp_vault_resolve", {
+  it("msp_vault_resolve is registered and answers a signed legacy-only request", async () => {
+    const result = await call("msp_vault_resolve", signLegacyRequest({
       actor: "zuri-agent",
       access_context: {
         tenant_id: "tenant-api-010",
@@ -75,7 +101,7 @@ describe("API-010 request/response conformance over real stdio", () => {
         write_shared: false,
         allow_passport: true,
       },
-    });
+    }));
 
     expect(typeof result.workspacePrivateVaultId).toBe("string");
     expect(Array.isArray(result.globalPrivateVaultIds)).toBe(true);
