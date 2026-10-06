@@ -1,8 +1,8 @@
 // AC-05: msp_context_replay's execution_reproducible and output_identical
 // are hard-coded false with a diagnostic reason in every case (ADR-027 "What
 // this ADR does not claim" -- this runtime has no execution authority);
-// context_reproducible is a real hash comparison against the persisted
-// contexts row, tested with both a matching-hash and a tampered-hash case.
+// context_reproducible requires an authorized persisted context. An unowned
+// row stays unreadable under DEC-MEMOS-74 even when its source hash matches.
 // Runs against the real stdio process, using the exact request shape
 // scripts/mcp/vault-context-surface-v2.mjs sends through
 // MspClient.replayContext (actor, context_id, cache_id, run_id, turn_id) --
@@ -74,7 +74,7 @@ describe("AC-05: msp_context_replay", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("execution_reproducible and output_identical are always false, with a diagnostic reason, on a matching-hash replay", async () => {
+  it("an unowned context remains unreadable even when its source hash matches", async () => {
     // Re-resolve to obtain the real persisted source_hash (the raw wire
     // response carries it even though MspClient.resolveContext's own
     // camelCase projection does not surface it under a name any consumer
@@ -99,9 +99,20 @@ describe("AC-05: msp_context_replay", () => {
     });
 
     expect(result.replayRef).toMatch(/^msp:replay\//);
-    expect(result.contextReproducible).toBe(true);
+    expect(result.contextReproducible).toBe(false);
     expect(result.executionReproducible).toBe(false);
     expect(result.outputIdentical).toBe(false);
+
+    const denied = await call("msp_context_replay", {
+      actor: "boss",
+      context_id: localContextId,
+      cache_id: null,
+      run_id: "run-replay",
+      turn_id: "turn-replay",
+      source_hash: localSourceHash,
+    });
+    expect(denied.context_reproducible).toBe(false);
+    expect(denied.diagnostics).toEqual(expect.arrayContaining([expect.stringMatching(/^context_not_found:/)]));
   });
 
   it("context_reproducible is false for a real, persisted context when the supplied hash is tampered", async () => {
