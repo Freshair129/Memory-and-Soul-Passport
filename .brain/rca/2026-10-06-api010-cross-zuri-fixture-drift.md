@@ -1,9 +1,9 @@
 # API-010 cross-zuri fixture drift — RCA
 
-**Date:** 2026-10-06  
-**Status:** Test-only correction approved for the isolated branch; review pending  
-**Risk:** HIGH contract boundary; no runtime or schema change  
-**Complexity:** C-3 because the evidence spans the zuri.ai signer and MSP verifier
+- Date: 2026-10-06
+- Status: Test-only correction approved for the isolated branch; review pending
+- Risk: HIGH contract boundary; no runtime or schema change
+- Complexity: C-3 because the evidence spans the zuri.ai signer and MSP verifier
 
 ## Symptom
 
