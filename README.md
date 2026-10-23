@@ -78,8 +78,11 @@ payload and consumes a one-use nonce with provisioning. The optional,
 separate signed `access` grant enables principal vault resolution.
 Legacy-only resolution requires `MSP_THREAD_SERVICE_KEY` (or its tenant
 keyring); only principal resolution also needs `MSP_IDENTITY_HMAC_KEY` for
-the receipt actor. The prior unsigned zuri.ai caller must be upgraded before
-deploying API-010 v0.3.0b. API-011 thread
+the receipt actor. Unsigned callers must be upgraded before deploying
+API-010 v0.3.0b. The signed zuri.ai caller has passed local cross-repository
+checks; see [API-010 compatibility](docs/API-010-Vault-Resolve-Contract.md#8-compatibility)
+for exact caller revisions and the outstanding production MSP pin upgrade.
+API-011 thread
 identity paths also require the identity key. Principal vault IDs are random
 UUIDs, independent of those keys and the owner tuple.
 

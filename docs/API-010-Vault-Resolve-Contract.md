@@ -3,7 +3,7 @@ doc_id: "API-010-VAULT-RESOLVE-CONTRACT"
 version: "0.3.0b"
 status: "beta"
 created_at: "2026-09-16T00:00:00+07:00,KIN"
-last_update: "2026-09-27T00:00:00+07:00,RWANG"
+last_update: "2026-10-24T00:00:00+07:00,Codex"
 ---
 
 # API-010 Vault Resolve Contract (`msp_vault_resolve`)
@@ -13,9 +13,10 @@ normative authority is `docs/DESIGN-SESSION-EPISODIC-INSTANCE-MEMORY.md`
 v0.12.0b §5.0; earlier §5.1 material is historical. This contract records
 the signed legacy grant and the optional, separate signed principal grant.
 The required `legacy_access` field is a breaking change from API-010 v0.2.0b:
-the currently documented zuri.ai caller sends no grant and must be upgraded
-before deploying this version. The cross-repo unsigned request now proves
-refusal without vault writes; no upgraded external caller has been verified.
+unsigned callers must be upgraded before deploying this version. The signed
+zuri.ai caller merged in [PR #634](https://github.com/Freshair129/zuri.ai/pull/634).
+Local cross-repository verification is recorded in §8; it does not attest
+the MSP revision embedded in a deployed consumer image.
 
 ## 1. Purpose
 
@@ -23,8 +24,9 @@ refusal without vault writes; no upgraded external caller has been verified.
 (`shared`/`workspace_private`/`global_private`, unchanged) and the two new
 principal vault types this same phase introduces (`principal_private`, the
 "episodic vault"; `principal_passport`, the "Soul Passport vault") into one
-response, matching zuri-ai's shipped, already-deployed caller
-(`msp-vault-resolver.js`, `origin/main@4ca28c1d`) exactly.
+response. The legacy response fields originated with zuri.ai's
+`msp-vault-resolver.js` at `4ca28c1d`; its signed successor is the consumer
+verified in §8. Request compatibility requires that successor.
 
 ## 2. Endpoint / Tool
 
@@ -245,6 +247,23 @@ constant label, not a caller identity. Calls with a principal grant retain
 the `principal_hmac` actor and scoped receipt described above.
 
 ## 8. Compatibility
+
+As of 2026-10-24, the opt-in cross-repository suite passed 15/15 separately
+against zuri.ai `bf48f2ff69dad33371ec3812ee45c29f44825ad6` (the observed
+production caller source) and `64e23f31e76128bdb7a6392fda4bf51344e67b97`
+(the inspected release candidate source). The suite imports the real
+consumer resolver and uses synthetic keys with an in-memory MSP database.
+It covers signed read/write, policy and write-permission refusal, invalid
+signature, missing/expired/tampered grants and replay. The count includes
+two existing API-011 tests. See the
+[verification RCA](../.brain/rca/2026-10-06-api010-cross-zuri-fixture-drift.md).
+
+The observed production MSP pin `68e6169dbb371dac2f0debf0bf731b553f7dc26d`
+predates this signed legacy-grant enforcement. Its isolated source fails
+the seven added refusal/replay regressions. Upgrade and validate the exact
+release images before claiming production compatibility. Local source
+tests do not prove production key configuration, live connectivity or
+GenesisRAG17 publication.
 
 Versioning: this contract is `0.3.0b`; breaking changes to any request or
 response shape require a version bump and a Changelog row, following

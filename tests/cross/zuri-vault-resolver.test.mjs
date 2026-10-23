@@ -1,6 +1,7 @@
 // BL-MEMOS-105: exercise the consumer's actual API-010 signer and validator.
 // MSP_TEST_ZURI_ROOT must point at an explicit checkout or immutable Git extract;
 // report that consumer revision separately from MSP's local evidence.
+import { createHmac } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, it } from 'vitest';
@@ -98,4 +99,41 @@ it('the zuri-ai caller rejects a signed response without private write permissio
     await expect(resolver.resolve(authorization(), { operation: 'write' })).rejects.toThrow(/denied private write permission/);
     expect(calls.map((call) => call.name)).toEqual(['msp_vault_resolve']);
     expect(counts(server).journal).toBe(1);
+  }));
+
+it.each([
+  ['missing grant', 'grant_required', (args) => { delete args.legacy_access; }],
+  ['expired grant', 'grant_expired', (args) => {
+    args.legacy_access.grant.expiresAt = Date.now() - 60_000;
+    args.legacy_access.signature = createHmac('sha256', SERVICE_KEY)
+      .update(JSON.stringify(args.legacy_access.grant)).digest('hex');
+  }],
+  ['tampered body', 'grant_payload_mismatch', (args) => { args.authorization.write_shared = true; }],
+  ...['tenant_id', 'workspace_id', 'project_id'].map((field) => [
+    `tampered ${field}`, 'grant_payload_mismatch', (args) => { args.access_context[field] = `other-${field}`; },
+  ]),
+])('MSP refuses the real zuri-ai caller with %s before writes', async (_label, code, tamper) =>
+  withConsumer(async ({ server, transport, createMspVaultResolver }) => {
+    const resolver = createMspVaultResolver({
+      serviceKey: SERVICE_KEY,
+      transport: (name, args) => {
+        tamper(args);
+        return transport(name, args);
+      },
+    });
+    await expect(resolver.resolve(authorization())).rejects.toMatchObject({ code });
+    expect(counts(server)).toEqual({ vaults: 0, journal: 0 });
+    expect(server.db.prepare('SELECT COUNT(*) AS count FROM grant_nonces').get().count).toBe(0);
+  }));
+
+it('MSP refuses a replay of the real zuri-ai signed request without additional writes', async () =>
+  withConsumer(async ({ server, calls, transport, createMspVaultResolver }) => {
+    const resolver = createMspVaultResolver({ transport, serviceKey: SERVICE_KEY });
+    await resolver.resolve(authorization());
+    const before = counts(server);
+    const nonces = server.db.prepare('SELECT COUNT(*) AS count FROM grant_nonces').get().count;
+    expect(nonces).toBe(1);
+    await expect(transport(calls[0].name, calls[0].args)).rejects.toMatchObject({ code: 'grant_replayed' });
+    expect(counts(server)).toEqual(before);
+    expect(server.db.prepare('SELECT COUNT(*) AS count FROM grant_nonces').get().count).toBe(nonces);
   }));
