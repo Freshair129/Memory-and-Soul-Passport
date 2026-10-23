@@ -1,5 +1,5 @@
 ---
-version: "0.3.3b"
+version: "0.3.4b"
 created_at: "2026-08-12T08:14:50+07:00,ATHER,394a176"
 last_update: "2026-10-24T03:35:00+07:00,Codex"
 status: "beta"
@@ -81,7 +81,7 @@ keyring); only principal resolution also needs `MSP_IDENTITY_HMAC_KEY` for
 the receipt actor. Unsigned callers must be upgraded before deploying
 API-010 v0.3.0b. The signed zuri.ai caller has passed local cross-repository
 checks; see [API-010 compatibility](docs/API-010-Vault-Resolve-Contract.md#8-compatibility)
-for exact caller revisions and the outstanding production MSP pin upgrade.
+for exact caller revisions and the historical production-pin gap. The 2026-10-24 [alignment execution record](docs/IMPLEMENTATION-PLAN-MSP-GENESISRAG17-ALIGNMENT.md#6-execution-evidence--2026-10-24) records the completed signed-grant production upgrade and its acceptance evidence.
 API-011 thread
 identity paths also require the identity key. Principal vault IDs are random
 UUIDs, independent of those keys and the owner tuple.
@@ -142,7 +142,7 @@ See [docs/NOTES.md](docs/NOTES.md) for extraction evidence and known gaps, and [
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
-| 0.3.3b | 2026-10-24 | beta | Pin current cross-repository references and link the approved MSP alignment plan. | working-tree | Codex |
+| 0.3.4b | 2026-10-24 | beta | Pin current cross-repository references and link the approved MSP alignment plan. | working-tree | Codex |
 | 0.3.4b | 2026-09-27 | proposed | Require a signed, nonce-protected legacy grant for API-010 vault provisioning; document the breaking zuri.ai caller migration. | working-tree | RWANG |
 | 0.3.3b | 2026-09-18 | beta | Document the owner-approved published-product query relay, its Tier 4 `/products/query` boundary and snapshot-only pricing evidence. | 2696d4e | RWANG |
 | 0.3.2b | 2026-09-17 | beta | Describe approved Phase 6 APIs, confidence policy and bounded vault erasure; distinguish package candidate from release activation. | working-tree | RWANG |
