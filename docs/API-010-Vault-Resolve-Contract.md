@@ -258,12 +258,18 @@ signature, missing/expired/tampered grants and replay. The count includes
 two existing API-011 tests. See the
 [verification RCA](../.brain/rca/2026-10-06-api010-cross-zuri-fixture-drift.md).
 
-The observed production MSP pin `68e6169dbb371dac2f0debf0bf731b553f7dc26d`
+The pre-upgrade production MSP pin `68e6169dbb371dac2f0debf0bf731b553f7dc26d`
 predates this signed legacy-grant enforcement. Its isolated source fails
-the seven added refusal/replay regressions. Upgrade and validate the exact
-release images before claiming production compatibility. Local source
-tests do not prove production key configuration, live connectivity or
-GenesisRAG17 publication.
+the seven added refusal/replay regressions. On 2026-10-24, reviewed MSP PR
+[#40](https://github.com/Freshair129/Memory-and-Soul-Passport/pull/40) merged
+as `d0d48c1a8e833478525d9a6ce5ee16af2c85444d`. The
+[alignment execution record](IMPLEMENTATION-PLAN-MSP-GENESISRAG17-ALIGNMENT.md#6-execution-evidence--2026-10-24)
+records the exact-image signed stdio checks and production upgrade through
+Zuri PR [#733](https://github.com/Freshair129/zuri.ai/pull/733), retaining
+the original bf48f2ff app. Native GenesisRAG17 publication/query and restart
+acceptance passed. These results do not activate a new memory feature or
+prove separately configured production API-010 memory credentials. Local
+source tests alone remain insufficient for production acceptance.
 
 Versioning: this contract is `0.3.0b`; breaking changes to any request or
 response shape require a version bump and a Changelog row, following
