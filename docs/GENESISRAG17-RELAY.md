@@ -1,7 +1,7 @@
 ---
-version: "1.4.3b"
+version: "1.4.4b"
 created_at: "2026-09-07T23:00:00+07:00,RWANG,working-tree"
-last_update: "2026-09-18T00:00:00+07:00,RWANG"
+last_update: "2026-10-24T03:35:00+07:00,Codex"
 status: "beta"
 superseded_by: null
 attributes:
@@ -28,12 +28,12 @@ carry `decisionId: null` while pending; callers retain their durable batch and
 retry its original identity. MSP neither invents a decision ID nor owns retries.
 
 The cross-repository wire authority is the [zuri-ai GenesisRAG17
-contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md),
+contract](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/plans/GENESISRAG17-CONTRACT.md),
 version `genesisrag17.v1`. The stage explanations are in the [stage
-specification](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-SPEC.md)
-and [stage flow](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-FLOW.md).
+specification](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/KNOWLEDGE-INGESTION-17-STAGE-SPEC.md)
+and [stage flow](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/KNOWLEDGE-INGESTION-17-STAGE-FLOW.md).
 The current isolated execution and publication decision is [ADR-073 —
-GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
+GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
 The machine-readable MSP copy is
 [`packages/msp-contracts/schemas/GENESISRAG17.tools.json`](../packages/msp-contracts/schemas/GENESISRAG17.tools.json),
 and its runtime guard is
@@ -80,8 +80,8 @@ Ownership is therefore:
 | GenesisBlock / Tier 4 | graph/vector/index writes, stages 13/15/16, readback, benchmark, publication pointer, loopback query server | canonical identity, MSP grants, GKS gate decision |
 
 The authoritative zuri-ai tier assignment remains the [ADR-050 knowledge
-ingestion boundary](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-050-KNOWLEDGE-INGESTION-TIER-BOUNDARY.md).
-The current GenesisRAG17 isolated execution and publication profile is [ADR-073](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
+ingestion boundary](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/decisions/ADR-050-KNOWLEDGE-INGESTION-TIER-BOUNDARY.md).
+The current GenesisRAG17 isolated execution and publication profile is [ADR-073](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
 The MSP-specific decision is [ADR-MSP-GENESISRAG17-RELAY](ADR-MSP-GENESISRAG17-RELAY.md).
 
 ## Authentication and scope
@@ -298,6 +298,7 @@ with no changes to the frozen API-009 memory surface.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 1.4.4b | 2026-10-24 | beta | Pin current cross-repository contract and decision references; preserve historical acceptance. | working-tree | Codex |
 | 1.4.3b | 2026-09-18 | beta | Added the owner-approved `msp_pipeline_product_query` Tier 4 loopback extension: source/worker grants, published-corpus manifest and citation validation, snapshot-only price semantics, product route and acceptance boundaries. | 2696d4e | RWANG |
 | 1.4.2b | 2026-09-11 | beta | A GKS child process's environment is now built from an explicit allowlist (OS basics + `GKS_*` config) for every spawn, not a copy of MSP's own environment with a fixed credential blocklist applied only to the pipeline relay path. Security fix. | working-tree | KIN |
 | 1.4.0b | 2026-09-08 | beta | Enforce PASS-only publication responses and preserve Pending/null acknowledgement semantics after code audit. | working-tree | RWANG |

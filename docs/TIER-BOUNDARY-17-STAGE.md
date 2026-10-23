@@ -1,7 +1,7 @@
 ---
-version: "0.4.3b"
+version: "0.4.4b"
 created_at: "2026-08-29T14:45:00+07:00,Claude Opus 5,working-tree"
-last_update: "2026-09-18T00:00:00+07:00,RWANG"
+last_update: "2026-10-24T03:35:00+07:00,Codex"
 status: "beta"
 attributes:
   domain: "mission-state-protocol"
@@ -26,8 +26,8 @@ stages to three tiers, and MSP is in none of them:
 |---|---|---|
 | 1 — Execution | zuri-ai | 1–8 (shipped) |
 | **2 — Memory** | **MSP** | **none** |
-| 3 — Knowledge | [Genesis Knowledge System](https://github.com/Freshair129/Genesis-Knowledge-System/tree/codex/ki17-integration) | 9–14, and 17 with Tier 4 |
-| 4 — Substrate | [GenesisBlock worker / DB](https://github.com/Freshair129/GenesisBlock/tree/codex/ki17-integration/genesisrag17-worker) | 15–16, and 13 with Tier 3 |
+| 3 — Knowledge | [Genesis Knowledge System](https://github.com/Freshair129/Genesis-Knowledge-System/tree/ecf1e4de269e949406a6a5f791f9ff8fe30c9578) | 9–14, and 17 with Tier 4 |
+| 4 — Substrate | [GenesisBlock worker / DB](https://github.com/Freshair129/GenesisBlock/tree/5156f412da73905a23d74775a82cc14d1f6d04d0/genesisrag17-worker) | 15–16, and 13 with Tier 3 |
 
 MSP's role in that four-tier stack is agent session control, unified thread id
 authority and memory policy — not pipeline execution. **No stage of the
@@ -57,7 +57,7 @@ through the normal review — it does not make MSP a stage owner.
 
 ## The GenesisRAG17 relay boundary
 
-The nine `msp_pipeline_*` operations are a Tier 2 transport boundary, not a
+The ten `msp_pipeline_*` operations are a Tier 2 transport boundary, not a
 stage assignment:
 
 | Grant | Operations | Destination |
@@ -92,11 +92,11 @@ manifest handoff and snapshot-only pricing, then sends the request to the Tier
 4 `/products/query` loopback. It owns no catalog snapshot, product evidence,
 price quote or publication state.
 
-The cross-repository authority is zuri-ai's [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md),
-[stage specification](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-SPEC.md),
-and [stage flow](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/KNOWLEDGE-INGESTION-17-STAGE-FLOW.md).
+The cross-repository authority is zuri-ai's [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/plans/GENESISRAG17-CONTRACT.md),
+[stage specification](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/KNOWLEDGE-INGESTION-17-STAGE-SPEC.md),
+and [stage flow](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/KNOWLEDGE-INGESTION-17-STAGE-FLOW.md).
 The current isolated execution and publication decision is [ADR-073 —
-GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
+GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md).
 The raw-to-publication acceptance is pinned to [zuri-ai commit `b64b46df`](https://github.com/Freshair129/zuri.ai/commit/b64b46df057d3160c659afa3c34628ee86520257).
 
 ## What MSP relays for the evidence pull (2026-09-07)
@@ -142,10 +142,10 @@ not a stage ledger.
 
 Authoritative in zuri-ai:
 
-- [ADR-050 knowledge-ingestion tier boundary](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-050-KNOWLEDGE-INGESTION-TIER-BOUNDARY.md)
-- [ADR-073 GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md)
-- [FR-109 stage catalog](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/domains/knowledge/features/FR-109-knowledge-ingestion-stage-catalog.md)
-- [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/codex/ki17-integration/docs/plans/GENESISRAG17-CONTRACT.md)
+- [ADR-050 knowledge-ingestion tier boundary](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/decisions/ADR-050-KNOWLEDGE-INGESTION-TIER-BOUNDARY.md)
+- [ADR-073 GenesisRAG17 isolated execution and publication](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/decisions/ADR-073-GENESISRAG17-ISOLATED-EXECUTION-AND-PUBLICATION.md)
+- [FR-109 stage catalog](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/domains/knowledge/features/FR-109-knowledge-ingestion-stage-catalog.md)
+- [GenesisRAG17 contract](https://github.com/Freshair129/zuri.ai/blob/64e23f31e76128bdb7a6392fda4bf51344e67b97/docs/plans/GENESISRAG17-CONTRACT.md)
 
 If this file and those disagree, those win.
 
@@ -153,6 +153,7 @@ If this file and those disagree, those win.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 0.4.4b | 2026-10-24 | beta | Correct the current ten-operation count and pin cross-repository references. | working-tree | Codex |
 | 0.4.3b | 2026-09-18 | beta | Added the owner-approved published-product query as a Tier 2 loopback transport boundary; MSP still owns no pipeline stage or catalog state. | 2696d4e | RWANG |
 | 0.4.2b | 2026-09-11 | beta | Every GKS child spawn now builds its environment from an explicit `GKS_*` + OS-basics allowlist instead of forwarding a copy of MSP's own environment with a fixed credential blocklist applied only to the pipeline relay. Security fix. | working-tree | Claude Opus 5 |
 | 0.4.0b | 2026-09-08 | beta | Added the complete authenticated GenesisRAG17 relay boundary, source/worker grant split, Tier 4 query route, extension rules and pinned zuri-ai links; removed local checkout paths. | working-tree | ATHER |

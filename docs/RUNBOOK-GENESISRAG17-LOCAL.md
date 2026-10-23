@@ -1,7 +1,7 @@
 ---
-version: "1.1.0b"
+version: "1.1.1b"
 created_at: "2026-09-08T00:00:00+07:00,ATHER,working-tree"
-last_update: "2026-09-23T00:00:00+07:00,RWANG"
+last_update: "2026-10-24T03:35:00+07:00,Codex"
 status: "beta"
 superseded_by: null
 attributes:
@@ -20,31 +20,44 @@ is pinned to [`b64b46df057d3160c659afa3c34628ee86520257`](https://github.com/Fre
 
 MSP has no implicit database path. Do not run this from a shell carrying a
 production `DATABASE_URL`, `POSTGRES_*`, MSP database path or GKS database
-path. The commands below overwrite only the current PowerShell process and
-create a disposable directory under the explicitly resolved temporary root.
+path. The configuration block changes the current PowerShell process and creates a
+disposable directory under the explicitly resolved temporary root. The precondition
+block runs `npm ci` in both selected checkouts, replacing their `node_modules`.
+Use dedicated disposable checkouts with no unrelated development work.
 
 ## Preconditions
 
+Set `KI17_MSP_ROOT`, `KI17_GKS_ROOT` and `KI17_NODE_EXE` in the current PowerShell process to the absolute checkout directories and verified Node executable on this machine. They are required inputs; no username or historical production location is a default. Use the same explicit Node runtime for dependency installation and child execution.
+
 Use the verified Node `v24.18.x` runtime at the explicit path below. The
-packages advertise Node `>=20` as their compatibility minimum, but the
+MSP packages require Node `>=22` as their compatibility minimum, but the
 raw-to-publication acceptance uses this pinned runtime profile:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$MspRoot = (Resolve-Path 'C:\Users\pc\workspace\msp-ki17').Path
-$GksRoot = (Resolve-Path 'C:\Users\pc\workspace\gks-ki17').Path
+foreach ($name in @('KI17_MSP_ROOT','KI17_GKS_ROOT','KI17_NODE_EXE')) {
+  $value = [Environment]::GetEnvironmentVariable($name)
+  if ([string]::IsNullOrWhiteSpace($value) -or -not [IO.Path]::IsPathRooted($value)) { throw "Set $name to an absolute local path before this smoke" }
+}
+$MspRoot = (Resolve-Path -LiteralPath $env:KI17_MSP_ROOT -ErrorAction Stop).Path
+$GksRoot = (Resolve-Path -LiteralPath $env:KI17_GKS_ROOT -ErrorAction Stop).Path
 $GksEntry = Join-Path $GksRoot 'apps/gks-server/bin/gks-server.mjs'
 if (-not (Test-Path -LiteralPath $GksEntry)) { throw 'GKS entrypoint must exist at the explicit path' }
-$Node = (Resolve-Path 'C:\Users\pc\workspace\ki17-runtime\node.exe').Path
+$Node = (Resolve-Path -LiteralPath $env:KI17_NODE_EXE -ErrorAction Stop).Path
 if (-not [IO.Path]::IsPathRooted($Node)) { throw 'node runtime must be an absolute executable path' }
 $NodeVersion = (& $Node --version)
+$NpmCli = Join-Path (Split-Path -Parent $Node) 'node_modules/npm/bin/npm-cli.js'
+if (-not (Test-Path -LiteralPath $NpmCli -PathType Leaf)) { throw 'Use a complete Node distribution with its matching npm CLI' }
+$env:PATH = (Split-Path -Parent $Node) + [IO.Path]::PathSeparator + $env:PATH
 if ($NodeVersion -notmatch '^v24\.18\.') { throw "verified Node v24.18.x required; got $NodeVersion" }
 
 Push-Location $MspRoot
-npm ci
+& $Node $NpmCli ci
+if ($LASTEXITCODE) { throw 'Dependency installation failed' }
 Pop-Location
 Push-Location $GksRoot
-npm ci
+& $Node $NpmCli ci
+if ($LASTEXITCODE) { throw 'Dependency installation failed' }
 Pop-Location
 
 Write-Output "Node runtime: $NodeVersion"
@@ -62,13 +75,20 @@ replaced with production secrets in a local smoke.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$MspRoot = (Resolve-Path 'C:\Users\pc\workspace\msp-ki17').Path
-$GksRoot = (Resolve-Path 'C:\Users\pc\workspace\gks-ki17').Path
+foreach ($name in @('KI17_MSP_ROOT','KI17_GKS_ROOT','KI17_NODE_EXE')) {
+  $value = [Environment]::GetEnvironmentVariable($name)
+  if ([string]::IsNullOrWhiteSpace($value) -or -not [IO.Path]::IsPathRooted($value)) { throw "Set $name to an absolute local path before this smoke" }
+}
+$MspRoot = (Resolve-Path -LiteralPath $env:KI17_MSP_ROOT -ErrorAction Stop).Path
+$GksRoot = (Resolve-Path -LiteralPath $env:KI17_GKS_ROOT -ErrorAction Stop).Path
 $GksEntry = Join-Path $GksRoot 'apps/gks-server/bin/gks-server.mjs'
 if (-not (Test-Path -LiteralPath $GksEntry)) { throw 'GKS entrypoint must exist at the explicit path' }
-$Node = (Resolve-Path 'C:\Users\pc\workspace\ki17-runtime\node.exe').Path
+$Node = (Resolve-Path -LiteralPath $env:KI17_NODE_EXE -ErrorAction Stop).Path
 if (-not [IO.Path]::IsPathRooted($Node)) { throw 'node runtime must be an absolute executable path' }
 $NodeVersion = (& $Node --version)
+$NpmCli = Join-Path (Split-Path -Parent $Node) 'node_modules/npm/bin/npm-cli.js'
+if (-not (Test-Path -LiteralPath $NpmCli -PathType Leaf)) { throw 'Use a complete Node distribution with its matching npm CLI' }
+$env:PATH = (Split-Path -Parent $Node) + [IO.Path]::PathSeparator + $env:PATH
 if ($NodeVersion -notmatch '^v24\.18\.') { throw "verified Node v24.18.x required; got $NodeVersion" }
 if ([string]::IsNullOrWhiteSpace($env:TEMP)) { throw 'TEMP must be explicitly available for the isolated run root' }
 
@@ -132,9 +152,12 @@ security boundary without touching a production database:
 
 ```powershell
 Push-Location $MspRoot
-npm exec vitest run tests/contract/pipeline-relay.test.mjs
+& $Node $NpmCli exec vitest run tests/contract/pipeline-relay.test.mjs
+if ($LASTEXITCODE) { throw 'Relay contract suite failed' }
 & $Node --test --test-concurrency=1 tests/security/pipeline-vault-scoping.security.mjs
+if ($LASTEXITCODE) { throw 'Pipeline scope security suite failed' }
 & $Node --test --test-concurrency=1 tests/security/product-query-vault-scoping.security.mjs
+if ($LASTEXITCODE) { throw 'Product query security suite failed' }
 Pop-Location
 ```
 
@@ -298,6 +321,7 @@ entrypoint acceptance.
 
 | Version | Date | Status | Summary | Commit Hash | Agent |
 |---|---|---|---|---|---|
+| 1.1.1b | 2026-10-24 | beta | Parameterize machine paths, require disposable checkouts, and pin npm/native build execution to selected Node >=22 (verified profile 24.18.x). | working-tree | Codex |
 | 1.1.0b | 2026-09-23 | beta | Added the explicit MSP-to-GKS HTTP canary, auth configuration and stdio rollback guidance. | working-tree | RWANG |
 | 1.0.1b | 2026-09-18 | beta | Added the published-product `/products/query` smoke guidance, manifest-bound acceptance checks and product security command. | 2696d4e | RWANG |
 | 1.0.0b | 2026-09-08 | beta | Added an isolated, synthetic-credential MSP ↔ GKS relay smoke with explicit paths, fail-closed query guidance and cleanup. | working-tree | ATHER |
